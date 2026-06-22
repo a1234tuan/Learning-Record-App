@@ -49,6 +49,7 @@ export interface RecordBlock extends BaseEntity {
   assets: RecordAssetRef[];
   formulas: RecordFormula[];
   mistakeRefs: EntityId[];
+  favorite?: boolean;
 }
 
 export interface RichTextBlock extends BaseEntity {
@@ -341,6 +342,18 @@ export interface StorageSnapshot {
   assets: Asset[];
 }
 
+export interface ImportSummary {
+  records: number;
+  days: number;
+  deletedRecords: number;
+  assets: number;
+  images: number;
+  audio: number;
+  attachments: number;
+  version: BackupManifest["version"];
+  missingAssets: number;
+}
+
 export interface KnowledgeRecord {
   id: EntityId;
   date: ISODate;
@@ -372,6 +385,11 @@ export interface StorageAdapter {
   listBlocks(date?: ISODate): Promise<Block[]>;
   saveBlock(block: Block): Promise<Block>;
   deleteBlock(blockId: EntityId): Promise<void>;
+  listDeletedBlocks(): Promise<RecordBlock[]>;
+  restoreBlock(blockId: EntityId): Promise<RecordBlock | undefined>;
+  permanentlyDeleteBlock(blockId: EntityId): Promise<void>;
+  purgeExpiredDeletedBlocks(retentionDays: number): Promise<number>;
+  toggleRecordFavorite(blockId: EntityId, favorite: boolean): Promise<RecordBlock | undefined>;
   reorderBlocks(date: ISODate, blockIds: EntityId[]): Promise<void>;
   listMistakes(): Promise<MistakeCard[]>;
   saveMistake(mistake: MistakeCard): Promise<MistakeCard>;

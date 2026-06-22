@@ -4,6 +4,11 @@ import { registerSW } from "virtual:pwa-register";
 
 import { App } from "./App";
 import "./styles.css";
+import "./styles/theme.css";
+import "./styles/layout.css";
+import "./styles/components.css";
+import "./styles/pages.css";
+import "./styles/motion.css";
 
 registerSW({ immediate: true });
 

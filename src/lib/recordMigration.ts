@@ -37,6 +37,7 @@ export const migrateBlocksToRecords = (blocks: Block[]): Block[] => {
         assets: block.assets ?? [],
         formulas: block.formulas ?? [],
         mistakeRefs: [],
+        favorite: block.favorite ?? false,
       })];
     }
 
@@ -60,6 +61,7 @@ export const migrateBlocksToRecords = (blocks: Block[]): Block[] => {
       assets: [],
       formulas: [],
       mistakeRefs: [],
+      favorite: false,
     };
 
     switch (block.type) {

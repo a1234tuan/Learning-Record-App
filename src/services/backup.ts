@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 
-import type { Asset, BackupPayload, StorageSnapshot } from "../types";
+import type { Asset, BackupPayload, ImportSummary, RecordBlock, StorageSnapshot } from "../types";
 import { entryToMarkdown } from "../lib/markdown";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
@@ -80,28 +80,71 @@ export const base64ToBlob = (base64: string, mimeType = "application/zip"): Blob
   return new Blob([bytes], { type: mimeType });
 };
 
+const isRecordBlock = (block: StorageSnapshot["payload"]["blocks"][number]): block is RecordBlock =>
+  block.type === "record";
+
+export const summarizeSnapshot = (snapshot: StorageSnapshot): ImportSummary => {
+  const records = snapshot.payload.blocks.filter(isRecordBlock);
+  const activeRecords = records.filter((record) => !record.deletedAt);
+  const deletedRecords = records.filter((record) => record.deletedAt);
+  const days = new Set(activeRecords.map((record) => record.date)).size;
+  const assetIds = new Set(snapshot.assets.map((asset) => asset.id));
+  const referencedAssetIds = new Set(records.flatMap((record) => record.assets.map((asset) => asset.id)));
+  const missingAssets = Array.from(referencedAssetIds).filter((id) => !assetIds.has(id)).length;
+  const images = snapshot.assets.filter((asset) => asset.kind === "image").length;
+  const audio = snapshot.assets.filter((asset) => asset.kind === "audio").length;
+  const attachments = snapshot.assets.filter((asset) => asset.kind === "attachment").length;
+
+  return {
+    records: activeRecords.length,
+    days,
+    deletedRecords: deletedRecords.length,
+    assets: snapshot.assets.length,
+    images,
+    audio,
+    attachments,
+    version: snapshot.payload.manifest.version,
+    missingAssets,
+  };
+};
+
 export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
   const looksLikeZip = file.name.toLocaleLowerCase().endsWith(".zip") || file.type.includes("zip");
   if (!looksLikeZip) {
-    throw new Error("只支持导入完整备份 zip 文件。Markdown、JSON 和 TXT 仅用于 AI 阅读，不能恢复数据。");
+    throw new Error("不支持的文件格式：只支持完整备份 zip。Markdown、JSON 和 TXT 仅用于 AI 阅读，不能恢复数据。");
   }
 
-  const zip = await JSZip.loadAsync(file);
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(file);
+  } catch {
+    throw new Error("文件不是有效 zip 或已损坏，请重新选择完整备份文件。");
+  }
+
   const dataFile = zip.file("data.json");
   if (!dataFile) {
-    throw new Error("备份包缺少 data.json");
+    throw new Error("不是学习日志完整备份：备份包缺少 data.json。");
   }
 
-  const data = JSON.parse(await dataFile.async("string")) as BackupPayload & {
+  let data: BackupPayload & {
     assets?: Array<Omit<Asset, "data">>;
   };
+  try {
+    data = JSON.parse(await dataFile.async("string")) as BackupPayload & {
+      assets?: Array<Omit<Asset, "data">>;
+    };
+  } catch {
+    throw new Error("备份数据损坏：data.json 不是有效 JSON。");
+  }
 
   if (
     !data.manifest ||
     !["408-study-journal", "study-journal"].includes(data.manifest.format) ||
     ![1, 2, 3].includes(data.manifest.version)
   ) {
-    throw new Error("备份格式不兼容");
+    const format = data.manifest?.format ?? "未知";
+    const version = data.manifest?.version ?? "未知";
+    throw new Error(`备份格式不兼容：format=${format}，version=${version}。`);
   }
 
   const migratedBlocks = migrateBlocksToRecords(data.blocks ?? []);

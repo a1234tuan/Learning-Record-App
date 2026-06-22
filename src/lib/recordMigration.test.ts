@@ -5,7 +5,7 @@ import { migrateBlocksToRecords } from "./recordMigration";
 import { createSubjectConfig, nextRecordTitle } from "./subjects";
 import { heatmapLevel } from "../components/MonthlyHeatmap";
 import { searchAll } from "./search";
-import { getRecentRecordDates, getRecordsBySubject, getSubjectCounts } from "./journalSelectors";
+import { getFavoriteRecords, getRecordBlocks, getRecentRecordDates, getRecordsBySubject, getSubjectCounts } from "./journalSelectors";
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -41,6 +41,95 @@ describe("record migration", () => {
       type: "record",
       assets: [{ id: "a1", title: "学习截图", kind: "image" }],
     });
+  });
+});
+
+describe("trash and favorites selectors", () => {
+  it("keeps deleted records out of normal journal selectors", () => {
+    const records = [
+      {
+        id: "visible",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record" as const,
+        date: "2026-06-21",
+        order: 0,
+        subject: "OS",
+        title: "visible",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+      {
+        id: "deleted",
+        createdAt: stamp,
+        updatedAt: stamp,
+        deletedAt: "2026-06-22T00:00:00.000Z",
+        type: "record" as const,
+        date: "2026-06-21",
+        order: 1,
+        subject: "OS",
+        title: "deleted",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+    ];
+
+    expect(getRecordBlocks(records).map((record) => record.id)).toEqual(["visible"]);
+  });
+
+  it("sorts favorite records by record date and ignores edited time", () => {
+    const records = [
+      {
+        id: "old-edited",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+        type: "record" as const,
+        date: "2026-06-01",
+        order: 0,
+        subject: "OS",
+        title: "old edited",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+        favorite: true,
+      },
+      {
+        id: "new-created",
+        createdAt: "2026-06-20T00:00:00.000Z",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+        type: "record" as const,
+        date: "2026-06-20",
+        order: 0,
+        subject: "OS",
+        title: "new created",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+        favorite: true,
+      },
+      {
+        id: "plain",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record" as const,
+        date: "2026-06-21",
+        order: 0,
+        subject: "OS",
+        title: "plain",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+    ];
+
+    expect(getFavoriteRecords(records).map((record) => record.id)).toEqual(["new-created", "old-edited"]);
   });
 });
 

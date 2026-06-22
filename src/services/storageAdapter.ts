@@ -51,6 +51,31 @@ export class DexieStorageAdapter implements StorageAdapter {
     return (await db.blocks.toArray()).filter((block): block is RecordBlock => block.type === "record");
   }
 
+  private async cleanupOrphanAssetsForRecord(record: RecordBlock): Promise<void> {
+    const candidateAssetIds = new Set(record.assets.map((asset) => asset.id));
+    if (candidateAssetIds.size === 0) {
+      return;
+    }
+
+    const blocks = await db.blocks.toArray();
+    const stillReferencedAssetIds = new Set<string>();
+    for (const block of blocks) {
+      if (block.type !== "record" || block.id === record.id) {
+        continue;
+      }
+      for (const asset of block.assets) {
+        if (candidateAssetIds.has(asset.id)) {
+          stillReferencedAssetIds.add(asset.id);
+        }
+      }
+    }
+
+    const orphanIds = Array.from(candidateAssetIds).filter((id) => !stillReferencedAssetIds.has(id));
+    if (orphanIds.length > 0) {
+      await db.assets.bulkDelete(orphanIds);
+    }
+  }
+
   private async migrateSettingsToDynamicSubjects(): Promise<void> {
     const settings = await this.getSettings();
     const records = await this.recordBlocks();
@@ -230,6 +255,66 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
     await db.blocks.put({ ...block, deletedAt: nowISO(), updatedAt: nowISO() });
+  }
+
+  async listDeletedBlocks(): Promise<RecordBlock[]> {
+    const blocks = (await db.blocks.toArray()).filter(
+      (block): block is RecordBlock => block.type === "record" && Boolean(block.deletedAt),
+    );
+    return blocks.sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
+  }
+
+  async restoreBlock(blockId: string): Promise<RecordBlock | undefined> {
+    const block = await db.blocks.get(blockId);
+    if (!block || block.type !== "record") {
+      return undefined;
+    }
+    const { deletedAt: _deletedAt, ...restored } = block;
+    const saved = { ...restored, updatedAt: nowISO() };
+    await db.blocks.put(saved);
+    return saved;
+  }
+
+  async permanentlyDeleteBlock(blockId: string): Promise<void> {
+    const block = await db.blocks.get(blockId);
+    if (!block) {
+      return;
+    }
+
+    await db.transaction("rw", db.blocks, db.assets, db.studySessions, async () => {
+      await db.blocks.delete(blockId);
+      await db.studySessions.where("blockId").equals(blockId).delete();
+      if (block.type === "record") {
+        await this.cleanupOrphanAssetsForRecord(block);
+      }
+    });
+  }
+
+  async purgeExpiredDeletedBlocks(retentionDays: number): Promise<number> {
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const expired = await db.blocks
+      .filter(
+        (block): block is RecordBlock =>
+          block.type === "record" &&
+          Boolean(block.deletedAt) &&
+          new Date(block.deletedAt ?? 0).getTime() <= cutoff,
+      )
+      .toArray();
+
+    for (const block of expired) {
+      await this.permanentlyDeleteBlock(block.id);
+    }
+    return expired.length;
+  }
+
+  async toggleRecordFavorite(blockId: string, favorite: boolean): Promise<RecordBlock | undefined> {
+    const block = await db.blocks.get(blockId);
+    if (!block || block.type !== "record") {
+      return undefined;
+    }
+    const saved = { ...block, favorite, updatedAt: nowISO() };
+    await db.blocks.put(saved);
+    return saved;
   }
 
   async reorderBlocks(date: string, blockIds: string[]): Promise<void> {

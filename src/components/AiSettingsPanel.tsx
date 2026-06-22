@@ -61,7 +61,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
       await storage.clearAiSecret?.();
     }
     await onChanged();
-    setMessage("AI 设置已保存。API Key 仅保存在本机，不进入备份。");
+    setMessage("AI 设置已保存。API Key 只保存在本机，不进入备份。");
   };
 
   const updatePreset = (id: string, patch: Partial<AiPromptPreset>) => {

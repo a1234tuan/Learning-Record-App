@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -23,12 +23,15 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { RecordEditorPage } from "./pages/RecordEditorPage";
 import { MorePage } from "./pages/MorePage";
 import { AiChatPage } from "./pages/AiChatPage";
+import { FavoritesPage } from "./pages/FavoritesPage";
+import { TrashPage } from "./pages/TrashPage";
 import { PageTransition } from "./components/PageTransition";
 import type { RecordBlock, Subject } from "./types";
 import { buildDayLogAiContext } from "./services/dayLogAiContextService";
 import { createAiSessionForDate } from "./services/aiSessionService";
+import { getFavoriteRecords } from "./lib/journalSelectors";
 
-type Route = "today" | "journal" | "categories" | "search" | "stats" | "settings" | "more" | "record" | "ai";
+type Route = "today" | "journal" | "categories" | "search" | "stats" | "settings" | "more" | "record" | "ai" | "favorites" | "trash";
 type RecordSource = Exclude<Route, "record">;
 
 const navItems: Array<{ route: Route; label: string; icon: typeof Home }> = [
@@ -113,7 +116,7 @@ export const App = () => {
         return;
       }
 
-      if (route === "stats" || route === "settings" || route === "ai") {
+      if (route === "stats" || route === "settings" || route === "ai" || route === "favorites" || route === "trash") {
         navigate("more");
         return;
       }
@@ -151,7 +154,10 @@ export const App = () => {
     };
   }, [navigate, recordSource, route]);
 
-  const pinnedEntries = useMemo(() => app.entries.filter((entry) => entry.favorite || entry.pinned).slice(0, 5), [app.entries]);
+  const favoriteRecords = useMemo(
+    () => getFavoriteRecords(app.blocks.filter((block): block is RecordBlock => block.type === "record")),
+    [app.blocks],
+  );
 
   if (!app.initialized || !app.settings) {
     return (
@@ -193,6 +199,7 @@ export const App = () => {
             onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
             onAddSubject={app.addSubject}
             onOpenRecord={(record) => openRecord(record, "today")}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
       case "journal":
@@ -203,6 +210,7 @@ export const App = () => {
             onOpenRecord={(record) => openRecord(record, "journal")}
             onOpenCategories={() => navigate("categories")}
             onAskAi={(date) => void openAiForDate(date)}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
       case "categories":
@@ -214,6 +222,7 @@ export const App = () => {
             onAddSubject={app.addSubject}
             onRenameSubject={app.renameSubject}
             onSaveSubjects={app.saveSubjects}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
       case "record":
@@ -229,6 +238,7 @@ export const App = () => {
               await app.deleteBlock(recordId);
               closeRecord();
             }}
+            onToggleFavorite={(record, favorite) => app.toggleRecordFavorite(record.id, favorite)}
             onAddAsset={app.saveAssetFile}
             onAssetChanged={app.refresh}
             highlightedAssetId={highlightAssetId}
@@ -242,6 +252,7 @@ export const App = () => {
             onOpenRecord={(record) => openRecord(record, "journal")}
             onOpenCategories={() => navigate("categories")}
             onAskAi={(date) => void openAiForDate(date)}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
       case "search":
@@ -266,8 +277,43 @@ export const App = () => {
             onOpenStats={() => navigate("stats")}
             onOpenSettings={() => navigate("settings")}
             onOpenAi={() => navigate("ai")}
+            onOpenFavorites={() => navigate("favorites")}
+            onOpenTrash={() => navigate("trash")}
             onRestored={app.refresh}
             settings={settings}
+          />
+        );
+      case "favorites":
+        return (
+          <FavoritesPage
+            records={favoriteRecords}
+            onOpenRecord={(record) => openRecord(record, "favorites")}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+          />
+        );
+      case "trash":
+        return (
+          <TrashPage
+            records={app.deletedRecords}
+            onRestore={(record) => app.restoreBlock(record.id)}
+            onPermanentDelete={async (record) => {
+              const ok = window.confirm(`永久删除“${record.title}”吗？\n\n这一步无法恢复。`);
+              if (ok) {
+                await app.permanentlyDeleteBlock(record.id);
+              }
+            }}
+            onClearTrash={async () => {
+              const ok = window.confirm("确定清空回收站吗？\n\n所有回收站记录都会被永久删除，无法恢复。");
+              if (!ok) {
+                return;
+              }
+              for (const record of app.deletedRecords) {
+                await app.permanentlyDeleteBlock(record.id);
+              }
+            }}
+            onPurgeExpired={async () => {
+              await app.purgeExpiredDeletedBlocks(30);
+            }}
           />
         );
       case "ai":
@@ -325,10 +371,10 @@ export const App = () => {
         </nav>
         <section className="pinned-panel">
           <p className="eyebrow">Pinned</p>
-          {pinnedEntries.length === 0 ? (
+          {favoriteRecords.length === 0 ? (
             <small>收藏的日志会出现在这里。</small>
           ) : (
-            pinnedEntries.map((entry) => <small key={entry.id}>{entry.title}</small>)
+            favoriteRecords.slice(0, 5).map((record) => <small key={record.id}>{record.title}</small>)
           )}
         </section>
       </aside>
@@ -345,7 +391,7 @@ export const App = () => {
       <nav className="bottom-nav">
         {bottomNavItems.map((item) => {
           const Icon = item.icon;
-          const active = route === item.route || (item.route === "more" && (route === "stats" || route === "settings" || route === "ai"));
+          const active = route === item.route || (item.route === "more" && (route === "stats" || route === "settings" || route === "ai" || route === "favorites" || route === "trash"));
           return (
             <button
               key={item.route}
@@ -362,3 +408,4 @@ export const App = () => {
     </div>
   );
 };
+

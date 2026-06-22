@@ -7,7 +7,7 @@ import {
   createPlainText,
   createSubjectMarkdownZip,
 } from "./knowledgeExportService";
-import { snapshotToZip, zipToSnapshot } from "./backup";
+import { snapshotToZip, summarizeSnapshot, zipToSnapshot } from "./backup";
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -153,6 +153,69 @@ describe("knowledge export", () => {
   it("rejects non-zip restore files with a clear message", async () => {
     await expect(
       zipToSnapshot(new File(["# notes"], "notes.md", { type: "text/markdown" })),
-    ).rejects.toThrow("只支持导入完整备份 zip 文件");
+    ).rejects.toThrow("不支持的文件格式");
+  });
+
+  it("rejects zip files without data.json as incomplete backups", async () => {
+    const zip = new JSZip();
+    zip.file("manifest.json", "{}");
+    const blob = await zip.generateAsync({ type: "blob" });
+
+    await expect(zipToSnapshot(new File([blob], "broken.zip", { type: "application/zip" }))).rejects.toThrow("缺少 data.json");
+  });
+
+  it("rejects corrupted data.json with a clear message", async () => {
+    const zip = new JSZip();
+    zip.file("data.json", "{not-json");
+    const blob = await zip.generateAsync({ type: "blob" });
+
+    await expect(zipToSnapshot(new File([blob], "broken.zip", { type: "application/zip" }))).rejects.toThrow("备份数据损坏");
+  });
+
+  it("rejects incompatible backup manifests with format and version details", async () => {
+    const zip = new JSZip();
+    zip.file("data.json", JSON.stringify({ manifest: { format: "other", version: 99 } }));
+    const blob = await zip.generateAsync({ type: "blob" });
+
+    await expect(zipToSnapshot(new File([blob], "broken.zip", { type: "application/zip" }))).rejects.toThrow("format=other，version=99");
+  });
+
+  it("summarizes import counts and missing resources", () => {
+    const summary = summarizeSnapshot({
+      ...snapshot,
+      payload: {
+        ...snapshot.payload,
+        blocks: [
+          ...snapshot.payload.blocks,
+          {
+            id: "deleted",
+            createdAt: stamp,
+            updatedAt: stamp,
+            deletedAt: "2026-06-22T00:00:00.000Z",
+            type: "record",
+            date: "2026-06-19",
+            order: 0,
+            subject: "数学",
+            title: "回收站记录",
+            contentHtml: "<p></p>",
+            assets: [{ id: "missing", title: "缺失图片", kind: "image" }],
+            formulas: [],
+            mistakeRefs: [],
+          },
+        ],
+      },
+    });
+
+    expect(summary).toMatchObject({
+      records: 2,
+      days: 2,
+      deletedRecords: 1,
+      assets: 1,
+      images: 1,
+      audio: 0,
+      attachments: 0,
+      version: 3,
+      missingAssets: 1,
+    });
   });
 });

@@ -30,11 +30,14 @@ export const MonthlyHeatmap = ({ month, blocks, selectedDate, onMonthChange, onS
   return (
     <section className="monthly-heatmap-panel">
       <header>
-        <button type="button" className="icon-button" onClick={() => onMonthChange(addMonths(month, -1))}>
+        <button type="button" className="icon-button" onClick={() => onMonthChange(addMonths(month, -1))} aria-label="上个月">
           <ChevronLeft size={18} />
         </button>
-        <strong>{format(month, "yyyy 年 M 月")}</strong>
-        <button type="button" className="icon-button" onClick={() => onMonthChange(addMonths(month, 1))}>
+        <div>
+          <p className="eyebrow">Activity</p>
+          <strong>{format(month, "yyyy 年 M 月")}</strong>
+        </div>
+        <button type="button" className="icon-button" onClick={() => onMonthChange(addMonths(month, 1))} aria-label="下个月">
           <ChevronRight size={18} />
         </button>
       </header>

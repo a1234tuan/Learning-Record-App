@@ -99,6 +99,7 @@ export const createTemplateBlocks = (date: string, existingCount = 0): Block[] =
       assets: [],
       formulas: [],
       mistakeRefs: [],
+      favorite: false,
     },
   ];
 };

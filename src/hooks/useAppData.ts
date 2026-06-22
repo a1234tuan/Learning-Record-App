@@ -31,19 +31,22 @@ export const useAppData = () => {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [deletedRecords, setDeletedRecords] = useState<RecordBlock[]>([]);
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, currentSettings, assetList] = await Promise.all([
+    const [entryList, blockList, currentSettings, assetList, deletedList] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.getSettings(),
       storage.listAssets(),
+      storage.listDeletedBlocks(),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
     setSettings(currentSettings);
     setAssets(assetList);
+    setDeletedRecords(deletedList);
   }, []);
 
   useEffect(() => {
@@ -54,6 +57,8 @@ export const useAppData = () => {
       }
       await refresh();
       setInitialized(true);
+      await storage.purgeExpiredDeletedBlocks(30);
+      await refresh();
       await markAutoBackupDirty("app-start");
     });
     return () => {
@@ -135,6 +140,45 @@ export const useAppData = () => {
     [refresh],
   );
 
+  const restoreBlock = useCallback(
+    async (blockId: string) => {
+      await storage.restoreBlock(blockId);
+      await refresh();
+      await markAutoBackupDirty("restore-block");
+    },
+    [refresh],
+  );
+
+  const permanentlyDeleteBlock = useCallback(
+    async (blockId: string) => {
+      await storage.permanentlyDeleteBlock(blockId);
+      await refresh();
+      await markAutoBackupDirty("permanent-delete-block");
+    },
+    [refresh],
+  );
+
+  const purgeExpiredDeletedBlocks = useCallback(
+    async (retentionDays = 30) => {
+      const purged = await storage.purgeExpiredDeletedBlocks(retentionDays);
+      if (purged > 0) {
+        await refresh();
+        await markAutoBackupDirty("purge-trash");
+      }
+      return purged;
+    },
+    [refresh],
+  );
+
+  const toggleRecordFavorite = useCallback(
+    async (recordId: string, favorite: boolean) => {
+      await storage.toggleRecordFavorite(recordId, favorite);
+      await refresh();
+      await markAutoBackupDirty("record-favorite");
+    },
+    [refresh],
+  );
+
   const createRecordBlock = useCallback(
     async (date = todayISO(), subject?: Subject, contentHtml = "<p></p>") => {
       const dayBlocks = await storage.listBlocks(date);
@@ -154,6 +198,7 @@ export const useAppData = () => {
         assets: [],
         formulas: [],
         mistakeRefs: [],
+        favorite: false,
       };
       await storage.saveBlock(record);
       await refresh();
@@ -318,6 +363,7 @@ export const useAppData = () => {
     blocks,
     assets,
     settings,
+    deletedRecords,
     subjects,
     activeSubjects,
     todayEntry,
@@ -328,6 +374,10 @@ export const useAppData = () => {
     saveEntry,
     saveBlock,
     deleteBlock,
+    restoreBlock,
+    permanentlyDeleteBlock,
+    purgeExpiredDeletedBlocks,
+    toggleRecordFavorite,
     addRichTextBlock,
     createRecordBlock,
     addTemplate,

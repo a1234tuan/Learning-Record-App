@@ -4,6 +4,11 @@ import { normalizeSubjectName } from "./subjects";
 export const getRecordBlocks = (blocks: Block[]): RecordBlock[] =>
   blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
 
+export const getFavoriteRecords = (records: RecordBlock[]): RecordBlock[] =>
+  records
+    .filter((record) => record.favorite)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.order - b.order);
+
 export const getRecentRecordDates = (records: RecordBlock[], limit = 5): string[] =>
   Array.from(new Set(records.map((record) => record.date)))
     .sort((a, b) => b.localeCompare(a))

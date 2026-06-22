@@ -1,4 +1,4 @@
-import { ArrowLeft, Edit3, FilePlus, ImagePlus, Pi, Save, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeft, Edit3, FilePlus, ImagePlus, Pi, Save, Star, Trash2, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
@@ -15,6 +15,7 @@ interface RecordEditorPageProps {
   onBack: () => void;
   onSave: (record: RecordBlock) => Promise<void>;
   onDelete: (recordId: string) => Promise<void>;
+  onToggleFavorite: (record: RecordBlock, favorite: boolean) => Promise<void> | void;
   onAddAsset: (file: File, kind: Asset["kind"], title?: string) => Promise<Asset>;
   onAssetChanged?: () => void;
   highlightedAssetId?: string;
@@ -27,6 +28,7 @@ export const RecordEditorPage = ({
   onBack,
   onSave,
   onDelete,
+  onToggleFavorite,
   onAddAsset,
   onAssetChanged,
   highlightedAssetId,
@@ -74,9 +76,17 @@ export const RecordEditorPage = ({
   };
 
   const remove = async () => {
+    const ok = window.confirm(`确定删除“${record.title}”吗？\n\n删除后会进入回收站，30 天内可以恢复。`);
+    if (!ok) {
+      return;
+    }
     setSaving(true);
     await onDelete(record.id);
     setSaving(false);
+  };
+
+  const toggleFavorite = async () => {
+    await onToggleFavorite(record, !record.favorite);
   };
 
   return (
@@ -88,7 +98,16 @@ export const RecordEditorPage = ({
         </button>
         {editing ? (
           <div className="record-action-row">
-            <button type="button" className="icon-button danger" onClick={() => void remove()} disabled={saving}>
+            <button
+              type="button"
+              className={`icon-button ${record.favorite ? "active" : ""}`}
+              onClick={() => void toggleFavorite()}
+              disabled={saving}
+              aria-label={record.favorite ? "取消收藏" : "收藏记录"}
+            >
+              <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
+            </button>
+            <button type="button" className="icon-button danger" onClick={() => void remove()} disabled={saving} aria-label="删除记录">
               <Trash2 size={18} />
             </button>
             <button type="button" className="primary-button" onClick={() => void save()} disabled={saving}>
@@ -97,10 +116,20 @@ export const RecordEditorPage = ({
             </button>
           </div>
         ) : (
-          <button type="button" className="primary-button" onClick={() => setEditing(true)}>
-            <Edit3 size={17} />
-            编辑
-          </button>
+          <div className="record-action-row">
+            <button
+              type="button"
+              className={`icon-button ${record.favorite ? "active" : ""}`}
+              onClick={() => void toggleFavorite()}
+              aria-label={record.favorite ? "取消收藏" : "收藏记录"}
+            >
+              <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
+            </button>
+            <button type="button" className="primary-button" onClick={() => setEditing(true)}>
+              <Edit3 size={17} />
+              编辑
+            </button>
+          </div>
         )}
       </section>
 
@@ -110,14 +139,14 @@ export const RecordEditorPage = ({
             <input
               value={draft.title}
               onChange={(event) => update({ title: event.target.value })}
-              aria-label="记录块标题"
+              aria-label="记录标题"
             />
             <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} onAddSubject={onAddSubject} />
           </section>
           <RichTextEditor
             value={draft.contentHtml}
             onChange={(contentHtml) => update({ contentHtml })}
-            placeholder="像 Notion 页面一样，把文字、思路、截图、公式和录音放进同一个记录块..."
+            placeholder="像笔记页一样，把文字、思路、截图、公式和录音放进同一个记录块..."
             renderInsertTools={(editor) => (
               <>
                 <label className="editor-file-button" title="图片">

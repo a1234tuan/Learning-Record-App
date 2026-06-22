@@ -17,6 +17,7 @@ interface CategoriesPageProps {
   onAddSubject: (name: string) => Promise<void>;
   onRenameSubject: (oldName: Subject, newName: Subject) => Promise<void>;
   onSaveSubjects: (subjects: SubjectConfig[]) => Promise<void>;
+  onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
 }
 
 export const CategoriesPage = ({
@@ -26,6 +27,7 @@ export const CategoriesPage = ({
   onAddSubject,
   onRenameSubject,
   onSaveSubjects,
+  onToggleFavorite,
 }: CategoriesPageProps) => {
   const [activeSubject, setActiveSubject] = useState<Subject | null>(null);
   const [managing, setManaging] = useState(false);
@@ -218,7 +220,11 @@ export const CategoriesPage = ({
               {activeRecords.map((record) => (
                 <div key={record.id} className="dated-record-row">
                   <small>{formatChineseDate(record.date)}</small>
-                  <RecordCard record={record} onOpen={onOpenRecord} />
+                  <RecordCard
+                    record={record}
+                    onOpen={onOpenRecord}
+                    onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                  />
                 </div>
               ))}
             </div>

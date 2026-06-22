@@ -221,7 +221,7 @@ export const AiChatPage = ({
           ) : messages.length === 0 ? (
             <div className="ai-welcome">
               <Bot size={28} />
-              <h2>日志已准备好。</h2>
+              <h2>日志已经准备好。</h2>
               <p>你可以让 AI 自测、抽问、总结薄弱点，或者按苏格拉底式一步步追问。</p>
             </div>
           ) : (

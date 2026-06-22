@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.svg"],
       manifest: {
-        name: "408 备考日志",
-        short_name: "408 日志",
-        description: "纯本地、离线优先的 408 备考日志与错题复习工具",
+        name: "学习日志",
+        short_name: "学习日志",
+        description: "纯本地、离线优先的学习记录、资料整理与 AI 问答工具",
         theme_color: "#f7f3ec",
         background_color: "#f7f3ec",
         display: "standalone",
