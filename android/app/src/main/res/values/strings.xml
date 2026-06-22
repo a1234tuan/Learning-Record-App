@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">学习日志</string>
+    <string name="title_activity_main">学习日志</string>
+    <string name="package_name">com.noteproject.study408</string>
+    <string name="custom_url_scheme">com.noteproject.study408</string>
+</resources>
