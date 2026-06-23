@@ -581,6 +581,66 @@
 
 .rich-editor {
   line-height: var(--reading-line-height);
+  caret-color: var(--color-primary);
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+}
+
+.rich-editor,
+.rich-editor * {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.rich-editor::selection,
+.rich-editor ::selection {
+  background: rgba(45, 107, 90, 0.32) !important;
+  color: inherit !important;
+}
+
+.rich-editor::-moz-selection,
+.rich-editor ::-moz-selection {
+  background: rgba(45, 107, 90, 0.32) !important;
+  color: inherit !important;
+}
+
+.rich-editor .ProseMirror-selectednode,
+.rich-editor.ProseMirror .ProseMirror-selectednode {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 62%, transparent);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+.rich-editor button,
+.rich-editor img,
+.rich-editor audio,
+.rich-editor video,
+.rich-editor input,
+.rich-editor textarea,
+.rich-editor select,
+.rich-editor .asset-card,
+.rich-editor .asset-card *,
+.rich-editor .compact-image-button {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.rich-editor .asset-card input,
+.rich-editor .asset-card textarea,
+.rich-editor .formula-editor-card input,
+.rich-editor .formula-editor-card textarea {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.draft-status {
+  margin: 0;
+  color: var(--color-primary-strong);
 }
 
 .editor-toolbar {

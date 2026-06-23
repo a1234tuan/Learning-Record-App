@@ -9,6 +9,7 @@ import type {
   Block,
   DayEntry,
   MistakeCard,
+  RecordDraft,
   ReviewSchedule,
   StudySession,
   Tag,
@@ -20,6 +21,7 @@ export class StudyJournalDatabase extends Dexie {
   aiSecrets!: Table<AiSecret, string>;
   entries!: Table<DayEntry, string>;
   blocks!: Table<Block, string>;
+  recordDrafts!: Table<RecordDraft, string>;
   mistakes!: Table<MistakeCard, string>;
   reviews!: Table<ReviewSchedule, string>;
   tags!: Table<Tag, string>;
@@ -42,6 +44,20 @@ export class StudyJournalDatabase extends Dexie {
     this.version(2).stores({
       entries: "id, date, updatedAt, pinned, favorite",
       blocks: "id, date, type, order, updatedAt",
+      mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
+      reviews: "id, mistakeId, dueAt, completedAt, stage",
+      tags: "id, &name, parent",
+      assets: "id, kind, fileName, updatedAt",
+      studySessions: "id, date, subject, blockId",
+      settings: "id",
+      aiSessions: "id, sourceDate, updatedAt, createdAt",
+      aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiSecrets: "id",
+    });
+    this.version(3).stores({
+      entries: "id, date, updatedAt, pinned, favorite",
+      blocks: "id, date, type, order, updatedAt",
+      recordDrafts: "id, recordId, updatedAt",
       mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
       reviews: "id, mistakeId, dueAt, completedAt, stage",
       tags: "id, &name, parent",

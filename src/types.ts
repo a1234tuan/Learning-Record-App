@@ -52,6 +52,14 @@ export interface RecordBlock extends BaseEntity {
   favorite?: boolean;
 }
 
+export interface RecordDraft {
+  id: EntityId;
+  recordId: EntityId;
+  baseUpdatedAt: ISODateTime;
+  draft: RecordBlock;
+  updatedAt: ISODateTime;
+}
+
 export interface RichTextBlock extends BaseEntity {
   type: "richText";
   date: ISODate;
@@ -318,6 +326,7 @@ export interface BackupPayload {
   manifest: BackupManifest;
   entries: DayEntry[];
   blocks: Block[];
+  recordDrafts?: RecordDraft[];
   mistakes: MistakeCard[];
   tags: Tag[];
   reviews: ReviewSchedule[];
@@ -340,6 +349,7 @@ export interface SearchResult {
 export interface StorageSnapshot {
   payload: BackupPayload;
   assets: Asset[];
+  recordDrafts?: RecordDraft[];
 }
 
 export interface ImportSummary {
@@ -384,6 +394,10 @@ export interface StorageAdapter {
   saveEntry(entry: DayEntry): Promise<DayEntry>;
   listBlocks(date?: ISODate): Promise<Block[]>;
   saveBlock(block: Block): Promise<Block>;
+  getRecordDraft(recordId: EntityId): Promise<RecordDraft | undefined>;
+  listRecordDrafts(): Promise<RecordDraft[]>;
+  saveRecordDraft(draft: RecordDraft): Promise<RecordDraft>;
+  deleteRecordDraft(recordId: EntityId): Promise<void>;
   deleteBlock(blockId: EntityId): Promise<void>;
   listDeletedBlocks(): Promise<RecordBlock[]>;
   restoreBlock(blockId: EntityId): Promise<RecordBlock | undefined>;

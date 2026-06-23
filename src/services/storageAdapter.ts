@@ -9,6 +9,7 @@ import type {
   Block,
   DayEntry,
   MistakeCard,
+  RecordDraft,
   RecordBlock,
   ReviewSchedule,
   StorageAdapter,
@@ -51,19 +52,33 @@ export class DexieStorageAdapter implements StorageAdapter {
     return (await db.blocks.toArray()).filter((block): block is RecordBlock => block.type === "record");
   }
 
-  private async cleanupOrphanAssetsForRecord(record: RecordBlock): Promise<void> {
-    const candidateAssetIds = new Set(record.assets.map((asset) => asset.id));
+  private async cleanupOrphanAssetsForRecord(record: RecordBlock, draft?: RecordDraft): Promise<void> {
+    const candidateAssetIds = new Set([
+      ...record.assets.map((asset) => asset.id),
+      ...(draft?.draft.assets.map((asset) => asset.id) ?? []),
+    ]);
     if (candidateAssetIds.size === 0) {
       return;
     }
 
     const blocks = await db.blocks.toArray();
+    const drafts = await db.recordDrafts.toArray();
     const stillReferencedAssetIds = new Set<string>();
     for (const block of blocks) {
       if (block.type !== "record" || block.id === record.id) {
         continue;
       }
       for (const asset of block.assets) {
+        if (candidateAssetIds.has(asset.id)) {
+          stillReferencedAssetIds.add(asset.id);
+        }
+      }
+    }
+    for (const otherDraft of drafts) {
+      if (otherDraft.recordId === record.id) {
+        continue;
+      }
+      for (const asset of otherDraft.draft.assets) {
         if (candidateAssetIds.has(asset.id)) {
           stillReferencedAssetIds.add(asset.id);
         }
@@ -231,7 +246,12 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   async saveBlock(block: Block): Promise<Block> {
     const saved = touch(block.type === "record" ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] }) : block);
-    await db.blocks.put(saved);
+    await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
+      await db.blocks.put(saved);
+      if (saved.type === "record") {
+        await db.recordDrafts.delete(saved.id);
+      }
+    });
 
     if (saved.type === "studySession") {
       const existing = await db.studySessions.where("blockId").equals(saved.id).first();
@@ -249,12 +269,38 @@ export class DexieStorageAdapter implements StorageAdapter {
     return saved;
   }
 
+  async getRecordDraft(recordId: string): Promise<RecordDraft | undefined> {
+    return db.recordDrafts.get(recordId);
+  }
+
+  async listRecordDrafts(): Promise<RecordDraft[]> {
+    return db.recordDrafts.orderBy("updatedAt").reverse().toArray();
+  }
+
+  async saveRecordDraft(draft: RecordDraft): Promise<RecordDraft> {
+    const saved: RecordDraft = {
+      ...draft,
+      id: draft.recordId,
+      draft: syncRecordRefsFromContent({ ...draft.draft, mistakeRefs: [] }),
+      updatedAt: nowISO(),
+    };
+    await db.recordDrafts.put(saved);
+    return saved;
+  }
+
+  async deleteRecordDraft(recordId: string): Promise<void> {
+    await db.recordDrafts.delete(recordId);
+  }
+
   async deleteBlock(blockId: string): Promise<void> {
     const block = await db.blocks.get(blockId);
     if (!block) {
       return;
     }
-    await db.blocks.put({ ...block, deletedAt: nowISO(), updatedAt: nowISO() });
+    await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
+      await db.blocks.put({ ...block, deletedAt: nowISO(), updatedAt: nowISO() });
+      await db.recordDrafts.delete(blockId);
+    });
   }
 
   async listDeletedBlocks(): Promise<RecordBlock[]> {
@@ -280,12 +326,14 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (!block) {
       return;
     }
+    const draft = await db.recordDrafts.get(blockId);
 
-    await db.transaction("rw", db.blocks, db.assets, db.studySessions, async () => {
+    await db.transaction("rw", db.blocks, db.recordDrafts, db.assets, db.studySessions, async () => {
       await db.blocks.delete(blockId);
+      await db.recordDrafts.delete(blockId);
       await db.studySessions.where("blockId").equals(blockId).delete();
       if (block.type === "record") {
-        await this.cleanupOrphanAssetsForRecord(block);
+        await this.cleanupOrphanAssetsForRecord(block, draft);
       }
     });
   }
@@ -446,6 +494,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       studySessions,
       settings,
       assets,
+      recordDrafts,
     ] = await Promise.all([
       db.entries.toArray(),
       db.blocks.toArray(),
@@ -453,6 +502,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       db.studySessions.toArray(),
       this.getSettings(),
       db.assets.toArray(),
+      db.recordDrafts.toArray(),
     ]);
     const cleanedBlocks: Block[] = blocks.map((block) =>
       block.type === "record" ? { ...block, mistakeRefs: [] as string[] } : block,
@@ -477,6 +527,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         },
         entries,
         blocks: cleanedBlocks,
+        recordDrafts,
         mistakes: [],
         tags,
         reviews: [],
@@ -484,17 +535,19 @@ export class DexieStorageAdapter implements StorageAdapter {
         settings: ensureSettingsSubjects(settings, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
       },
       assets,
+      recordDrafts,
     };
   }
 
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
     await db.transaction(
       "rw",
-      [db.entries, db.blocks, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets],
+      [db.entries, db.blocks, db.recordDrafts, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets],
       async () => {
         await Promise.all([
           db.entries.clear(),
           db.blocks.clear(),
+          db.recordDrafts.clear(),
           db.mistakes.clear(),
           db.tags.clear(),
           db.reviews.clear(),
@@ -507,6 +560,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         await Promise.all([
           db.entries.bulkPut(snapshot.payload.entries),
           db.blocks.bulkPut(restoredBlocks),
+          db.recordDrafts.bulkPut(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
           db.tags.bulkPut(snapshot.payload.tags),
           db.studySessions.bulkPut(snapshot.payload.studySessions),
           db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 3 }, restoredRecords)),

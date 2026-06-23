@@ -47,13 +47,20 @@ export const RichTextEditor = ({
       RecordAssetNode.configure({ highlightedAssetId, onAssetChanged }),
       RecordFormulaNode,
       Placeholder.configure({
-        placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心情...",
+        placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心得...",
       }),
     ],
     content: value,
     editorProps: {
       attributes: {
         class: "rich-editor",
+        draggable: "false",
+      },
+      handleDOMEvents: {
+        dragstart: (_view, event) => {
+          event.preventDefault();
+          return true;
+        },
       },
     },
     onUpdate: ({ editor }) => {

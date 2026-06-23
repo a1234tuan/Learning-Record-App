@@ -34,6 +34,66 @@ import { getFavoriteRecords } from "./lib/journalSelectors";
 type Route = "today" | "journal" | "categories" | "search" | "stats" | "settings" | "more" | "record" | "ai" | "favorites" | "trash";
 type RecordSource = Exclude<Route, "record">;
 
+const isEditableElement = (target: EventTarget | Element | null) => {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']"));
+};
+
+const useKeyboardVisible = () => {
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    const initialHeight = visualViewport?.height ?? window.innerHeight;
+    let focusTimer: number | null = null;
+
+    const update = () => {
+      const activeEditable = isEditableElement(document.activeElement);
+      const currentHeight = visualViewport?.height ?? window.innerHeight;
+      const heightDelta = initialHeight - currentHeight;
+      const mobileViewport = window.matchMedia("(max-width: 920px)").matches;
+      const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+      const mobileInputFallback = mobileViewport && (coarsePointer || Capacitor.isNativePlatform());
+      setKeyboardVisible(activeEditable && (heightDelta > 120 || mobileInputFallback));
+    };
+
+    const updateAfterFocus = () => {
+      if (focusTimer) {
+        window.clearTimeout(focusTimer);
+      }
+      focusTimer = window.setTimeout(update, 80);
+    };
+
+    const handleFocusOut = () => {
+      if (focusTimer) {
+        window.clearTimeout(focusTimer);
+      }
+      focusTimer = window.setTimeout(update, 120);
+    };
+
+    window.addEventListener("focusin", updateAfterFocus);
+    window.addEventListener("focusout", handleFocusOut);
+    visualViewport?.addEventListener("resize", update);
+    visualViewport?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+
+    return () => {
+      if (focusTimer) {
+        window.clearTimeout(focusTimer);
+      }
+      window.removeEventListener("focusin", updateAfterFocus);
+      window.removeEventListener("focusout", handleFocusOut);
+      visualViewport?.removeEventListener("resize", update);
+      visualViewport?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  return keyboardVisible;
+};
+
 const navItems: Array<{ route: Route; label: string; icon: typeof Home }> = [
   { route: "today", label: "今天", icon: Home },
   { route: "journal", label: "日志", icon: CalendarDays },
@@ -62,6 +122,7 @@ export const App = () => {
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
   const app = useAppData();
+  const keyboardVisible = useKeyboardVisible();
 
   const navigate = useCallback((nextRoute: Route) => {
     lastBackPressRef.current = 0;
@@ -244,6 +305,9 @@ export const App = () => {
             highlightedAssetId={highlightAssetId}
             subjects={app.subjects}
             onAddSubject={app.addSubject}
+            onGetDraft={app.getRecordDraft}
+            onSaveDraft={app.saveRecordDraft}
+            onDeleteDraft={app.deleteRecordDraft}
           />
         ) : (
           <JournalPage
@@ -344,7 +408,7 @@ export const App = () => {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${keyboardVisible ? " keyboard-open" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <span>学</span>

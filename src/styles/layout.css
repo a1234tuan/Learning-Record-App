@@ -107,5 +107,27 @@
     border-radius: 24px;
     background: color-mix(in srgb, var(--color-surface) 88%, transparent);
     box-shadow: var(--shadow-floating);
+    transition:
+      transform var(--motion-normal) ease,
+      opacity var(--motion-fast) ease,
+      visibility var(--motion-fast) ease;
+    will-change: transform, opacity;
+  }
+
+  .app-shell.keyboard-open .page {
+    padding-bottom: 22px;
+  }
+
+  .app-shell.keyboard-open .bottom-nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(calc(100% + 28px));
+  }
+}
+
+@media (max-width: 920px) and (prefers-reduced-motion: reduce) {
+  .bottom-nav {
+    transition: none;
   }
 }

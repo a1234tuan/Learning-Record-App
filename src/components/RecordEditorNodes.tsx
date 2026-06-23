@@ -28,7 +28,7 @@ const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor 
   const editable = editor.isEditable;
 
   return (
-    <NodeViewWrapper className="record-inline-node" data-drag-handle>
+    <NodeViewWrapper className="record-inline-node">
       <AssetPreview
         assetRef={assetRef}
         mode={editable ? "edit" : "view"}
@@ -48,14 +48,10 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
   const editable = editor.isEditable;
 
   return (
-    <NodeViewWrapper className="record-inline-node formula-editor-card" data-drag-handle>
+    <NodeViewWrapper className="record-inline-node formula-editor-card">
       {editable ? (
         <>
-          <input
-            value={title}
-            placeholder="公式标题"
-            onChange={(event) => updateAttributes({ title: event.target.value })}
-          />
+          <input value={title} placeholder="公式标题" onChange={(event) => updateAttributes({ title: event.target.value })} />
           <textarea value={latex} onChange={(event) => updateAttributes({ latex: event.target.value })} />
         </>
       ) : (
@@ -76,7 +72,7 @@ export const RecordAssetNode = Node.create({
   },
   group: "block",
   atom: true,
-  draggable: true,
+  draggable: false,
 
   addAttributes() {
     return {
@@ -108,9 +104,7 @@ export const RecordAssetNode = Node.create({
 
   addNodeView() {
     const extensionOptions = this.options as RecordAssetNodeOptions;
-    return ReactNodeViewRenderer((props) => (
-      <RecordAssetNodeView {...props} extensionOptions={extensionOptions} />
-    ));
+    return ReactNodeViewRenderer((props) => <RecordAssetNodeView {...props} extensionOptions={extensionOptions} />);
   },
 });
 
@@ -118,7 +112,7 @@ export const RecordFormulaNode = Node.create({
   name: "recordFormula",
   group: "block",
   atom: true,
-  draggable: true,
+  draggable: false,
 
   addAttributes() {
     return {

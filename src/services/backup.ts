@@ -39,6 +39,7 @@ export const snapshotToZip = async (snapshot: StorageSnapshot): Promise<Blob> =>
     JSON.stringify(
       {
         ...payload,
+        recordDrafts: snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? [],
         assets: snapshot.assets.map(serializeAssetMeta),
       },
       null,
@@ -171,6 +172,7 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
       manifest: data.manifest,
       entries: data.entries ?? [],
       blocks: migratedBlocks,
+      recordDrafts: data.recordDrafts ?? [],
       mistakes: [],
       tags: data.tags ?? [],
       reviews: [],

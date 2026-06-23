@@ -1,13 +1,14 @@
-import { ArrowLeft, Edit3, FilePlus, ImagePlus, Pi, Save, Star, Trash2, Volume2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Edit3, FilePlus, ImagePlus, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, RecordBlock, Subject, SubjectConfig } from "../types";
+import type { Asset, RecordBlock, RecordDraft, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { AudioRecorder } from "../components/AudioRecorder";
 import { newId } from "../lib/entity";
+import { nowISO } from "../lib/date";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
 
 interface RecordEditorPageProps {
@@ -21,7 +22,20 @@ interface RecordEditorPageProps {
   highlightedAssetId?: string;
   subjects: SubjectConfig[];
   onAddSubject: (name: string) => Promise<void>;
+  onGetDraft: (recordId: string) => Promise<RecordDraft | undefined>;
+  onSaveDraft: (draft: RecordDraft) => Promise<RecordDraft>;
+  onDeleteDraft: (recordId: string) => Promise<void>;
 }
+
+const cloneRecord = (record: RecordBlock): RecordBlock =>
+  syncRecordRefsFromContent({ ...record, mistakeRefs: [] });
+
+const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
+  draft.title !== record.title ||
+  draft.subject !== record.subject ||
+  draft.contentHtml !== record.contentHtml ||
+  JSON.stringify(draft.assets) !== JSON.stringify(record.assets) ||
+  JSON.stringify(draft.formulas) !== JSON.stringify(record.formulas);
 
 export const RecordEditorPage = ({
   record,
@@ -34,21 +48,119 @@ export const RecordEditorPage = ({
   highlightedAssetId,
   subjects,
   onAddSubject,
+  onGetDraft,
+  onSaveDraft,
+  onDeleteDraft,
 }: RecordEditorPageProps) => {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<RecordBlock>(() => syncRecordRefsFromContent({ ...record, mistakeRefs: [] }));
+  const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
   const recordIdRef = useRef(record.id);
+  const draftRef = useRef<RecordBlock>(cloneRecord(record));
+  const saveTimerRef = useRef<number | null>(null);
+  const flushingRef = useRef(false);
+
+  const flushDraft = useCallback(
+    async (nextDraft = draftRef.current) => {
+      if (flushingRef.current || !hasDraftChanges(nextDraft, record)) {
+        return;
+      }
+      flushingRef.current = true;
+      try {
+        await onSaveDraft({
+          id: record.id,
+          recordId: record.id,
+          baseUpdatedAt: record.updatedAt,
+          draft: cloneRecord(nextDraft),
+          updatedAt: nowISO(),
+        });
+      } finally {
+        flushingRef.current = false;
+      }
+    },
+    [onSaveDraft, record],
+  );
+
+  const scheduleDraftSave = useCallback(
+    (nextDraft: RecordBlock) => {
+      draftRef.current = nextDraft;
+      if (!hasDraftChanges(nextDraft, record)) {
+        return;
+      }
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
+        void flushDraft(nextDraft);
+      }, 350);
+    },
+    [flushDraft, record],
+  );
 
   useEffect(() => {
-    if (recordIdRef.current !== record.id) {
-      recordIdRef.current = record.id;
-      setDraft(syncRecordRefsFromContent({ ...record, mistakeRefs: [] }));
+    let cancelled = false;
+    const loadDraft = async () => {
+      if (recordIdRef.current !== record.id) {
+        recordIdRef.current = record.id;
+        setDraftRestored(false);
+      }
+      const storedDraft = await onGetDraft(record.id);
+      if (cancelled) {
+        return;
+      }
+      if (storedDraft && storedDraft.updatedAt > record.updatedAt) {
+        const restored = cloneRecord(storedDraft.draft);
+        setDraft(restored);
+        draftRef.current = restored;
+        setEditing(true);
+        setDraftRestored(true);
+        return;
+      }
+      const clean = cloneRecord(record);
+      setDraft(clean);
+      draftRef.current = clean;
       setEditing(false);
-    }
-  }, [record]);
+      setDraftRestored(false);
+    };
 
-  const update = (patch: Partial<RecordBlock>) => setDraft((current) => ({ ...current, ...patch, mistakeRefs: [] }));
+    void loadDraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onGetDraft, record]);
+
+  useEffect(() => {
+    const flushOnHide = () => {
+      if (document.visibilityState === "hidden") {
+        void flushDraft();
+      }
+    };
+    const flushOnPageHide = () => {
+      void flushDraft();
+    };
+    document.addEventListener("visibilitychange", flushOnHide);
+    window.addEventListener("pagehide", flushOnPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", flushOnHide);
+      window.removeEventListener("pagehide", flushOnPageHide);
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      void flushDraft();
+    };
+  }, [flushDraft]);
+
+  const update = (patch: Partial<RecordBlock>) => {
+    setDraft((current) => {
+      const next = { ...current, ...patch, mistakeRefs: [] };
+      scheduleDraftSave(next);
+      return next;
+    });
+  };
 
   const insertAfterCurrentBlock = (editor: Editor, node: Record<string, unknown>) => {
     const { $from } = editor.state.selection;
@@ -70,9 +182,28 @@ export const RecordEditorPage = ({
 
   const save = async () => {
     setSaving(true);
-    const savedDraft = syncRecordRefsFromContent({ ...draft, mistakeRefs: [] });
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const savedDraft = cloneRecord(draftRef.current);
     await onSave(savedDraft);
+    await onDeleteDraft(record.id);
+    setDraftRestored(false);
     setSaving(false);
+  };
+
+  const discardDraft = async () => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    await onDeleteDraft(record.id);
+    const clean = cloneRecord(record);
+    setDraft(clean);
+    draftRef.current = clean;
+    setDraftRestored(false);
+    setEditing(false);
   };
 
   const remove = async () => {
@@ -81,6 +212,7 @@ export const RecordEditorPage = ({
       return;
     }
     setSaving(true);
+    await onDeleteDraft(record.id);
     await onDelete(record.id);
     setSaving(false);
   };
@@ -98,6 +230,12 @@ export const RecordEditorPage = ({
         </button>
         {editing ? (
           <div className="record-action-row">
+            {draftRestored && (
+              <button type="button" className="secondary-button" onClick={() => void discardDraft()} disabled={saving}>
+                <RotateCcw size={17} />
+                丢弃草稿
+              </button>
+            )}
             <button
               type="button"
               className={`icon-button ${record.favorite ? "active" : ""}`}
@@ -135,12 +273,9 @@ export const RecordEditorPage = ({
 
       {editing ? (
         <>
+          {draftRestored && <p className="status-message draft-status">已恢复未保存草稿，点击保存后才会写入正式记录。</p>}
           <section className="record-editor-head">
-            <input
-              value={draft.title}
-              onChange={(event) => update({ title: event.target.value })}
-              aria-label="记录标题"
-            />
+            <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" />
             <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} onAddSubject={onAddSubject} />
           </section>
           <RichTextEditor

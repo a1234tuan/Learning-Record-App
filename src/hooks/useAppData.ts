@@ -179,6 +179,19 @@ export const useAppData = () => {
     [refresh],
   );
 
+  const getRecordDraft = useCallback(async (recordId: string) => storage.getRecordDraft(recordId), []);
+
+  const saveRecordDraft = useCallback(async (draft: Parameters<typeof storage.saveRecordDraft>[0]) => {
+    const saved = await storage.saveRecordDraft(draft);
+    await markAutoBackupDirty("record-draft");
+    return saved;
+  }, []);
+
+  const deleteRecordDraft = useCallback(async (recordId: string) => {
+    await storage.deleteRecordDraft(recordId);
+    await markAutoBackupDirty("record-draft-delete");
+  }, []);
+
   const createRecordBlock = useCallback(
     async (date = todayISO(), subject?: Subject, contentHtml = "<p></p>") => {
       const dayBlocks = await storage.listBlocks(date);
@@ -378,6 +391,9 @@ export const useAppData = () => {
     permanentlyDeleteBlock,
     purgeExpiredDeletedBlocks,
     toggleRecordFavorite,
+    getRecordDraft,
+    saveRecordDraft,
+    deleteRecordDraft,
     addRichTextBlock,
     createRecordBlock,
     addTemplate,
