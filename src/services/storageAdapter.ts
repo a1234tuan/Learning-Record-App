@@ -20,7 +20,7 @@ import type {
   Tag,
 } from "../types";
 import { db } from "../db/database";
-import { DEFAULT_SETTINGS, DEFAULT_TAGS, createDayEntry } from "../db/defaults";
+import { DEFAULT_SETTINGS, DEFAULT_TAGS, createDayEntry, isLegacyDefaultAiPresetSet } from "../db/defaults";
 import { nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
@@ -104,21 +104,27 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   private async migrateAiSettings(): Promise<void> {
     const settings = await this.getSettings();
-    if (settings.ai?.presets?.length) {
-      return;
-    }
     const defaultAi = DEFAULT_SETTINGS.ai;
     if (!defaultAi) {
       return;
     }
+    const currentAi = settings.ai;
+    const shouldReplacePresets = !currentAi?.presets?.length || isLegacyDefaultAiPresetSet(currentAi.presets);
+    const nextAi = {
+      ...defaultAi,
+      ...currentAi,
+      providerName: currentAi?.providerName?.trim() || defaultAi.providerName,
+      baseUrl: currentAi?.baseUrl?.trim() && currentAi.baseUrl !== "https://api.deepseek.com/v1" ? currentAi.baseUrl : defaultAi.baseUrl,
+      model: currentAi?.model?.trim() && currentAi.model !== "deepseek-chat" ? currentAi.model : defaultAi.model,
+      memoryTurns: currentAi?.memoryTurns ?? defaultAi.memoryTurns ?? 12,
+      presets: shouldReplacePresets ? defaultAi.presets : currentAi?.presets ?? defaultAi.presets,
+    };
+    if (JSON.stringify(currentAi ?? {}) === JSON.stringify(nextAi)) {
+      return;
+    }
     await db.settings.put({
       ...settings,
-      ai: {
-        ...defaultAi,
-        ...settings.ai,
-        memoryTurns: settings.ai?.memoryTurns ?? defaultAi.memoryTurns ?? 12,
-        presets: settings.ai?.presets?.length ? settings.ai.presets : defaultAi.presets,
-      },
+      ai: nextAi,
     });
   }
 

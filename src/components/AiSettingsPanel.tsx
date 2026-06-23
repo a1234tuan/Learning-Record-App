@@ -13,9 +13,9 @@ interface AiSettingsPanelProps {
 
 const withAiDefaults = (settings: AppSettings): AiProviderConfig => ({
   ...(DEFAULT_SETTINGS.ai ?? {
-    providerName: "OpenAI Compatible",
-    baseUrl: "",
-    model: "",
+    providerName: "DeepSeek",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-v4-pro",
     temperature: 0.7,
     maxTokens: 4096,
     memoryTurns: 12,
@@ -46,7 +46,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
     setMessage("");
     const nextConfig = {
       ...config,
-      providerName: config.providerName.trim() || "OpenAI Compatible",
+      providerName: config.providerName.trim() || "DeepSeek",
       baseUrl: config.baseUrl.trim(),
       model: config.model.trim(),
       temperature: Number(config.temperature) || 0.7,
@@ -110,7 +110,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
               <input
                 value={config.baseUrl}
                 onChange={(event) => setConfig({ ...config, baseUrl: event.target.value })}
-                placeholder="https://api.deepseek.com/v1"
+                placeholder="https://api.deepseek.com"
               />
             </label>
             <label>
@@ -118,7 +118,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
               <input
                 value={config.model}
                 onChange={(event) => setConfig({ ...config, model: event.target.value })}
-                placeholder="deepseek-chat"
+                placeholder="deepseek-v4-pro"
               />
             </label>
             <label>
