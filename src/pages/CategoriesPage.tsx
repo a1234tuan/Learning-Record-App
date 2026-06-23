@@ -13,6 +13,10 @@ import { RecordCard } from "../components/RecordCard";
 interface CategoriesPageProps {
   blocks: Block[];
   subjects: SubjectConfig[];
+  activeSubject: Subject | null;
+  managing: boolean;
+  onActiveSubjectChange: (subject: Subject | null) => void;
+  onManagingChange: (managing: boolean) => void;
   onOpenRecord: (record: RecordBlock) => void;
   onAddSubject: (name: string) => Promise<void>;
   onRenameSubject: (oldName: Subject, newName: Subject) => Promise<void>;
@@ -23,14 +27,16 @@ interface CategoriesPageProps {
 export const CategoriesPage = ({
   blocks,
   subjects,
+  activeSubject,
+  managing,
+  onActiveSubjectChange,
+  onManagingChange,
   onOpenRecord,
   onAddSubject,
   onRenameSubject,
   onSaveSubjects,
   onToggleFavorite,
 }: CategoriesPageProps) => {
-  const [activeSubject, setActiveSubject] = useState<Subject | null>(null);
-  const [managing, setManaging] = useState(false);
   const [newSubject, setNewSubject] = useState("");
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -65,7 +71,7 @@ export const CategoriesPage = ({
     try {
       await onRenameSubject(oldName, name);
       if (activeSubject === oldName) {
-        setActiveSubject(name);
+        onActiveSubjectChange(name);
       }
       setEditingSubject(null);
       setMessage("");
@@ -109,12 +115,12 @@ export const CategoriesPage = ({
           <h1>{managing ? "学科管理" : activeSubject ?? "学科分类"}</h1>
         </div>
         {activeSubject ? (
-          <button type="button" className="secondary-button" onClick={() => setActiveSubject(null)}>
+          <button type="button" className="secondary-button" onClick={() => onActiveSubjectChange(null)}>
             <ArrowLeft size={18} />
             返回分类
           </button>
         ) : (
-          <button type="button" className="secondary-button" onClick={() => setManaging((value) => !value)}>
+          <button type="button" className="secondary-button" onClick={() => onManagingChange(!managing)}>
             {managing ? <X size={18} /> : <SlidersHorizontal size={18} />}
             {managing ? "完成" : "管理学科"}
           </button>
@@ -201,7 +207,7 @@ export const CategoriesPage = ({
               key={subject}
               type="button"
               className="category-card"
-              onClick={() => setActiveSubject(subject)}
+              onClick={() => onActiveSubjectChange(subject)}
             >
               <span>{subject}</span>
               <b>{count}</b>

@@ -1,6 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
 import type {
+  AiChatAttachment,
   AiChatMessage,
   AiChatSession,
   AiSecret,
@@ -16,6 +17,7 @@ import type {
 } from "../types";
 
 export class StudyJournalDatabase extends Dexie {
+  aiAttachments!: Table<AiChatAttachment, string>;
   aiSessions!: Table<AiChatSession, string>;
   aiMessages!: Table<AiChatMessage, string>;
   aiSecrets!: Table<AiSecret, string>;
@@ -66,6 +68,21 @@ export class StudyJournalDatabase extends Dexie {
       settings: "id",
       aiSessions: "id, sourceDate, updatedAt, createdAt",
       aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiSecrets: "id",
+    });
+    this.version(4).stores({
+      entries: "id, date, updatedAt, pinned, favorite",
+      blocks: "id, date, type, order, updatedAt",
+      recordDrafts: "id, recordId, updatedAt",
+      mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
+      reviews: "id, mistakeId, dueAt, completedAt, stage",
+      tags: "id, &name, parent",
+      assets: "id, kind, fileName, updatedAt",
+      studySessions: "id, date, subject, blockId",
+      settings: "id",
+      aiSessions: "id, sourceDate, updatedAt, createdAt",
+      aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiAttachments: "id, sessionId, messageId, createdAt, updatedAt",
       aiSecrets: "id",
     });
   }

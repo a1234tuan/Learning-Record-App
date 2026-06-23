@@ -124,6 +124,13 @@
     pointer-events: none;
     transform: translateY(calc(100% + 28px));
   }
+
+  .app-shell.ai-chat-active .bottom-nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(calc(100% + 28px));
+  }
 }
 
 @media (max-width: 920px) and (prefers-reduced-motion: reduce) {

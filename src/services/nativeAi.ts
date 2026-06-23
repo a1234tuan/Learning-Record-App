@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
+import type { AiChatPayloadMessage } from "./aiClientService";
+
 interface NativeAiPlugin {
   chat(options: {
     baseUrl: string;
@@ -22,7 +24,7 @@ export const runNativeAiChat = async (options: {
   model: string;
   temperature: number;
   maxTokens: number;
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  messages: AiChatPayloadMessage[];
 }): Promise<string> => {
   const result = await NativeAi.chat({
     ...options,

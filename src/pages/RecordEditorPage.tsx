@@ -13,6 +13,8 @@ import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/record
 
 interface RecordEditorPageProps {
   record: RecordBlock;
+  initialEditing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
   onBack: () => void;
   onSave: (record: RecordBlock) => Promise<void>;
   onDelete: (recordId: string) => Promise<void>;
@@ -39,6 +41,8 @@ const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
 
 export const RecordEditorPage = ({
   record,
+  initialEditing = false,
+  onEditingChange,
   onBack,
   onSave,
   onDelete,
@@ -52,14 +56,27 @@ export const RecordEditorPage = ({
   onSaveDraft,
   onDeleteDraft,
 }: RecordEditorPageProps) => {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditingState] = useState(initialEditing);
   const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
   const recordIdRef = useRef(record.id);
   const draftRef = useRef<RecordBlock>(cloneRecord(record));
+  const initialEditingRef = useRef(initialEditing);
   const saveTimerRef = useRef<number | null>(null);
   const flushingRef = useRef(false);
+
+  useEffect(() => {
+    initialEditingRef.current = initialEditing;
+  }, [initialEditing]);
+
+  const setEditing = useCallback(
+    (nextEditing: boolean) => {
+      setEditingState(nextEditing);
+      onEditingChange?.(nextEditing);
+    },
+    [onEditingChange],
+  );
 
   const flushDraft = useCallback(
     async (nextDraft = draftRef.current) => {
@@ -121,7 +138,7 @@ export const RecordEditorPage = ({
       const clean = cloneRecord(record);
       setDraft(clean);
       draftRef.current = clean;
-      setEditing(false);
+      setEditing(initialEditingRef.current);
       setDraftRestored(false);
     };
 
@@ -130,7 +147,7 @@ export const RecordEditorPage = ({
     return () => {
       cancelled = true;
     };
-  }, [onGetDraft, record]);
+  }, [onGetDraft, record, setEditing]);
 
   useEffect(() => {
     const flushOnHide = () => {

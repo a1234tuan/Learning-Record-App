@@ -182,20 +182,29 @@ export interface AiPromptPreset extends BaseEntity {
   title: string;
   prompt: string;
   order: number;
+  mode?: "recall" | "application" | "trap" | "feynman" | "correction" | "custom";
 }
 
-export interface AiProviderConfig {
+export interface AiProviderProfile {
+  id: EntityId;
   providerName: string;
   baseUrl: string;
   model: string;
   temperature: number;
   maxTokens: number;
   memoryTurns?: number;
+  builtIn?: "deepseek" | "nvidia" | "aliyun" | "custom-proxy";
+}
+
+export interface AiProviderConfig {
+  currentProviderId: EntityId;
+  providers: AiProviderProfile[];
   presets: AiPromptPreset[];
+  imageInputMode?: "vision" | "local-ocr" | "disabled";
 }
 
 export interface AiSecret {
-  id: "default";
+  id: EntityId;
   apiKey: string;
   updatedAt: ISODateTime;
 }
@@ -220,17 +229,56 @@ export interface AiLogContextAttachment {
   };
 }
 
+export interface AiContextChunk {
+  chunkId: EntityId;
+  recordId: EntityId;
+  date: ISODate;
+  subject: Subject;
+  title: string;
+  kind: "text" | "formula" | "imageOcr";
+  content: string;
+  sourceLabel: string;
+  order: number;
+}
+
+export interface AiContextPack extends AiLogContextAttachment {
+  summary: string;
+  selectedChunks: AiContextChunk[];
+  allChunks: AiContextChunk[];
+  totalChunks: number;
+  estimatedChars: number;
+  contextHash: string;
+}
+
 export interface AiChatSession extends BaseEntity {
   title: string;
   sourceDate?: ISODate;
-  attachment?: AiLogContextAttachment;
+  attachment?: AiContextPack;
+  memorySummary?: string;
+  lastContextHash?: string;
 }
 
 export interface AiChatMessage extends BaseEntity {
   sessionId: EntityId;
   role: "user" | "assistant" | "system";
   content: string;
+  attachmentIds?: EntityId[];
   error?: string;
+}
+
+export interface AiChatAttachment extends BaseEntity {
+  sessionId: EntityId;
+  messageId?: EntityId;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  data: Blob;
+  ocrStatus?: "idle" | "queued" | "running" | "done" | "failed" | "timeout";
+  ocrText?: string;
+  ocrError?: string;
+  ocrJobId?: string;
+  ocrUpdatedAt?: ISODateTime;
+  sentMode?: "vision" | "local-ocr-markdown";
 }
 
 export interface Asset extends BaseEntity {
@@ -428,9 +476,14 @@ export interface StorageAdapter {
   deleteAiSession?(id: EntityId): Promise<void>;
   listAiMessages?(sessionId: EntityId): Promise<AiChatMessage[]>;
   saveAiMessage?(message: AiChatMessage): Promise<AiChatMessage>;
-  getAiSecret?(): Promise<AiSecret | undefined>;
-  saveAiSecret?(apiKey: string): Promise<AiSecret>;
-  clearAiSecret?(): Promise<void>;
+  saveAiAttachment?(attachment: AiChatAttachment): Promise<AiChatAttachment>;
+  listAiAttachments?(sessionId: EntityId): Promise<AiChatAttachment[]>;
+  getAiAttachment?(id: EntityId): Promise<AiChatAttachment | undefined>;
+  deleteAiAttachment?(id: EntityId): Promise<void>;
+  deleteAiAttachmentsForSession?(sessionId: EntityId): Promise<void>;
+  getAiSecret?(providerId?: EntityId): Promise<AiSecret | undefined>;
+  saveAiSecret?(apiKey: string, providerId?: EntityId): Promise<AiSecret>;
+  clearAiSecret?(providerId?: EntityId): Promise<void>;
 }
 
 export interface SyncAdapter {

@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -30,9 +30,15 @@ import type { RecordBlock, Subject } from "./types";
 import { buildDayLogAiContext } from "./services/dayLogAiContextService";
 import { createAiSessionForDate } from "./services/aiSessionService";
 import { getFavoriteRecords } from "./lib/journalSelectors";
-
-type Route = "today" | "journal" | "categories" | "search" | "stats" | "settings" | "more" | "record" | "ai" | "favorites" | "trash";
-type RecordSource = Exclude<Route, "record">;
+import {
+  createInitialTabMemory,
+  getRecordState,
+  getTabDepth,
+  popTabDepth,
+  type MoreSubRoute,
+  type TabKey,
+  type TabMemory,
+} from "./lib/tabNavigation";
 
 const isEditableElement = (target: EventTarget | Element | null) => {
   if (!(target instanceof Element)) {
@@ -94,50 +100,111 @@ const useKeyboardVisible = () => {
   return keyboardVisible;
 };
 
-const navItems: Array<{ route: Route; label: string; icon: typeof Home }> = [
-  { route: "today", label: "今天", icon: Home },
-  { route: "journal", label: "日志", icon: CalendarDays },
-  { route: "categories", label: "分类", icon: Layers },
-  { route: "search", label: "搜索", icon: Search },
-  { route: "ai", label: "AI问答", icon: BrainCircuit },
-  { route: "stats", label: "统计", icon: BarChart3 },
-  { route: "settings", label: "设置", icon: Settings },
+const navItems: Array<{ tab: TabKey; subRoute?: Exclude<MoreSubRoute, null>; label: string; icon: typeof Home }> = [
+  { tab: "today", label: "今天", icon: Home },
+  { tab: "journal", label: "日志", icon: CalendarDays },
+  { tab: "categories", label: "分类", icon: Layers },
+  { tab: "search", label: "搜索", icon: Search },
+  { tab: "more", subRoute: "ai", label: "AI问答", icon: BrainCircuit },
+  { tab: "more", subRoute: "stats", label: "统计", icon: BarChart3 },
+  { tab: "more", subRoute: "settings", label: "设置", icon: Settings },
 ];
 
-const bottomNavItems: Array<{ route: Route; label: string; icon: typeof Home }> = [
-  { route: "today", label: "今天", icon: Home },
-  { route: "journal", label: "日志", icon: CalendarDays },
-  { route: "categories", label: "分类", icon: Layers },
-  { route: "search", label: "搜索", icon: Search },
-  { route: "more", label: "更多", icon: MoreHorizontal },
+const bottomNavItems: Array<{ tab: TabKey; label: string; icon: typeof Home }> = [
+  { tab: "today", label: "今天", icon: Home },
+  { tab: "journal", label: "日志", icon: CalendarDays },
+  { tab: "categories", label: "分类", icon: Layers },
+  { tab: "search", label: "搜索", icon: Search },
+  { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
 
 export const App = () => {
-  const [route, setRoute] = useState<Route>("today");
-  const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
-  const [highlightAssetId, setHighlightAssetId] = useState<string | undefined>();
+  const [activeTab, setActiveTab] = useState<TabKey>("today");
+  const [tabMemory, setTabMemory] = useState<TabMemory>(() => createInitialTabMemory());
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
-  const [recordSource, setRecordSource] = useState<RecordSource>("journal");
   const [backToast, setBackToast] = useState("");
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
   const app = useAppData();
   const keyboardVisible = useKeyboardVisible();
 
-  const navigate = useCallback((nextRoute: Route) => {
+  const clearBackHint = useCallback(() => {
     lastBackPressRef.current = 0;
     if (backToastTimerRef.current) {
       window.clearTimeout(backToastTimerRef.current);
       backToastTimerRef.current = null;
     }
     setBackToast("");
-    setActiveRecordId(null);
-    setHighlightAssetId(undefined);
-    if (nextRoute !== "ai") {
-      setActiveAiSessionId(null);
-    }
-    setRoute(nextRoute);
   }, []);
+
+  const switchTab = useCallback(
+    (tab: TabKey) => {
+      clearBackHint();
+      setActiveTab(tab);
+    },
+    [clearBackHint],
+  );
+
+  const openMoreSubRoute = useCallback(
+    (subRoute: MoreSubRoute) => {
+      clearBackHint();
+      setTabMemory((current) => ({
+        ...current,
+        more: {
+          ...current.more,
+          subRoute,
+          recordId: undefined,
+          highlightAssetId: undefined,
+          recordEditing: undefined,
+        },
+      }));
+      setActiveTab("more");
+    },
+    [clearBackHint],
+  );
+
+  const openRecordInTab = useCallback(
+    (record: RecordBlock, tab: TabKey, assetId?: string) => {
+      clearBackHint();
+      setTabMemory((current) => ({
+        ...current,
+        [tab]: {
+          ...current[tab],
+          recordId: record.id,
+          highlightAssetId: assetId,
+          recordEditing: false,
+        },
+      }));
+      setActiveTab(tab);
+    },
+    [clearBackHint],
+  );
+
+  const closeRecordInCurrentTab = useCallback(() => {
+    setTabMemory((current) => ({
+      ...current,
+      [activeTab]: {
+        ...current[activeTab],
+        recordId: undefined,
+        highlightAssetId: undefined,
+        recordEditing: undefined,
+      },
+    }));
+  }, [activeTab]);
+
+  const setCurrentRecordEditing = useCallback((recordEditing: boolean) => {
+    setTabMemory((current) => ({
+      ...current,
+      [activeTab]: {
+        ...current[activeTab],
+        recordEditing,
+      },
+    }));
+  }, [activeTab]);
+
+  const popCurrentTabDepth = useCallback(() => {
+    setTabMemory((current) => popTabDepth(current, activeTab));
+  }, [activeTab]);
 
   useEffect(() => {
     if (!app.settings) {
@@ -172,18 +239,14 @@ export const App = () => {
         return;
       }
 
-      if (route === "record") {
-        navigate(recordSource);
+      if (getTabDepth(activeTab, tabMemory) > 0) {
+        clearBackHint();
+        popCurrentTabDepth();
         return;
       }
 
-      if (route === "stats" || route === "settings" || route === "ai" || route === "favorites" || route === "trash") {
-        navigate("more");
-        return;
-      }
-
-      if (route !== "today") {
-        navigate("today");
+      if (activeTab !== "today") {
+        switchTab("today");
         return;
       }
 
@@ -213,7 +276,7 @@ export const App = () => {
         void remove();
       }
     };
-  }, [navigate, recordSource, route]);
+  }, [activeTab, clearBackHint, popCurrentTabDepth, switchTab, tabMemory]);
 
   const favoriteRecords = useMemo(
     () => getFavoriteRecords(app.blocks.filter((block): block is RecordBlock => block.type === "record")),
@@ -230,128 +293,67 @@ export const App = () => {
   }
 
   const settings = app.settings;
-  const openRecord = (record: RecordBlock, source: RecordSource = route === "record" ? recordSource : route, assetId?: string) => {
-    setActiveRecordId(record.id);
-    setHighlightAssetId(assetId);
-    setRecordSource(source);
-    setRoute("record");
-  };
-  const closeRecord = () => navigate(recordSource);
-  const activeRecord = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === activeRecordId);
+  const currentRecordState = getRecordState(activeTab, tabMemory);
+  const currentRecord = currentRecordState.recordId
+    ? app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === currentRecordState.recordId)
+    : undefined;
+
   const openAiForDate = async (date: string) => {
     const attachment = buildDayLogAiContext(date, app.blocks, app.assets);
     const session = await createAiSessionForDate(date, attachment);
     if (session) {
       setActiveAiSessionId(session.id);
-      setRoute("ai");
+      openMoreSubRoute("ai");
     }
   };
 
-  const renderPage = () => {
-    switch (route) {
-      case "today":
-        return (
-          <TodayPage
-            entry={app.todayEntry}
-            blocks={app.todayBlocks}
-            examDate={settings.examDate}
-            subjects={app.activeSubjects}
-            onSaveEntry={(entry) => void app.saveEntry(entry)}
-            onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
-            onAddSubject={app.addSubject}
-            onOpenRecord={(record) => openRecord(record, "today")}
-            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
-          />
-        );
-      case "journal":
-        return (
-          <JournalPage
-            blocks={app.blocks}
-            subjects={app.subjects}
-            onOpenRecord={(record) => openRecord(record, "journal")}
-            onOpenCategories={() => navigate("categories")}
-            onAskAi={(date) => void openAiForDate(date)}
-            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
-          />
-        );
-      case "categories":
-        return (
-          <CategoriesPage
-            blocks={app.blocks}
-            subjects={app.subjects}
-            onOpenRecord={(record) => openRecord(record, "categories")}
-            onAddSubject={app.addSubject}
-            onRenameSubject={app.renameSubject}
-            onSaveSubjects={app.saveSubjects}
-            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
-          />
-        );
-      case "record":
-        return activeRecord ? (
-          <RecordEditorPage
-            record={activeRecord}
-            onBack={closeRecord}
-            onSave={async (record) => {
-              await app.saveBlock(record);
-              closeRecord();
-            }}
-            onDelete={async (recordId) => {
-              await app.deleteBlock(recordId);
-              closeRecord();
-            }}
-            onToggleFavorite={(record, favorite) => app.toggleRecordFavorite(record.id, favorite)}
-            onAddAsset={app.saveAssetFile}
-            onAssetChanged={app.refresh}
-            highlightedAssetId={highlightAssetId}
-            subjects={app.subjects}
-            onAddSubject={app.addSubject}
-            onGetDraft={app.getRecordDraft}
-            onSaveDraft={app.saveRecordDraft}
-            onDeleteDraft={app.deleteRecordDraft}
-          />
-        ) : (
-          <JournalPage
-            blocks={app.blocks}
-            subjects={app.subjects}
-            onOpenRecord={(record) => openRecord(record, "journal")}
-            onOpenCategories={() => navigate("categories")}
-            onAskAi={(date) => void openAiForDate(date)}
-            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
-          />
-        );
-      case "search":
-        return (
-          <SearchPage
-            entries={app.entries}
-            blocks={app.blocks}
-            assets={app.assets}
-            onOpenRecord={(recordId, assetId) => {
-              const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === recordId);
-              if (record) {
-                openRecord(record, "search", assetId);
-              }
-            }}
-          />
-        );
+  const renderRecordPage = (record: RecordBlock, highlightedAssetId?: string) => (
+    <RecordEditorPage
+      record={record}
+      initialEditing={Boolean(currentRecordState.recordEditing)}
+      onEditingChange={setCurrentRecordEditing}
+      onBack={closeRecordInCurrentTab}
+      onSave={async (nextRecord) => {
+        await app.saveBlock(nextRecord);
+        closeRecordInCurrentTab();
+      }}
+      onDelete={async (recordId) => {
+        await app.deleteBlock(recordId);
+        closeRecordInCurrentTab();
+      }}
+      onToggleFavorite={(record, favorite) => app.toggleRecordFavorite(record.id, favorite)}
+      onAddAsset={app.saveAssetFile}
+      onAssetChanged={app.refresh}
+      highlightedAssetId={highlightedAssetId}
+      subjects={app.subjects}
+      onAddSubject={app.addSubject}
+      onGetDraft={app.getRecordDraft}
+      onSaveDraft={app.saveRecordDraft}
+      onDeleteDraft={app.deleteRecordDraft}
+    />
+  );
+
+  const renderMorePage = () => {
+    if (currentRecord) {
+      return renderRecordPage(currentRecord, tabMemory.more.highlightAssetId);
+    }
+
+    switch (tabMemory.more.subRoute) {
       case "stats":
         return <StatsPage blocks={app.blocks} assets={app.assets} subjects={app.subjects} />;
-      case "more":
+      case "settings":
         return (
-          <MorePage
-            onOpenStats={() => navigate("stats")}
-            onOpenSettings={() => navigate("settings")}
-            onOpenAi={() => navigate("ai")}
-            onOpenFavorites={() => navigate("favorites")}
-            onOpenTrash={() => navigate("trash")}
-            onRestored={app.refresh}
+          <SettingsPage
             settings={settings}
+            onSaveSettings={(nextSettings) => void app.persistSettings(nextSettings)}
+            onRestored={app.refresh}
           />
         );
       case "favorites":
         return (
           <FavoritesPage
             records={favoriteRecords}
-            onOpenRecord={(record) => openRecord(record, "favorites")}
+            onOpenRecord={(record) => openRecordInTab(record, "more")}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
@@ -385,30 +387,150 @@ export const App = () => {
           <AiChatPage
             sessionId={activeAiSessionId}
             settings={settings}
+            blocks={app.blocks}
+            assets={app.assets}
             onOpenSession={(sessionId) => {
               setActiveAiSessionId(sessionId);
-              setRoute("ai");
+              openMoreSubRoute("ai");
             }}
             onDeletedSession={() => {
               setActiveAiSessionId(null);
-              setRoute("ai");
+              openMoreSubRoute("ai");
             }}
-            onOpenSettings={() => navigate("more")}
+            onOpenSettings={() => openMoreSubRoute(null)}
           />
         );
-      case "settings":
+      case null:
         return (
-          <SettingsPage
-            settings={settings}
-            onSaveSettings={(settings) => void app.persistSettings(settings)}
+          <MorePage
+            onOpenStats={() => openMoreSubRoute("stats")}
+            onOpenSettings={() => openMoreSubRoute("settings")}
+            onOpenAi={() => openMoreSubRoute("ai")}
+            onOpenFavorites={() => openMoreSubRoute("favorites")}
+            onOpenTrash={() => openMoreSubRoute("trash")}
             onRestored={app.refresh}
+            settings={settings}
           />
         );
     }
   };
 
+  const renderCurrentTab = () => {
+    switch (activeTab) {
+      case "today":
+        return currentRecord ? (
+          renderRecordPage(currentRecord, tabMemory.today.highlightAssetId)
+        ) : (
+          <TodayPage
+            entry={app.todayEntry}
+            blocks={app.todayBlocks}
+            examDate={settings.examDate}
+            subjects={app.activeSubjects}
+            onSaveEntry={(entry) => void app.saveEntry(entry)}
+            onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
+            onAddSubject={app.addSubject}
+            onOpenRecord={(record) => openRecordInTab(record, "today")}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+          />
+        );
+      case "journal":
+        return currentRecord ? (
+          renderRecordPage(currentRecord, tabMemory.journal.highlightAssetId)
+        ) : (
+          <JournalPage
+            blocks={app.blocks}
+            subjects={app.subjects}
+            month={tabMemory.journal.month}
+            selectedDate={tabMemory.journal.selectedDate}
+            selectedSubject={tabMemory.journal.selectedSubject}
+            onMonthChange={(month) =>
+              setTabMemory((current) => ({ ...current, journal: { ...current.journal, month } }))
+            }
+            onSelectedDateChange={(selectedDate) =>
+              setTabMemory((current) => ({
+                ...current,
+                journal: { ...current.journal, selectedDate, selectedSubject: undefined },
+              }))
+            }
+            onSelectedSubjectChange={(selectedSubject) =>
+              setTabMemory((current) => ({ ...current, journal: { ...current.journal, selectedSubject } }))
+            }
+            onOpenRecord={(record) => openRecordInTab(record, "journal")}
+            onOpenCategories={() => switchTab("categories")}
+            onAskAi={(date) => void openAiForDate(date)}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+          />
+        );
+      case "categories":
+        return currentRecord ? (
+          renderRecordPage(currentRecord, tabMemory.categories.highlightAssetId)
+        ) : (
+          <CategoriesPage
+            blocks={app.blocks}
+            subjects={app.subjects}
+            activeSubject={tabMemory.categories.activeSubject}
+            managing={tabMemory.categories.managing}
+            onActiveSubjectChange={(activeSubject) =>
+              setTabMemory((current) => ({ ...current, categories: { ...current.categories, activeSubject } }))
+            }
+            onManagingChange={(managing) =>
+              setTabMemory((current) => ({ ...current, categories: { ...current.categories, managing } }))
+            }
+            onOpenRecord={(record) => openRecordInTab(record, "categories")}
+            onAddSubject={app.addSubject}
+            onRenameSubject={app.renameSubject}
+            onSaveSubjects={app.saveSubjects}
+            onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+          />
+        );
+      case "search":
+        return currentRecord ? (
+          renderRecordPage(currentRecord, tabMemory.search.highlightAssetId)
+        ) : (
+          <SearchPage
+            entries={app.entries}
+            blocks={app.blocks}
+            assets={app.assets}
+            query={tabMemory.search.query}
+            onQueryChange={(query) =>
+              setTabMemory((current) => ({ ...current, search: { ...current.search, query } }))
+            }
+            onOpenRecord={(recordId, assetId) => {
+              const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === recordId);
+              if (record) {
+                openRecordInTab(record, "search", assetId);
+              }
+            }}
+          />
+        );
+      case "more":
+        return renderMorePage();
+    }
+  };
+
+  const pageKey = (() => {
+    const depth = getTabDepth(activeTab, tabMemory);
+    const recordPart = currentRecordState.recordId ?? "root";
+    if (activeTab === "journal") {
+      return `${activeTab}-${depth}-${recordPart}-${tabMemory.journal.selectedDate ?? "all"}-${tabMemory.journal.selectedSubject ?? "all"}`;
+    }
+    if (activeTab === "categories") {
+      return `${activeTab}-${depth}-${recordPart}-${tabMemory.categories.managing ? "manage" : tabMemory.categories.activeSubject ?? "all"}`;
+    }
+    if (activeTab === "more") {
+      return `${activeTab}-${depth}-${recordPart}-${tabMemory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
+    }
+    return `${activeTab}-${depth}-${recordPart}`;
+  })();
+
+  const shellClassName = [
+    "app-shell",
+    keyboardVisible ? "keyboard-open" : "",
+    activeTab === "more" && tabMemory.more.subRoute === "ai" ? "ai-chat-active" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className={`app-shell${keyboardVisible ? " keyboard-open" : ""}`}>
+    <div className={shellClassName}>
       <aside className="sidebar">
         <div className="brand">
           <span>学</span>
@@ -420,12 +542,15 @@ export const App = () => {
         <nav>
           {navItems.map((item) => {
             const Icon = item.icon;
+            const active = item.subRoute
+              ? activeTab === "more" && tabMemory.more.subRoute === item.subRoute
+              : activeTab === item.tab;
             return (
               <button
-                key={item.route}
+                key={`${item.tab}-${item.subRoute ?? "root"}`}
                 type="button"
-                className={route === item.route ? "active" : ""}
-                onClick={() => navigate(item.route)}
+                className={active ? "active" : ""}
+                onClick={() => (item.subRoute ? openMoreSubRoute(item.subRoute) : switchTab(item.tab))}
               >
                 <Icon size={19} />
                 <span>{item.label}</span>
@@ -443,9 +568,7 @@ export const App = () => {
         </section>
       </aside>
       <div className="content-area">
-        <PageTransition pageKey={route === "record" ? `${route}-${activeRecordId ?? "empty"}` : route}>
-          {renderPage()}
-        </PageTransition>
+        <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>
       </div>
       {backToast && (
         <div className="app-toast" role="status" aria-live="polite">
@@ -455,13 +578,13 @@ export const App = () => {
       <nav className="bottom-nav">
         {bottomNavItems.map((item) => {
           const Icon = item.icon;
-          const active = route === item.route || (item.route === "more" && (route === "stats" || route === "settings" || route === "ai" || route === "favorites" || route === "trash"));
+          const active = activeTab === item.tab;
           return (
             <button
-              key={item.route}
+              key={item.tab}
               type="button"
               className={active ? "active" : ""}
-              onClick={() => navigate(item.route)}
+              onClick={() => switchTab(item.tab)}
             >
               <Icon size={20} />
               <span>{item.label}</span>
@@ -472,4 +595,3 @@ export const App = () => {
     </div>
   );
 };
-

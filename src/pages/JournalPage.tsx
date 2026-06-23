@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Layers } from "lucide-react";
 
 import type { Block, RecordBlock, Subject, SubjectConfig } from "../types";
@@ -11,17 +11,32 @@ import { PageHeader } from "../components/ui";
 interface JournalPageProps {
   blocks: Block[];
   subjects: SubjectConfig[];
+  month: Date;
+  selectedDate?: string;
+  selectedSubject?: Subject;
+  onMonthChange: (month: Date) => void;
+  onSelectedDateChange: (date: string | undefined) => void;
+  onSelectedSubjectChange: (subject: Subject | undefined) => void;
   onOpenRecord: (record: RecordBlock) => void;
   onOpenCategories: () => void;
   onAskAi: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
 }
 
-export const JournalPage = ({ blocks, subjects, onOpenRecord, onOpenCategories, onAskAi, onToggleFavorite }: JournalPageProps) => {
-  const [month, setMonth] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState<string | undefined>();
-  const [selectedSubject, setSelectedSubject] = useState<Subject | undefined>();
-
+export const JournalPage = ({
+  blocks,
+  subjects,
+  month,
+  selectedDate,
+  selectedSubject,
+  onMonthChange,
+  onSelectedDateChange,
+  onSelectedSubjectChange,
+  onOpenRecord,
+  onOpenCategories,
+  onAskAi,
+  onToggleFavorite,
+}: JournalPageProps) => {
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const dates = useMemo(() => getRecentRecordDates(records, 5), [records]);
 
@@ -41,16 +56,16 @@ export const JournalPage = ({ blocks, subjects, onOpenRecord, onOpenCategories, 
         month={month}
         blocks={blocks}
         selectedDate={selectedDate}
-        onMonthChange={setMonth}
+        onMonthChange={onMonthChange}
         onSelectDate={(date) => {
-          setSelectedDate(date);
-          setSelectedSubject(undefined);
+          onSelectedDateChange(date);
+          onSelectedSubjectChange(undefined);
         }}
       />
 
       {selectedDate && selectedSubject ? (
         <section className="record-list-panel page-section-transition">
-          <button type="button" className="subtle-button" onClick={() => setSelectedSubject(undefined)}>
+          <button type="button" className="subtle-button" onClick={() => onSelectedSubjectChange(undefined)}>
             返回学科列表
           </button>
           <h2>{selectedDate} / {selectedSubject}</h2>
@@ -89,9 +104,11 @@ export const JournalPage = ({ blocks, subjects, onOpenRecord, onOpenCategories, 
                   records={records.filter((record) => record.date === date)}
                   subjects={subjects}
                   onAskAi={onAskAi}
+                  open={selectedDate === date && !selectedSubject}
+                  onOpenChange={(open) => onSelectedDateChange(open ? date : undefined)}
                   onOpenSubject={(nextDate, subject) => {
-                    setSelectedDate(nextDate);
-                    setSelectedSubject(subject);
+                    onSelectedDateChange(nextDate);
+                    onSelectedSubjectChange(subject);
                   }}
                 />
               ))

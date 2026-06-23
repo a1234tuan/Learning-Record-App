@@ -1737,6 +1737,8 @@ button:disabled {
 .ai-session-list,
 .ai-attachment-chip,
 .ai-message,
+.provider-profile-card,
+.ai-image-mode-card,
 .preset-editor-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1754,6 +1756,35 @@ button:disabled {
 .ai-settings-body {
   display: grid;
   gap: 14px;
+}
+
+.provider-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-profile-list {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-profile-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  box-shadow: none;
+}
+
+.provider-profile-card.active {
+  border-color: color-mix(in srgb, var(--primary) 52%, var(--border));
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+}
+
+.provider-profile-card > header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .settings-grid {
@@ -1807,6 +1838,45 @@ button:disabled {
 .preset-editor-list {
   display: grid;
   gap: 10px;
+}
+
+.ai-image-mode-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  box-shadow: none;
+}
+
+.ai-image-mode-options {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-image-mode-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.ai-image-mode-options label.active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface));
+}
+
+.ai-image-mode-options span,
+.ai-image-mode-options strong,
+.ai-image-mode-options small {
+  display: block;
+  min-width: 0;
+}
+
+.ai-image-mode-options small {
+  margin-top: 3px;
+  color: var(--muted);
 }
 
 .preset-editor-card {
@@ -1896,6 +1966,19 @@ button:disabled {
   color: var(--text);
 }
 
+.ai-preset-row button strong,
+.ai-preset-row button small {
+  display: block;
+  line-height: 1.2;
+}
+
+.ai-preset-row button small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .ai-message-list {
   display: grid;
   gap: 12px;
@@ -1974,17 +2057,124 @@ button:disabled {
   min-width: 0;
   max-width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
   margin-top: auto;
+}
+
+.ai-image-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
 }
 
 .ai-input-bar textarea {
   width: 100%;
   max-width: 100%;
   min-height: 86px;
+  line-height: 1.55;
   resize: vertical;
+  caret-color: var(--primary);
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.ai-input-bar textarea::selection {
+  background: rgba(47, 111, 94, 0.28);
+  color: var(--text);
+}
+
+.ai-pending-images,
+.ai-message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-pending-images {
+  padding: 2px 0;
+}
+
+.ai-image-thumb {
+  position: relative;
+  min-width: 0;
+  max-width: min(220px, 100%);
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+}
+
+.ai-bubble-row.user .ai-image-thumb {
+  border-color: color-mix(in srgb, white 30%, #2563eb);
+  background: color-mix(in srgb, white 13%, #2563eb);
+}
+
+.ai-image-thumb.error {
+  border-color: color-mix(in srgb, #d93025 55%, var(--border));
+}
+
+.ai-image-thumb img {
+  width: 54px;
+  height: 54px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: var(--surface-muted);
+}
+
+.ai-image-thumb figcaption {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding-right: 20px;
+}
+
+.ai-image-thumb strong,
+.ai-image-thumb span,
+.ai-image-thumb small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-image-thumb strong {
+  font-size: 0.8rem;
+}
+
+.ai-image-thumb span,
+.ai-image-thumb small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.ai-bubble-row.user .ai-image-thumb span,
+.ai-bubble-row.user .ai-image-thumb small {
+  color: color-mix(in srgb, white 78%, #2563eb);
+}
+
+.ai-image-thumb > button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  color: var(--muted);
 }
 
 .spin {
@@ -2083,6 +2273,7 @@ button:disabled {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary-strong);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .ai-context-strip small {
@@ -2235,6 +2426,7 @@ button:disabled {
 
 .ai-composer .ai-preset-row button {
   flex: 0 0 auto;
+  text-align: left;
 }
 
 .ai-history-backdrop {
@@ -2393,13 +2585,14 @@ button:disabled {
   }
 
   .ai-input-bar {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 7px;
   }
 
   .ai-chat-page.immersive {
     width: 100%;
     max-width: 100%;
-    padding: 10px 10px 86px;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
     min-height: 100dvh;
     overflow-x: hidden;
   }
@@ -2408,7 +2601,7 @@ button:disabled {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    height: calc(100dvh - 106px);
+    height: calc(100dvh - max(10px, env(safe-area-inset-top)) - max(10px, env(safe-area-inset-bottom)));
     min-height: 420px;
     border-radius: 16px;
   }
@@ -2442,6 +2635,15 @@ button:disabled {
 
   .ai-input-bar textarea {
     min-width: 0;
+    min-height: 56px;
+  }
+
+  .ai-image-actions {
+    gap: 4px;
+  }
+
+  .ai-image-thumb {
+    max-width: 100%;
   }
 
   .heatmap {
@@ -2463,6 +2665,13 @@ button:disabled {
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     box-shadow: var(--shadow);
     backdrop-filter: blur(14px);
+  }
+
+  .app-shell.ai-chat-active .bottom-nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(calc(100% + 28px));
   }
 
   .app-toast {

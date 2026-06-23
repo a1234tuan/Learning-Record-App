@@ -1,6 +1,7 @@
 import { liveQuery } from "dexie";
 
 import type {
+  AiChatAttachment,
   AiChatMessage,
   AiChatSession,
   AiSecret,
@@ -20,12 +21,20 @@ import type {
   Tag,
 } from "../types";
 import { db } from "../db/database";
-import { DEFAULT_SETTINGS, DEFAULT_TAGS, createDayEntry, isLegacyDefaultAiPresetSet } from "../db/defaults";
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_TAGS,
+  createDayEntry,
+  isCodeBiasedDefaultAiPresetSet,
+  isCurrentDefaultAiPresetSetWithoutModes,
+  isLegacyDefaultAiPresetSet,
+} from "../db/defaults";
 import { nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
+import { normalizeAiConfig } from "../lib/aiProviders";
 
 export class DexieStorageAdapter implements StorageAdapter {
   async initialize(): Promise<void> {
@@ -109,16 +118,22 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
     const currentAi = settings.ai;
-    const shouldReplacePresets = !currentAi?.presets?.length || isLegacyDefaultAiPresetSet(currentAi.presets);
-    const nextAi = {
-      ...defaultAi,
-      ...currentAi,
-      providerName: currentAi?.providerName?.trim() || defaultAi.providerName,
-      baseUrl: currentAi?.baseUrl?.trim() && currentAi.baseUrl !== "https://api.deepseek.com/v1" ? currentAi.baseUrl : defaultAi.baseUrl,
-      model: currentAi?.model?.trim() && currentAi.model !== "deepseek-chat" ? currentAi.model : defaultAi.model,
-      memoryTurns: currentAi?.memoryTurns ?? defaultAi.memoryTurns ?? 12,
-      presets: shouldReplacePresets ? defaultAi.presets : currentAi?.presets ?? defaultAi.presets,
-    };
+    const shouldReplacePresets = !currentAi?.presets?.length ||
+      isLegacyDefaultAiPresetSet(currentAi.presets) ||
+      isCurrentDefaultAiPresetSetWithoutModes(currentAi.presets) ||
+      isCodeBiasedDefaultAiPresetSet(currentAi.presets);
+    const legacyAi = currentAi as typeof currentAi & { baseUrl?: string; model?: string; providerName?: string };
+    const legacyCompatibleAi = legacyAi?.baseUrl === "https://api.deepseek.com/v1" || legacyAi?.model === "deepseek-chat"
+      ? {
+        ...legacyAi,
+        baseUrl: legacyAi.baseUrl === "https://api.deepseek.com/v1" ? "https://api.deepseek.com" : legacyAi.baseUrl,
+        model: legacyAi.model === "deepseek-chat" ? "deepseek-v4-pro" : legacyAi.model,
+      }
+      : legacyAi;
+    const nextAi = normalizeAiConfig(
+      legacyCompatibleAi,
+      shouldReplacePresets ? defaultAi.presets : currentAi?.presets ?? defaultAi.presets,
+    );
     if (JSON.stringify(currentAi ?? {}) === JSON.stringify(nextAi)) {
       return;
     }
@@ -596,7 +611,8 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async deleteAiSession(id: string): Promise<void> {
-    await db.transaction("rw", db.aiSessions, db.aiMessages, async () => {
+    await db.transaction("rw", db.aiSessions, db.aiMessages, db.aiAttachments, async () => {
+      await db.aiAttachments.where("sessionId").equals(id).delete();
       await db.aiMessages.where("sessionId").equals(id).delete();
       await db.aiSessions.delete(id);
     });
@@ -618,13 +634,35 @@ export class DexieStorageAdapter implements StorageAdapter {
     return saved;
   }
 
-  async getAiSecret(): Promise<AiSecret | undefined> {
-    return db.aiSecrets.get("default");
+  async saveAiAttachment(attachment: AiChatAttachment): Promise<AiChatAttachment> {
+    const saved = touch(attachment);
+    await db.aiAttachments.put(saved);
+    return saved;
   }
 
-  async saveAiSecret(apiKey: string): Promise<AiSecret> {
+  async listAiAttachments(sessionId: string): Promise<AiChatAttachment[]> {
+    return db.aiAttachments.where("sessionId").equals(sessionId).sortBy("createdAt");
+  }
+
+  async getAiAttachment(id: string): Promise<AiChatAttachment | undefined> {
+    return db.aiAttachments.get(id);
+  }
+
+  async deleteAiAttachment(id: string): Promise<void> {
+    await db.aiAttachments.delete(id);
+  }
+
+  async deleteAiAttachmentsForSession(sessionId: string): Promise<void> {
+    await db.aiAttachments.where("sessionId").equals(sessionId).delete();
+  }
+
+  async getAiSecret(providerId = "default"): Promise<AiSecret | undefined> {
+    return db.aiSecrets.get(providerId);
+  }
+
+  async saveAiSecret(apiKey: string, providerId = "default"): Promise<AiSecret> {
     const secret: AiSecret = {
-      id: "default",
+      id: providerId,
       apiKey,
       updatedAt: nowISO(),
     };
@@ -632,8 +670,8 @@ export class DexieStorageAdapter implements StorageAdapter {
     return secret;
   }
 
-  async clearAiSecret(): Promise<void> {
-    await db.aiSecrets.delete("default");
+  async clearAiSecret(providerId = "default"): Promise<void> {
+    await db.aiSecrets.delete(providerId);
   }
 }
 

@@ -59,6 +59,10 @@ describe("buildDayLogAiContext", () => {
     expect(context.markdown).toContain("今天复习了洛必达法则");
     expect(context.markdown).toContain("OCR 中的极限定义");
     expect(context.markdown).toContain("\\lim_{x\\to0}");
+    expect(context.summary).toContain("2026-06-22");
+    expect(context.allChunks.map((chunk) => chunk.kind)).toEqual(["text", "imageOcr", "formula"]);
+    expect(context.selectedChunks.length).toBe(context.allChunks.length);
+    expect(context.contextHash).toBeTruthy();
     expect(context.missingOcrAssetIds).toEqual(["img-idle"]);
     expect(context.skippedAssets).toEqual(
       expect.arrayContaining([

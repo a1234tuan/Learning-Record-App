@@ -1,4 +1,4 @@
-import type { AiChatSession, AiLogContextAttachment, StorageAdapter } from "../types";
+import type { AiChatSession, AiContextPack, StorageAdapter } from "../types";
 import { createBaseEntity } from "../lib/entity";
 import { storage as defaultStorage } from "./storageAdapter";
 
@@ -14,7 +14,7 @@ export const titleFromFirstPrompt = (prompt: string): string => {
 
 export const createAiSessionForDate = async (
   date: string,
-  attachment: AiLogContextAttachment,
+  attachment: AiContextPack,
   store: Pick<StorageAdapter, "saveAiSession"> = defaultStorage,
 ): Promise<AiChatSession | undefined> =>
   store.saveAiSession?.({
@@ -22,6 +22,7 @@ export const createAiSessionForDate = async (
     title: createAiSessionTitle(date),
     sourceDate: date,
     attachment,
+    lastContextHash: attachment.contextHash,
   });
 
 export const createAiSessionFromExistingAttachment = async (

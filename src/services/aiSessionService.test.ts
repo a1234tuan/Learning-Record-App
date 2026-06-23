@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AiChatSession, AiLogContextAttachment } from "../types";
+import type { AiChatSession, AiContextPack } from "../types";
 import { createAiSessionForDate, titleFromFirstPrompt } from "./aiSessionService";
 
-const attachment: AiLogContextAttachment = {
+const attachment: AiContextPack = {
   date: "2026-06-22",
   recordIds: ["record-1"],
   markdown: "# 日志",
+  summary: "摘要",
+  selectedChunks: [],
+  allChunks: [],
+  totalChunks: 0,
+  estimatedChars: 0,
+  contextHash: "hash",
   warnings: [],
   skippedAssets: [],
   missingOcrAssetIds: [],
@@ -30,6 +36,7 @@ describe("aiSessionService", () => {
     expect(first?.id).not.toBe(second?.id);
     expect(saved).toHaveLength(2);
     expect(saved.every((session) => session.sourceDate === "2026-06-22")).toBe(true);
+    expect(saved.every((session) => session.lastContextHash === "hash")).toBe(true);
   });
 
   it("creates readable titles from first prompt", () => {

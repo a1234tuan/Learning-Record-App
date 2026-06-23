@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Search } from "lucide-react";
 
 import type { Asset, Block, DayEntry } from "../types";
@@ -8,11 +8,12 @@ interface SearchPageProps {
   entries: DayEntry[];
   blocks: Block[];
   assets: Asset[];
+  query: string;
+  onQueryChange: (query: string) => void;
   onOpenRecord?: (recordId: string, assetId?: string) => void;
 }
 
-export const SearchPage = ({ entries, blocks, assets, onOpenRecord }: SearchPageProps) => {
-  const [query, setQuery] = useState("");
+export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onOpenRecord }: SearchPageProps) => {
   const results = useMemo(() => searchAll(query, entries, blocks, assets), [assets, blocks, entries, query]);
 
   return (
@@ -27,7 +28,7 @@ export const SearchPage = ({ entries, blocks, assets, onOpenRecord }: SearchPage
         <Search size={20} />
         <input
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => onQueryChange(event.target.value)}
           placeholder="搜索中值定理、页面置换、录音标题、PDF 文件名..."
         />
       </label>
