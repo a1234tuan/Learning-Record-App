@@ -4,6 +4,7 @@ import type { Asset, RecordBlock } from "../types";
 import {
   extractRecordRefsFromContent,
   normalizeRecordContent,
+  renameRecordAssetTitle,
   recordToLinearMarkdown,
   recordToPlainText,
   syncRecordRefsFromContent,
@@ -69,6 +70,23 @@ describe("recordContent", () => {
 
     expect(synced.assets).toEqual([{ id: "a2", title: "录音", kind: "audio" }]);
     expect(synced.formulas).toEqual([]);
+  });
+
+  it("renames a record asset title in content and refs", () => {
+    const result = renameRecordAssetTitle(
+      {
+        ...record,
+        contentHtml:
+          '<p>A</p><record-asset data-asset-id="audio-1" data-kind="audio" data-title="old"></record-asset>',
+        assets: [{ id: "audio-1", title: "old", kind: "audio" }],
+      },
+      "audio-1",
+      "new title",
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.record.contentHtml).toContain('data-title="new title"');
+    expect(result.record.assets).toEqual([{ id: "audio-1", title: "new title", kind: "audio" }]);
   });
 
   it("exports linear plain text and markdown in order", () => {

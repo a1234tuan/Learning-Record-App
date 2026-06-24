@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Plus, Save, Trash2 } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { AiProviderConfig, AiProviderProfile, AiPromptPreset, AppSettings } from "../types";
@@ -66,7 +66,9 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
     setConfig(nextConfig);
     void Promise.all(
       nextConfig.providers.map(async (provider) => [provider.id, (await storage.getAiSecret?.(provider.id))?.apiKey ?? ""] as const),
-    ).then((entries) => setApiKeys(Object.fromEntries(entries)));
+    )
+      .then((entries) => setApiKeys(Object.fromEntries(entries)))
+      .catch(() => setApiKeys(Object.fromEntries(nextConfig.providers.map((provider) => [provider.id, ""]))));
   }, [settings]);
 
   const updateProvider = (id: string, patch: Partial<AiProviderProfile>) => {
@@ -155,11 +157,12 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
 
   return (
     <section className="ai-settings-panel">
-      <button type="button" className="more-link-card" onClick={() => setOpen((value) => !value)}>
+      <button type="button" className="ai-settings-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span>
           <strong>AI 设置</strong>
           <small>配置多个 OpenAI 兼容供应商、API Key 和预设提示词</small>
         </span>
+        <ChevronDown size={17} />
       </button>
 
       {open && (

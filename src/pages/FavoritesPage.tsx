@@ -8,10 +8,11 @@ import { getFavoriteRecords } from "../lib/journalSelectors";
 interface FavoritesPageProps {
   records: RecordBlock[];
   onOpenRecord: (record: RecordBlock) => void;
+  onAskAi?: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
 }
 
-export const FavoritesPage = ({ records, onOpenRecord, onToggleFavorite }: FavoritesPageProps) => {
+export const FavoritesPage = ({ records, onOpenRecord, onAskAi, onToggleFavorite }: FavoritesPageProps) => {
   const favoriteRecords = getFavoriteRecords(records);
 
   return (
@@ -35,6 +36,7 @@ export const FavoritesPage = ({ records, onOpenRecord, onToggleFavorite }: Favor
               key={record.id}
               record={record}
               onOpen={onOpenRecord}
+              onAskAi={onAskAi}
               onToggleFavorite={(nextFavorite) => onToggleFavorite(record, nextFavorite)}
             />
           ))

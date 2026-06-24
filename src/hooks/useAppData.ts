@@ -302,6 +302,36 @@ export const useAppData = () => {
     return asset;
   }, []);
 
+  const renameAssetTitle = useCallback(
+    async (assetId: string, title: string) => {
+      const nextTitle = title.trim();
+      if (!nextTitle) {
+        return;
+      }
+      await storage.renameAssetTitle(assetId, nextTitle);
+      setAssetsVersion((version) => version + 1);
+      await refresh();
+      await markAutoBackupDirty("asset-rename");
+    },
+    [refresh],
+  );
+
+  const updateAssetDuration = useCallback(async (assetId: string, durationSeconds: number) => {
+    const roundedDuration = Math.max(0, Math.round(durationSeconds));
+    const saved = await storage.patchAsset(assetId, { durationSeconds: roundedDuration });
+    if (!saved) {
+      return;
+    }
+    setAssets((current) =>
+      current.map((asset) =>
+        asset.id === assetId
+          ? { ...asset, durationSeconds: roundedDuration, updatedAt: saved.updatedAt }
+          : asset,
+      ),
+    );
+    setAssetsVersion((version) => version + 1);
+  }, []);
+
   const addAssetBlock = useCallback(
     async (file: File, kind: Asset["kind"], date = todayISO()) => {
       const record = await createRecordBlock(date);
@@ -405,6 +435,8 @@ export const useAppData = () => {
     addAssetBlock,
     addAssetToRecord,
     saveAssetFile,
+    renameAssetTitle,
+    updateAssetDuration,
     addFormulaToRecord,
     persistSettings,
     saveSubjects,

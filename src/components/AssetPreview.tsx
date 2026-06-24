@@ -16,6 +16,7 @@ type AssetPreviewProps = {
   showOcrDetails?: boolean;
   editableTitle?: string;
   onTitleChange?: (title: string) => void;
+  onTitleCommit?: (title: string) => void;
   onAssetChanged?: () => void;
   highlight?: boolean;
 };
@@ -41,6 +42,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
     showOcrDetails = mode === "edit",
     editableTitle,
     onTitleChange,
+    onTitleCommit,
     onAssetChanged,
     highlight,
   } = props;
@@ -282,6 +284,12 @@ export const AssetPreview = (props: AssetPreviewProps) => {
             <input
               value={title}
               onChange={(event) => onTitleChange(event.target.value)}
+              onBlur={(event) => onTitleCommit?.(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+              }}
               aria-label="资源标题"
             />
           ) : (

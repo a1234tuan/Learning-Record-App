@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { List, ListOrdered } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -24,6 +25,7 @@ interface RichTextEditorProps {
   readOnly?: boolean;
   highlightedAssetId?: string;
   onAssetChanged?: () => void;
+  onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
 }
 
 export const RichTextEditor = ({
@@ -34,6 +36,7 @@ export const RichTextEditor = ({
   readOnly = false,
   highlightedAssetId,
   onAssetChanged,
+  onAssetTitleChange,
 }: RichTextEditorProps) => {
   const editor = useEditor({
     editable: !readOnly,
@@ -44,7 +47,7 @@ export const RichTextEditor = ({
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
       TaskItem.configure({ nested: true }),
-      RecordAssetNode.configure({ highlightedAssetId, onAssetChanged }),
+      RecordAssetNode.configure({ highlightedAssetId, onAssetChanged, onAssetTitleChange }),
       RecordFormulaNode,
       Placeholder.configure({
         placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心得...",
@@ -98,8 +101,23 @@ export const RichTextEditor = ({
           <button type="button" title="标题" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
             H
           </button>
-          <button type="button" title="列表" onClick={() => editor.chain().focus().toggleBulletList().run()}>
-            •
+          <button
+            type="button"
+            className={editor.isActive("bulletList") ? "active" : ""}
+            title="无序列表"
+            aria-label="无序列表"
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+          >
+            <List size={16} />
+          </button>
+          <button
+            type="button"
+            className={editor.isActive("orderedList") ? "active" : ""}
+            title="有序列表"
+            aria-label="有序列表"
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          >
+            <ListOrdered size={16} />
           </button>
           <button type="button" title="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
             “”

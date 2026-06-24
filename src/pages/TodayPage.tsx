@@ -1,4 +1,4 @@
-import { CalendarClock, Plus } from "lucide-react";
+import { CalendarClock, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
 import type { Block, DayEntry, RecordBlock, Subject, SubjectConfig } from "../types";
@@ -15,8 +15,9 @@ interface TodayPageProps {
   subjects: SubjectConfig[];
   onSaveEntry: (entry: DayEntry) => void;
   onCreateRecord: (date: string, subject: Subject) => Promise<RecordBlock>;
-  onAddSubject: (name: string) => Promise<void>;
+  onOpenFavorites: () => void;
   onOpenRecord: (record: RecordBlock) => void;
+  onAskAi?: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
 }
 
@@ -27,8 +28,9 @@ export const TodayPage = ({
   subjects,
   onSaveEntry,
   onCreateRecord,
-  onAddSubject,
+  onOpenFavorites,
   onOpenRecord,
+  onAskAi,
   onToggleFavorite,
 }: TodayPageProps) => {
   const [subject, setSubject] = useState<Subject>(() =>
@@ -44,6 +46,11 @@ export const TodayPage = ({
         eyebrow={formatChineseDate(todayISO())}
         title="今天"
         subtitle="把正在发生的学习留下来。文字、截图、公式和录音，都可以自然地放进同一个记录块。"
+        actions={(
+          <button type="button" className="icon-button" onClick={onOpenFavorites} title="收藏夹" aria-label="打开收藏夹">
+            <Star size={18} />
+          </button>
+        )}
       />
 
       <section className="today-workbench">
@@ -59,7 +66,7 @@ export const TodayPage = ({
             <h2>新建学习记录</h2>
             <p>先选择学科，再进入像笔记页一样的线性编辑器。</p>
           </div>
-          <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} onAddSubject={onAddSubject} />
+          <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} />
           <button
             type="button"
             className="primary-button"
@@ -93,6 +100,7 @@ export const TodayPage = ({
               key={record.id}
               record={record}
               onOpen={onOpenRecord}
+              onAskAi={onAskAi}
               onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
             />
           ))

@@ -8,8 +8,8 @@ import {
   ClipboardCheck,
   Home,
   Layers,
+  Mic2,
   MoreHorizontal,
-  Search,
   Settings,
 } from "lucide-react";
 
@@ -18,10 +18,13 @@ import { TodayPage } from "./pages/TodayPage";
 import { JournalPage } from "./pages/JournalPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { SearchPage } from "./pages/SearchPage";
+import { RecordingsPage } from "./pages/RecordingsPage";
 import { StatsPage } from "./pages/StatsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { RecordEditorPage } from "./pages/RecordEditorPage";
 import { MorePage } from "./pages/MorePage";
+import { BackupPage } from "./pages/BackupPage";
+import { AiToolsPage } from "./pages/AiToolsPage";
 import { AiChatPage } from "./pages/AiChatPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
@@ -104,7 +107,7 @@ const navItems: Array<{ tab: TabKey; subRoute?: Exclude<MoreSubRoute, null>; lab
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
   { tab: "categories", label: "分类", icon: Layers },
-  { tab: "search", label: "搜索", icon: Search },
+  { tab: "recordings", label: "录音", icon: Mic2 },
   { tab: "more", subRoute: "ai", label: "AI问答", icon: BrainCircuit },
   { tab: "more", subRoute: "stats", label: "统计", icon: BarChart3 },
   { tab: "more", subRoute: "settings", label: "设置", icon: Settings },
@@ -114,7 +117,7 @@ const bottomNavItems: Array<{ tab: TabKey; label: string; icon: typeof Home }> =
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
   { tab: "categories", label: "分类", icon: Layers },
-  { tab: "search", label: "搜索", icon: Search },
+  { tab: "recordings", label: "录音", icon: Mic2 },
   { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
 
@@ -323,10 +326,10 @@ export const App = () => {
       }}
       onToggleFavorite={(record, favorite) => app.toggleRecordFavorite(record.id, favorite)}
       onAddAsset={app.saveAssetFile}
+      onAssetTitleChange={app.renameAssetTitle}
       onAssetChanged={app.refresh}
       highlightedAssetId={highlightedAssetId}
       subjects={app.subjects}
-      onAddSubject={app.addSubject}
       onGetDraft={app.getRecordDraft}
       onSaveDraft={app.saveRecordDraft}
       onDeleteDraft={app.deleteRecordDraft}
@@ -354,6 +357,7 @@ export const App = () => {
           <FavoritesPage
             records={favoriteRecords}
             onOpenRecord={(record) => openRecordInTab(record, "more")}
+            onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
@@ -382,6 +386,16 @@ export const App = () => {
             }}
           />
         );
+      case "backup":
+        return <BackupPage settings={settings} onRestored={app.refresh} />;
+      case "aiTools":
+        return (
+          <AiToolsPage
+            settings={settings}
+            onChanged={app.refresh}
+            onOpenAi={() => openMoreSubRoute("ai")}
+          />
+        );
       case "ai":
         return (
           <AiChatPage
@@ -403,12 +417,11 @@ export const App = () => {
       case null:
         return (
           <MorePage
+            onOpenBackup={() => openMoreSubRoute("backup")}
+            onOpenAiTools={() => openMoreSubRoute("aiTools")}
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenSettings={() => openMoreSubRoute("settings")}
-            onOpenAi={() => openMoreSubRoute("ai")}
-            onOpenFavorites={() => openMoreSubRoute("favorites")}
             onOpenTrash={() => openMoreSubRoute("trash")}
-            onRestored={app.refresh}
             settings={settings}
           />
         );
@@ -428,14 +441,34 @@ export const App = () => {
             subjects={app.activeSubjects}
             onSaveEntry={(entry) => void app.saveEntry(entry)}
             onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
-            onAddSubject={app.addSubject}
+            onOpenFavorites={() => openMoreSubRoute("favorites")}
             onOpenRecord={(record) => openRecordInTab(record, "today")}
+            onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
       case "journal":
         return currentRecord ? (
           renderRecordPage(currentRecord, tabMemory.journal.highlightAssetId)
+        ) : tabMemory.journal.searchOpen ? (
+          <SearchPage
+            entries={app.entries}
+            blocks={app.blocks}
+            assets={app.assets}
+            query={tabMemory.journal.searchQuery}
+            onQueryChange={(searchQuery) =>
+              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchQuery } }))
+            }
+            onBack={() =>
+              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchOpen: false } }))
+            }
+            onOpenRecord={(recordId, assetId) => {
+              const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === recordId);
+              if (record) {
+                openRecordInTab(record, "journal", assetId);
+              }
+            }}
+          />
         ) : (
           <JournalPage
             blocks={app.blocks}
@@ -456,7 +489,9 @@ export const App = () => {
               setTabMemory((current) => ({ ...current, journal: { ...current.journal, selectedSubject } }))
             }
             onOpenRecord={(record) => openRecordInTab(record, "journal")}
-            onOpenCategories={() => switchTab("categories")}
+            onOpenSearch={() =>
+              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchOpen: true } }))
+            }
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
@@ -477,30 +512,37 @@ export const App = () => {
               setTabMemory((current) => ({ ...current, categories: { ...current.categories, managing } }))
             }
             onOpenRecord={(record) => openRecordInTab(record, "categories")}
+            onAskAi={(date) => void openAiForDate(date)}
             onAddSubject={app.addSubject}
             onRenameSubject={app.renameSubject}
             onSaveSubjects={app.saveSubjects}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
           />
         );
-      case "search":
-        return currentRecord ? (
-          renderRecordPage(currentRecord, tabMemory.search.highlightAssetId)
-        ) : (
-          <SearchPage
-            entries={app.entries}
+      case "recordings":
+        return (
+          <RecordingsPage
             blocks={app.blocks}
             assets={app.assets}
-            query={tabMemory.search.query}
-            onQueryChange={(query) =>
-              setTabMemory((current) => ({ ...current, search: { ...current.search, query } }))
+            subjects={app.subjects}
+            selectedSubject={tabMemory.recordings.selectedSubject}
+            playerAssetId={tabMemory.recordings.playerAssetId}
+            query={tabMemory.recordings.query}
+            searchOpen={tabMemory.recordings.searchOpen}
+            onSelectedSubjectChange={(selectedSubject) =>
+              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, selectedSubject } }))
             }
-            onOpenRecord={(recordId, assetId) => {
-              const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === recordId);
-              if (record) {
-                openRecordInTab(record, "search", assetId);
-              }
-            }}
+            onPlayerChange={(playerAssetId) =>
+              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, playerAssetId } }))
+            }
+            onQueryChange={(query) =>
+              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, query } }))
+            }
+            onSearchOpenChange={(searchOpen) =>
+              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, searchOpen } }))
+            }
+            onRenameAudio={app.renameAssetTitle}
+            onDurationKnown={app.updateAssetDuration}
           />
         );
       case "more":
@@ -512,10 +554,13 @@ export const App = () => {
     const depth = getTabDepth(activeTab, tabMemory);
     const recordPart = currentRecordState.recordId ?? "root";
     if (activeTab === "journal") {
-      return `${activeTab}-${depth}-${recordPart}-${tabMemory.journal.selectedDate ?? "all"}-${tabMemory.journal.selectedSubject ?? "all"}`;
+      return `${activeTab}-${depth}-${recordPart}-${tabMemory.journal.searchOpen ? "search" : "browse"}`;
     }
     if (activeTab === "categories") {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.categories.managing ? "manage" : tabMemory.categories.activeSubject ?? "all"}`;
+    }
+    if (activeTab === "recordings") {
+      return `${activeTab}-${depth}-${tabMemory.recordings.playerAssetId ?? "root"}-${tabMemory.recordings.selectedSubject ?? "all"}-${tabMemory.recordings.searchOpen ? "search" : "folders"}`;
     }
     if (activeTab === "more") {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;

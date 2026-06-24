@@ -18,6 +18,7 @@ interface CategoriesPageProps {
   onActiveSubjectChange: (subject: Subject | null) => void;
   onManagingChange: (managing: boolean) => void;
   onOpenRecord: (record: RecordBlock) => void;
+  onAskAi?: (date: string) => void;
   onAddSubject: (name: string) => Promise<void>;
   onRenameSubject: (oldName: Subject, newName: Subject) => Promise<void>;
   onSaveSubjects: (subjects: SubjectConfig[]) => Promise<void>;
@@ -32,6 +33,7 @@ export const CategoriesPage = ({
   onActiveSubjectChange,
   onManagingChange,
   onOpenRecord,
+  onAskAi,
   onAddSubject,
   onRenameSubject,
   onSaveSubjects,
@@ -229,6 +231,7 @@ export const CategoriesPage = ({
                   <RecordCard
                     record={record}
                     onOpen={onOpenRecord}
+                    onAskAi={onAskAi}
                     onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
                   />
                 </div>

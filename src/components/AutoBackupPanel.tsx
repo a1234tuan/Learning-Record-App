@@ -117,9 +117,12 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
           {message}
         </p>
       )}
-      <p className="helper-text">
-        建议选择网盘同步目录或手机公共文档目录。断网不影响本地记录，但卸载 App、清理应用数据或浏览器站点数据会删除本地库；自动备份会覆盖同一份 latest zip，避免多份快照持续占空间。
-      </p>
+      <details className="auto-backup-help">
+        <summary>备份说明</summary>
+        <p className="helper-text">
+          建议选择网盘同步目录或手机公共文档目录。断网不影响本地记录，但卸载 App、清理应用数据或浏览器站点数据会删除本地库；自动备份会覆盖同一份 latest zip，避免多份快照持续占空间。
+        </p>
+      </details>
     </section>
   );
 };

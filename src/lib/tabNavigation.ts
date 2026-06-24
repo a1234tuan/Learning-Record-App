@@ -1,7 +1,7 @@
-import type { Subject } from "../types";
+import type { EntityId, Subject } from "../types";
 
-export type TabKey = "today" | "journal" | "categories" | "search" | "more";
-export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | null;
+export type TabKey = "today" | "journal" | "categories" | "recordings" | "more";
+export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | "backup" | "aiTools" | null;
 
 export type RecordTabState = {
   recordId?: string;
@@ -15,13 +15,18 @@ export type TabMemory = {
     month: Date;
     selectedDate?: string;
     selectedSubject?: Subject;
+    searchOpen: boolean;
+    searchQuery: string;
   };
   categories: RecordTabState & {
     activeSubject: Subject | null;
     managing: boolean;
   };
-  search: RecordTabState & {
+  recordings: RecordTabState & {
+    selectedSubject?: Subject;
+    playerAssetId?: EntityId;
     query: string;
+    searchOpen: boolean;
   };
   more: RecordTabState & {
     subRoute: MoreSubRoute;
@@ -32,13 +37,16 @@ export const createInitialTabMemory = (): TabMemory => ({
   today: {},
   journal: {
     month: new Date(),
+    searchOpen: false,
+    searchQuery: "",
   },
   categories: {
     activeSubject: null,
     managing: false,
   },
-  search: {
+  recordings: {
     query: "",
+    searchOpen: false,
   },
   more: {
     subRoute: null,
@@ -50,11 +58,11 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
     case "today":
       return memory.today.recordId ? 1 : 0;
     case "journal":
-      return memory.journal.recordId ? 2 : memory.journal.selectedDate ? 1 : 0;
+      return memory.journal.recordId ? 2 : memory.journal.searchOpen || memory.journal.selectedDate ? 1 : 0;
     case "categories":
       return memory.categories.recordId ? 2 : memory.categories.activeSubject || memory.categories.managing ? 1 : 0;
-    case "search":
-      return memory.search.recordId ? 1 : 0;
+    case "recordings":
+      return memory.recordings.playerAssetId ? 2 : memory.recordings.searchOpen || memory.recordings.selectedSubject ? 1 : 0;
     case "more":
       return memory.more.recordId ? 2 : memory.more.subRoute ? 1 : 0;
   }
@@ -68,8 +76,8 @@ export const getRecordState = (tab: TabKey, memory: TabMemory): RecordTabState =
       return memory.journal;
     case "categories":
       return memory.categories;
-    case "search":
-      return memory.search;
+    case "recordings":
+      return memory.recordings;
     case "more":
       return memory.more;
   }
@@ -87,6 +95,12 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
         return {
           ...memory,
           journal: { ...memory.journal, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+        };
+      }
+      if (memory.journal.searchOpen) {
+        return {
+          ...memory,
+          journal: { ...memory.journal, searchOpen: false },
         };
       }
       if (memory.journal.selectedSubject) {
@@ -110,10 +124,28 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
         ...memory,
         categories: { ...memory.categories, activeSubject: null, managing: false },
       };
-    case "search":
+    case "recordings":
+      if (memory.recordings.playerAssetId) {
+        return {
+          ...memory,
+          recordings: { ...memory.recordings, playerAssetId: undefined },
+        };
+      }
+      if (memory.recordings.searchOpen) {
+        return {
+          ...memory,
+          recordings: { ...memory.recordings, searchOpen: false },
+        };
+      }
       return {
         ...memory,
-        search: { ...memory.search, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+        recordings: {
+          ...memory.recordings,
+          selectedSubject: undefined,
+          recordId: undefined,
+          highlightAssetId: undefined,
+          recordEditing: undefined,
+        },
       };
     case "more":
       if (memory.more.recordId) {

@@ -288,6 +288,7 @@ export interface Asset extends BaseEntity {
   size: number;
   kind: "image" | "attachment" | "audio";
   data: Blob;
+  durationSeconds?: number;
   ocrStatus?: "idle" | "queued" | "running" | "done" | "failed" | "timeout";
   ocrText?: string;
   ocrError?: string;
@@ -464,6 +465,7 @@ export interface StorageAdapter {
   saveStudySession(session: StudySession): Promise<StudySession>;
   saveAsset(file: File, kind: Asset["kind"], title?: string): Promise<Asset>;
   patchAsset(id: EntityId, patch: Partial<Omit<Asset, "id" | "data">>): Promise<Asset | undefined>;
+  renameAssetTitle(assetId: EntityId, title: string): Promise<void>;
   resetStaleOcrJobs?(maxAgeMs: number): Promise<void>;
   listAssets(): Promise<Asset[]>;
   getAsset(id: EntityId): Promise<Asset | undefined>;

@@ -6,10 +6,15 @@ import type { Editor } from "@tiptap/react";
 import type { Asset, RecordBlock, RecordDraft, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
-import { AudioRecorder } from "../components/AudioRecorder";
+import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
 import { newId } from "../lib/entity";
 import { nowISO } from "../lib/date";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
+import {
+  canUseNativeAudioRecorder,
+  getNativeAudioRecordingStatus,
+  stopNativeAudioRecording,
+} from "../services/nativeAudioRecorder";
 
 interface RecordEditorPageProps {
   record: RecordBlock;
@@ -20,10 +25,10 @@ interface RecordEditorPageProps {
   onDelete: (recordId: string) => Promise<void>;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => Promise<void> | void;
   onAddAsset: (file: File, kind: Asset["kind"], title?: string) => Promise<Asset>;
+  onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
   onAssetChanged?: () => void;
   highlightedAssetId?: string;
   subjects: SubjectConfig[];
-  onAddSubject: (name: string) => Promise<void>;
   onGetDraft: (recordId: string) => Promise<RecordDraft | undefined>;
   onSaveDraft: (draft: RecordDraft) => Promise<RecordDraft>;
   onDeleteDraft: (recordId: string) => Promise<void>;
@@ -31,6 +36,16 @@ interface RecordEditorPageProps {
 
 const cloneRecord = (record: RecordBlock): RecordBlock =>
   syncRecordRefsFromContent({ ...record, mistakeRefs: [] });
+
+const escapeAttribute = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+const recordAssetHtml = (asset: Asset, kind: Asset["kind"], title: string): string =>
+  `<record-asset data-asset-id="${escapeAttribute(asset.id)}" data-kind="${escapeAttribute(kind)}" data-title="${escapeAttribute(asset.title ?? title)}"></record-asset><p></p>`;
 
 const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
   draft.title !== record.title ||
@@ -48,10 +63,10 @@ export const RecordEditorPage = ({
   onDelete,
   onToggleFavorite,
   onAddAsset,
+  onAssetTitleChange,
   onAssetChanged,
   highlightedAssetId,
   subjects,
-  onAddSubject,
   onGetDraft,
   onSaveDraft,
   onDeleteDraft,
@@ -63,8 +78,12 @@ export const RecordEditorPage = ({
   const recordIdRef = useRef(record.id);
   const draftRef = useRef<RecordBlock>(cloneRecord(record));
   const initialEditingRef = useRef(initialEditing);
+  const editorRef = useRef<Editor | null>(null);
+  const audioRecorderRef = useRef<AudioRecorderHandle | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const flushingRef = useRef(false);
+  const leavingRef = useRef(false);
+  const stoppingRecordingRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     initialEditingRef.current = initialEditing;
@@ -179,7 +198,7 @@ export const RecordEditorPage = ({
     });
   };
 
-  const insertAfterCurrentBlock = (editor: Editor, node: Record<string, unknown>) => {
+  const insertAfterCurrentBlock = useCallback((editor: Editor, node: Record<string, unknown>) => {
     const { $from } = editor.state.selection;
     const insertPos = $from.end($from.depth);
     editor
@@ -187,15 +206,80 @@ export const RecordEditorPage = ({
       .focus()
       .insertContentAt(insertPos, [node, { type: "paragraph" }])
       .run();
-  };
+  }, []);
 
-  const addAsset = async (editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
+  const addAsset = useCallback(async (editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
     const asset = await onAddAsset(file, kind, title);
     insertAfterCurrentBlock(editor, {
       type: "recordAsset",
       attrs: { assetId: asset.id, title: asset.title ?? title, kind },
     });
+    const nextDraft = cloneRecord({ ...draftRef.current, contentHtml: editor.getHTML() });
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    scheduleDraftSave(nextDraft);
+  }, [insertAfterCurrentBlock, onAddAsset, scheduleDraftSave]);
+
+  const stopRecordingIntoDraft = useCallback(async () => {
+    if (stoppingRecordingRef.current) {
+      return stoppingRecordingRef.current;
+    }
+
+    const task = (async () => {
+      let file = await audioRecorderRef.current?.stopAndGetFile();
+      if (!file && canUseNativeAudioRecorder()) {
+        const nativeStatus = await getNativeAudioRecordingStatus().catch(() => ({ recording: false }));
+        if (nativeStatus.recording) {
+          file = await stopNativeAudioRecording().catch(() => null);
+        }
+      }
+      if (!file) {
+        return;
+      }
+
+      const editor = editorRef.current;
+      if (editor && !editor.isDestroyed) {
+        await addAsset(editor, file, "audio", "录音");
+        await flushDraft();
+        return;
+      }
+
+      const asset = await onAddAsset(file, "audio", "录音");
+      const nextDraft = cloneRecord({
+        ...draftRef.current,
+        contentHtml: `${draftRef.current.contentHtml || "<p></p>"}${recordAssetHtml(asset, "audio", "录音")}`,
+      });
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+      scheduleDraftSave(nextDraft);
+      await flushDraft(nextDraft);
+    })();
+
+    stoppingRecordingRef.current = task;
+    try {
+      await task;
+    } finally {
+      stoppingRecordingRef.current = null;
+    }
+  }, [addAsset, flushDraft, onAddAsset, scheduleDraftSave]);
+
+  const back = async () => {
+    if (leavingRef.current) {
+      return;
+    }
+    leavingRef.current = true;
+    try {
+      await stopRecordingIntoDraft();
+      await flushDraft();
+      onBack();
+    } finally {
+      leavingRef.current = false;
+    }
   };
+
+  useEffect(() => () => {
+    void stopRecordingIntoDraft();
+  }, [stopRecordingIntoDraft]);
 
   const save = async () => {
     setSaving(true);
@@ -241,7 +325,7 @@ export const RecordEditorPage = ({
   return (
     <main className="page record-editor-page">
       <section className="record-editor-topbar">
-        <button type="button" className="secondary-button" onClick={onBack}>
+        <button type="button" className="secondary-button" onClick={() => void back()}>
           <ArrowLeft size={18} />
           返回
         </button>
@@ -293,13 +377,16 @@ export const RecordEditorPage = ({
           {draftRestored && <p className="status-message draft-status">已恢复未保存草稿，点击保存后才会写入正式记录。</p>}
           <section className="record-editor-head">
             <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" />
-            <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} onAddSubject={onAddSubject} />
+            <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} />
           </section>
           <RichTextEditor
             value={draft.contentHtml}
             onChange={(contentHtml) => update({ contentHtml })}
             placeholder="像笔记页一样，把文字、思路、截图、公式和录音放进同一个记录块..."
-            renderInsertTools={(editor) => (
+            onAssetTitleChange={onAssetTitleChange}
+            renderInsertTools={(editor) => {
+              editorRef.current = editor;
+              return (
               <>
                 <label className="editor-file-button" title="图片">
                   <ImagePlus size={16} />
@@ -325,7 +412,7 @@ export const RecordEditorPage = ({
                     }}
                   />
                 </label>
-                <AudioRecorder onRecorded={(file) => void addAsset(editor, file, "audio", "录音")} />
+                <AudioRecorder ref={audioRecorderRef} onRecorded={(file) => void addAsset(editor, file, "audio", "录音")} />
                 <label className="editor-file-button" title="附件">
                   <FilePlus size={16} />
                   <input
@@ -350,7 +437,8 @@ export const RecordEditorPage = ({
                   <Pi size={16} />
                 </button>
               </>
-            )}
+              );
+            }}
           />
         </>
       ) : (
@@ -367,6 +455,7 @@ export const RecordEditorPage = ({
             readOnly
             highlightedAssetId={highlightedAssetId}
             onAssetChanged={onAssetChanged}
+            onAssetTitleChange={onAssetTitleChange}
           />
         </article>
       )}

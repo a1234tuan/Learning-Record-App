@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Search } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 
 import type { Asset, Block, DayEntry } from "../types";
 import { searchAll } from "../lib/search";
@@ -10,10 +10,11 @@ interface SearchPageProps {
   assets: Asset[];
   query: string;
   onQueryChange: (query: string) => void;
+  onBack?: () => void;
   onOpenRecord?: (recordId: string, assetId?: string) => void;
 }
 
-export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onOpenRecord }: SearchPageProps) => {
+export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBack, onOpenRecord }: SearchPageProps) => {
   const results = useMemo(() => searchAll(query, entries, blocks, assets), [assets, blocks, entries, query]);
 
   return (
@@ -23,6 +24,12 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onOp
           <p className="eyebrow">Search</p>
           <h1>全文搜索</h1>
         </div>
+        {onBack && (
+          <button type="button" className="secondary-button" onClick={onBack}>
+            <ArrowLeft size={18} />
+            返回
+          </button>
+        )}
       </section>
       <label className="search-box">
         <Search size={20} />

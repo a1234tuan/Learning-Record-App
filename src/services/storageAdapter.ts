@@ -32,7 +32,7 @@ import {
 import { nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
-import { hasLinearRecordNodes, syncRecordRefsFromContent } from "../lib/recordContent";
+import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
 
@@ -470,6 +470,54 @@ export class DexieStorageAdapter implements StorageAdapter {
     const saved = touch({ ...existing, ...safePatch, data: existing.data });
     await db.assets.put(saved);
     return saved;
+  }
+
+  async renameAssetTitle(assetId: string, title: string): Promise<void> {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      return;
+    }
+
+    const existing = await db.assets.get(assetId);
+    if (!existing) {
+      return;
+    }
+
+    const [blocks, drafts] = await Promise.all([db.blocks.toArray(), db.recordDrafts.toArray()]);
+    const renamedBlocks: Block[] = [];
+    const renamedDrafts: RecordDraft[] = [];
+
+    for (const block of blocks) {
+      if (block.type !== "record") {
+        continue;
+      }
+      const result = renameRecordAssetTitle(block, assetId, nextTitle);
+      if (result.changed) {
+        renamedBlocks.push(touch(result.record));
+      }
+    }
+
+    for (const draft of drafts) {
+      const result = renameRecordAssetTitle(draft.draft, assetId, nextTitle);
+      if (result.changed) {
+        renamedDrafts.push({
+          ...draft,
+          draft: result.record,
+          updatedAt: nowISO(),
+        });
+      }
+    }
+
+    const savedAsset = touch({ ...existing, title: nextTitle, data: existing.data });
+    await db.transaction("rw", db.assets, db.blocks, db.recordDrafts, async () => {
+      await db.assets.put(savedAsset);
+      if (renamedBlocks.length > 0) {
+        await db.blocks.bulkPut(renamedBlocks);
+      }
+      if (renamedDrafts.length > 0) {
+        await db.recordDrafts.bulkPut(renamedDrafts);
+      }
+    });
   }
 
   async resetStaleOcrJobs(maxAgeMs: number): Promise<void> {

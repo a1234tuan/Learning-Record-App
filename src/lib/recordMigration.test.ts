@@ -5,7 +5,14 @@ import { migrateBlocksToRecords } from "./recordMigration";
 import { createSubjectConfig, nextRecordTitle } from "./subjects";
 import { heatmapLevel } from "../components/MonthlyHeatmap";
 import { searchAll } from "./search";
-import { getFavoriteRecords, getRecordBlocks, getRecentRecordDates, getRecordsBySubject, getSubjectCounts } from "./journalSelectors";
+import {
+  getFavoriteRecords,
+  getRecordBlocks,
+  getRecordDatesForMonth,
+  getRecentRecordDates,
+  getRecordsBySubject,
+  getSubjectCounts,
+} from "./journalSelectors";
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -302,6 +309,55 @@ describe("record helpers", () => {
 
     expect(getRecentRecordDates(records, 2)).toEqual(["2026-06-20", "2026-06-01"]);
     expect(getRecordsBySubject(records, "OS").map((record) => record.id)).toEqual(["new-created", "old-edited"]);
+  });
+
+  it("lists all record dates inside the active journal month", () => {
+    const records = [
+      {
+        id: "june-late",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record" as const,
+        date: "2026-06-21",
+        order: 0,
+        subject: "OS",
+        title: "六月记录",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+      {
+        id: "june-early",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record" as const,
+        date: "2026-06-01",
+        order: 0,
+        subject: "数学",
+        title: "六月旧记录",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+      {
+        id: "may",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record" as const,
+        date: "2026-05-31",
+        order: 0,
+        subject: "OS",
+        title: "五月记录",
+        contentHtml: "<p></p>",
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+    ];
+
+    expect(getRecordDatesForMonth(records, new Date("2026-06-01"))).toEqual(["2026-06-21", "2026-06-01"]);
   });
 
   it("drops legacy mistake references while migrating", () => {

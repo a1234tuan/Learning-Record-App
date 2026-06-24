@@ -1,11 +1,11 @@
 import { useMemo } from "react";
-import { Layers } from "lucide-react";
+import { Search } from "lucide-react";
 
 import type { Block, RecordBlock, Subject, SubjectConfig } from "../types";
 import { MonthlyHeatmap } from "../components/MonthlyHeatmap";
 import { DayLogCard } from "../components/DayLogCard";
 import { RecordCard } from "../components/RecordCard";
-import { getRecentRecordDates, getRecordBlocks, getRecordsForDateSubject } from "../lib/journalSelectors";
+import { getRecordBlocks, getRecordDatesForMonth, getRecordsForDateSubject } from "../lib/journalSelectors";
 import { PageHeader } from "../components/ui";
 
 interface JournalPageProps {
@@ -18,7 +18,7 @@ interface JournalPageProps {
   onSelectedDateChange: (date: string | undefined) => void;
   onSelectedSubjectChange: (subject: Subject | undefined) => void;
   onOpenRecord: (record: RecordBlock) => void;
-  onOpenCategories: () => void;
+  onOpenSearch: () => void;
   onAskAi: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
 }
@@ -33,12 +33,12 @@ export const JournalPage = ({
   onSelectedDateChange,
   onSelectedSubjectChange,
   onOpenRecord,
-  onOpenCategories,
+  onOpenSearch,
   onAskAi,
   onToggleFavorite,
 }: JournalPageProps) => {
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
-  const dates = useMemo(() => getRecentRecordDates(records, 5), [records]);
+  const dates = useMemo(() => getRecordDatesForMonth(records, month), [month, records]);
 
   const subjectRecords = selectedDate && selectedSubject
     ? getRecordsForDateSubject(records, selectedDate, selectedSubject)
@@ -50,6 +50,12 @@ export const JournalPage = ({
         eyebrow="Journal"
         title="日志回看"
         subtitle="用热力图找节奏，用日期和学科回到具体的学习现场。"
+        actions={(
+          <button type="button" className="secondary-button journal-search-button" onClick={onOpenSearch} title="全局搜索" aria-label="全局搜索">
+            <Search size={18} />
+            <span>全局搜索</span>
+          </button>
+        )}
       />
 
       <MonthlyHeatmap
@@ -75,6 +81,7 @@ export const JournalPage = ({
                 key={record.id}
                 record={record}
                 onOpen={onOpenRecord}
+                onAskAi={onAskAi}
                 onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
               />
             ))}
@@ -82,19 +89,18 @@ export const JournalPage = ({
         </section>
       ) : (
         <>
-          <button type="button" className="category-entry-card" onClick={onOpenCategories}>
+          <section className="journal-day-summary">
             <div>
-              <span className="eyebrow">Subjects</span>
-              <strong>学科分类</strong>
-              <small>按学科查看所有历史记录</small>
+              <p className="eyebrow">Month Logs</p>
+              <h2>本月有记录日期</h2>
             </div>
-            <Layers size={22} />
-          </button>
+            <p>仅显示当前月份中有日志记录的日期；切换月份可以回看更早的学习现场。</p>
+          </section>
           <section className="day-log-list">
             {dates.length === 0 ? (
               <div className="empty-state">
-                <h2>还没有日志记录。</h2>
-                <p>从今天页新建记录后，最近 5 天会显示在这里。</p>
+                <h2>本月还没有日志记录。</h2>
+                <p>切换月份查看历史，或者从今天页新建一条记录。</p>
               </div>
             ) : (
               dates.map((date) => (

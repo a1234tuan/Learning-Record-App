@@ -91,6 +91,44 @@ export const syncRecordRefsFromContent = (record: RecordBlock): RecordBlock => {
   };
 };
 
+export const renameRecordAssetTitle = (
+  record: RecordBlock,
+  assetId: string,
+  title: string,
+): { record: RecordBlock; changed: boolean } => {
+  const contentHtml = normalizeRecordContent(record);
+  const doc = parseElement(contentHtml);
+  let changed = false;
+
+  for (const node of Array.from(doc.querySelectorAll("record-asset"))) {
+    if (node.getAttribute("data-asset-id") === assetId && node.getAttribute("data-title") !== title) {
+      node.setAttribute("data-title", title);
+      changed = true;
+    }
+  }
+
+  const renamedAssets = record.assets.map((asset) => {
+    if (asset.id !== assetId || asset.title === title) {
+      return asset;
+    }
+    changed = true;
+    return { ...asset, title };
+  });
+
+  if (!changed) {
+    return { record, changed: false };
+  }
+
+  return {
+    record: syncRecordRefsFromContent({
+      ...record,
+      contentHtml: doc.body.innerHTML,
+      assets: renamedAssets,
+    }),
+    changed: true,
+  };
+};
+
 export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = []): LinearNode[] => {
   const contentHtml = normalizeRecordContent(record);
   const doc = parseElement(contentHtml);

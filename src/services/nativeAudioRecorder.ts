@@ -2,9 +2,15 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 import { base64ToBlob } from "./backup";
 
+export interface NativeAudioRecordingStatus {
+  recording: boolean;
+  startedAt?: number;
+}
+
 interface NativeAudioRecorderPlugin {
   start(): Promise<void>;
   stop(): Promise<{ data: string; fileName: string; mimeType: string }>;
+  status(): Promise<NativeAudioRecordingStatus>;
 }
 
 const NativeAudioRecorder = registerPlugin<NativeAudioRecorderPlugin>("NativeAudioRecorder");
@@ -22,4 +28,11 @@ export const stopNativeAudioRecording = async (): Promise<File> => {
   return new File([blob], result.fileName || `recording-${Date.now()}.m4a`, {
     type: result.mimeType || "audio/mp4",
   });
+};
+
+export const getNativeAudioRecordingStatus = async (): Promise<NativeAudioRecordingStatus> => {
+  if (!canUseNativeAudioRecorder()) {
+    return { recording: false };
+  }
+  return NativeAudioRecorder.status();
 };

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BrainCircuit, ChevronDown } from "lucide-react";
+import { BrainCircuit } from "lucide-react";
 
 import type { RecordBlock, Subject, SubjectConfig } from "../types";
 import { formatChineseDate } from "../lib/date";
@@ -42,8 +42,6 @@ export const DayLogCard = ({ date, records, subjects, onOpenSubject, onAskAi, op
               AI问答
             </button>
           )}
-          <b>{records.length}</b>
-          <ChevronDown size={17} />
         </span>
       </div>
       {isOpen && (

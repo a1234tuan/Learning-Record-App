@@ -8,6 +8,7 @@ import { AssetPreview } from "./AssetPreview";
 
 type RecordAssetNodeOptions = {
   onAssetChanged?: () => void;
+  onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
   highlightedAssetId?: string;
 };
 
@@ -34,6 +35,7 @@ const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor 
         mode={editable ? "edit" : "view"}
         editableTitle={editable ? assetRef.title : undefined}
         onTitleChange={editable ? (title) => updateAttributes({ title }) : undefined}
+        onTitleCommit={editable ? (title) => void extensionOptions.onAssetTitleChange?.(assetRef.id, title) : undefined}
         onAssetChanged={extensionOptions.onAssetChanged}
         highlight={assetRef.id === extensionOptions.highlightedAssetId}
       />
@@ -67,6 +69,7 @@ export const RecordAssetNode = Node.create({
   addOptions() {
     return {
       onAssetChanged: undefined,
+      onAssetTitleChange: undefined,
       highlightedAssetId: undefined,
     } satisfies RecordAssetNodeOptions;
   },

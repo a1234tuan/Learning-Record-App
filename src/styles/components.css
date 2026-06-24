@@ -35,6 +35,10 @@
 .day-log-card,
 .more-link-card,
 .category-entry-card {
+  --press-y: 0px;
+  --press-scale: 1;
+  transform: translateY(var(--press-y)) scale(var(--press-scale));
+  transform-origin: center;
   transition:
     transform var(--motion-fast) ease,
     border-color var(--motion-fast) ease,
@@ -47,7 +51,7 @@
 .day-log-card:hover,
 .more-link-card:hover,
 .category-entry-card:hover {
-  transform: translateY(-1px);
+  --press-y: -1px;
   border-color: color-mix(in srgb, var(--color-primary) 36%, var(--color-border));
   box-shadow: var(--shadow-floating);
 }
@@ -68,10 +72,6 @@
     transform var(--motion-fast) ease;
 }
 
-.record-favorite-button:active {
-  transform: scale(0.96);
-}
-
 .action-button,
 .primary-button,
 .secondary-button,
@@ -86,15 +86,6 @@
     background var(--motion-fast) ease,
     border-color var(--motion-fast) ease,
     color var(--motion-fast) ease;
-}
-
-.action-button:active,
-.primary-button:active,
-.secondary-button:active,
-.subtle-button:active,
-.icon-button:active,
-.bottom-nav button:active {
-  transform: scale(0.97);
 }
 
 .action-button-primary,
@@ -129,6 +120,116 @@
     transform var(--motion-fast) ease,
     background var(--motion-fast) ease,
     color var(--motion-fast) ease;
+}
+
+button,
+[role="button"],
+a,
+label,
+.surface-card-interactive,
+.record-card,
+.day-log-card,
+.more-link-card,
+.category-entry-card,
+.recording-folder-card,
+.recording-row-main,
+.list-row,
+.ai-settings-toggle,
+.record-ai-button,
+.attachment-link,
+.image-preview-button,
+.compact-image-button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:is(
+  .action-button,
+  .primary-button,
+  .secondary-button,
+  .subtle-button,
+  .icon-button,
+  .player-play-button,
+  .play-mode-button,
+  .bottom-nav button,
+  .sidebar nav button,
+  .subject-picker button,
+  .editor-toolbar button,
+  .quick-insert button,
+  .quick-insert label,
+  .editor-file-button,
+  .surface-card-interactive,
+  .record-card,
+  .day-log-card,
+  .list-row,
+  .record-card-main,
+  .record-ai-button,
+  .record-favorite-button,
+  .category-entry-card,
+  .category-card,
+  .recording-folder-card,
+  .recording-row-main,
+  .more-link-card,
+  .ai-settings-toggle,
+  .ai-session-list button,
+  .ai-preset-row button,
+  .month-grid button,
+  .attachment-link,
+  .image-preview-button,
+  .compact-image-button
+) {
+  --press-y: 0px;
+  --press-scale: 1;
+  touch-action: manipulation;
+  transform: translateY(var(--press-y)) scale(var(--press-scale));
+  transform-origin: center;
+  transition:
+    transform var(--motion-fast) cubic-bezier(0.2, 0.8, 0.2, 1),
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+:is(
+  .action-button,
+  .primary-button,
+  .secondary-button,
+  .subtle-button,
+  .icon-button,
+  .player-play-button,
+  .play-mode-button,
+  .bottom-nav button,
+  .subject-picker button,
+  .editor-toolbar button,
+  .quick-insert button,
+  .quick-insert label,
+  .editor-file-button,
+  .surface-card-interactive,
+  .record-card,
+  .day-log-card,
+  .list-row,
+  .record-card-main,
+  .record-ai-button,
+  .record-favorite-button,
+  .category-entry-card,
+  .category-card,
+  .recording-folder-card,
+  .recording-row-main,
+  .more-link-card,
+  .ai-settings-toggle,
+  .ai-session-list button,
+  .ai-preset-row button,
+  .month-grid button,
+  .attachment-link,
+  .image-preview-button,
+  .compact-image-button
+):active:not(:disabled) {
+  --press-y: -1px;
+  --press-scale: 1.015;
+}
+
+.sidebar nav button:active:not(:disabled) {
+  transform: translateX(2px) translateY(-1px) scale(1.015);
 }
 
 .list-row {
@@ -241,6 +342,58 @@
   align-items: center;
   gap: 6px;
   line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    .action-button,
+    .primary-button,
+    .secondary-button,
+    .subtle-button,
+    .icon-button,
+    .player-play-button,
+    .play-mode-button,
+    .bottom-nav button,
+    .sidebar nav button,
+    .subject-picker button,
+    .editor-toolbar button,
+    .quick-insert button,
+    .quick-insert label,
+    .editor-file-button,
+    .surface-card-interactive,
+    .record-card,
+    .day-log-card,
+    .list-row,
+    .record-card-main,
+    .record-ai-button,
+    .record-favorite-button,
+    .category-entry-card,
+    .category-card,
+    .recording-folder-card,
+    .recording-row-main,
+    .more-link-card,
+    .ai-settings-toggle,
+    .ai-session-list button,
+    .ai-preset-row button,
+    .month-grid button,
+    .attachment-link,
+    .image-preview-button,
+    .compact-image-button
+  ),
+  :is(
+    .surface-card-interactive,
+    .record-card,
+    .day-log-card,
+    .more-link-card,
+    .ai-settings-toggle,
+    .category-entry-card,
+    .recording-folder-card,
+    .sidebar nav button
+  ):hover,
+  .sidebar nav button:active:not(:disabled) {
+    transform: none;
+    transition: none;
+  }
 }
 
 input,

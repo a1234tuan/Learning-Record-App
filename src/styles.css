@@ -517,6 +517,12 @@ button:disabled {
   font-weight: 700;
 }
 
+.editor-toolbar button.active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 15%, var(--surface-2));
+  color: var(--primary-strong);
+}
+
 .editor-file-button {
   min-width: 34px;
   height: 32px;
@@ -1342,6 +1348,190 @@ button:disabled {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.recordings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.recording-search-box {
+  margin-bottom: 0;
+}
+
+.recording-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.recording-folder-card {
+  min-height: 86px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+}
+
+.recording-folder-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.recording-folder-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
+  color: var(--primary-strong);
+}
+
+.recording-folder-card strong,
+.recording-row-main strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.recording-folder-card small,
+.recording-row-main small,
+.recording-row-main span {
+  color: var(--muted);
+}
+
+.recording-list {
+  display: grid;
+  gap: 10px;
+}
+
+.recording-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.recording-row-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+}
+
+.recording-row-main:hover strong {
+  color: var(--primary-strong);
+}
+
+.recording-rename-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.recording-rename-control input {
+  width: min(220px, 52vw);
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: inherit;
+  padding: 6px 8px;
+}
+
+.recording-player-page {
+  min-height: calc(100dvh - 48px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 20px;
+}
+
+.recording-player-topbar {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.recording-player-topbar h1 {
+  margin: 0;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  overflow-wrap: anywhere;
+}
+
+.recording-player-stage {
+  display: flex;
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+
+.recording-time-display {
+  font-size: clamp(3rem, 9vw, 5.4rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.recording-player-controls {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+
+.play-mode-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+}
+
+.transport-row {
+  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(44px, 1fr));
+  align-items: center;
+  justify-items: center;
+  gap: 10px;
+}
+
+.player-play-button {
+  width: 72px;
+  height: 72px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
 }
 
 .record-view-page {

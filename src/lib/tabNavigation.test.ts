@@ -9,13 +9,13 @@ describe("tabNavigation", () => {
       ...memory,
       today: { recordId: "today-record", recordEditing: true },
       categories: { ...memory.categories, activeSubject: "数学" },
-      search: { ...memory.search, query: "极限" },
+      recordings: { ...memory.recordings, query: "同步录音", searchOpen: true },
     };
 
     expect(getTabDepth("today", next)).toBe(1);
     expect(getTabDepth("categories", next)).toBe(1);
-    expect(getTabDepth("search", next)).toBe(0);
-    expect(next.search.query).toBe("极限");
+    expect(getTabDepth("recordings", next)).toBe(1);
+    expect(next.recordings.query).toBe("同步录音");
   });
 
   it("pops only the current tab record depth", () => {
@@ -65,21 +65,72 @@ describe("tabNavigation", () => {
     expect(next.journal.selectedDate).toBeUndefined();
   });
 
-  it("keeps search query when returning from a search result record", () => {
+  it("returns journal search result records to the journal search page", () => {
     const memory = {
       ...createInitialTabMemory(),
-      search: {
-        query: "B树",
+      journal: {
+        ...createInitialTabMemory().journal,
+        searchOpen: true,
+        searchQuery: "B树",
         recordId: "record-1",
         highlightAssetId: "asset-1",
       },
     };
 
-    const next = popTabDepth(memory, "search");
+    const next = popTabDepth(memory, "journal");
 
-    expect(next.search.recordId).toBeUndefined();
-    expect(next.search.highlightAssetId).toBeUndefined();
-    expect(next.search.query).toBe("B树");
+    expect(next.journal.recordId).toBeUndefined();
+    expect(next.journal.highlightAssetId).toBeUndefined();
+    expect(next.journal.searchOpen).toBe(true);
+    expect(next.journal.searchQuery).toBe("B树");
+  });
+
+  it("closes journal search without losing the search query", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      journal: {
+        ...createInitialTabMemory().journal,
+        searchOpen: true,
+        searchQuery: "进程同步",
+      },
+    };
+
+    const next = popTabDepth(memory, "journal");
+
+    expect(next.journal.searchOpen).toBe(false);
+    expect(next.journal.searchQuery).toBe("进程同步");
+  });
+
+  it("returns recordings player to its folder first", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      recordings: {
+        ...createInitialTabMemory().recordings,
+        selectedSubject: "OS",
+        playerAssetId: "audio-1",
+      },
+    };
+
+    const next = popTabDepth(memory, "recordings");
+
+    expect(next.recordings.playerAssetId).toBeUndefined();
+    expect(next.recordings.selectedSubject).toBe("OS");
+  });
+
+  it("closes recordings search before leaving the recordings tab", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      recordings: {
+        ...createInitialTabMemory().recordings,
+        query: "讲解",
+        searchOpen: true,
+      },
+    };
+
+    const next = popTabDepth(memory, "recordings");
+
+    expect(next.recordings.searchOpen).toBe(false);
+    expect(next.recordings.query).toBe("讲解");
   });
 
   it("pops more subpages back to the More root", () => {
@@ -94,5 +145,21 @@ describe("tabNavigation", () => {
 
     expect(getTabDepth("more", next)).toBe(0);
     expect(next.more.subRoute).toBeNull();
+  });
+
+  it("treats More backup and AI tools as subpages", () => {
+    const backupMemory = {
+      ...createInitialTabMemory(),
+      more: { subRoute: "backup" as const },
+    };
+    const aiToolsMemory = {
+      ...createInitialTabMemory(),
+      more: { subRoute: "aiTools" as const },
+    };
+
+    expect(getTabDepth("more", backupMemory)).toBe(1);
+    expect(getTabDepth("more", aiToolsMemory)).toBe(1);
+    expect(popTabDepth(backupMemory, "more").more.subRoute).toBeNull();
+    expect(popTabDepth(aiToolsMemory, "more").more.subRoute).toBeNull();
   });
 });

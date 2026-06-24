@@ -1,8 +1,8 @@
 package com.noteproject.study408;
 
 import android.Manifest;
-import android.media.MediaRecorder;
-import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -23,8 +23,10 @@ import java.nio.file.Files;
     }
 )
 public class NativeAudioRecorderPlugin extends Plugin {
-    private MediaRecorder recorder;
-    private File outputFile;
+    private static final int START_CHECK_MAX_ATTEMPTS = 20;
+    private static final long START_CHECK_DELAY_MS = 100L;
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private PluginCall pendingStartCall;
 
     @PluginMethod
@@ -44,49 +46,55 @@ public class NativeAudioRecorderPlugin extends Plugin {
         if (getPermissionState("microphone") == PermissionState.GRANTED) {
             startRecording(target);
         } else {
-            target.reject("麦克风权限被拒绝，请在 MIUI 设置中允许本 App 使用麦克风。");
+            target.reject("麦克风权限被拒绝，请在系统设置中允许本 App 使用麦克风。");
         }
     }
 
     private void startRecording(PluginCall call) {
-        if (recorder != null) {
+        if (AudioRecordingController.isRecording()) {
             call.reject("录音已经在进行中。");
             return;
         }
         try {
-            outputFile = new File(getContext().getCacheDir(), "recording-" + System.currentTimeMillis() + ".m4a");
-            recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                ? new MediaRecorder(getContext())
-                : new MediaRecorder();
-            recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioEncodingBitRate(128000);
-            recorder.setAudioSamplingRate(44100);
-            recorder.setOutputFile(outputFile.getAbsolutePath());
-            recorder.prepare();
-            recorder.start();
-            call.resolve();
+            RecordingForegroundService.start(getContext());
+            waitForRecordingStart(call, 0);
         } catch (Exception error) {
-            cleanupRecorder();
             call.reject("无法启动录音：" + error.getMessage(), error);
         }
     }
 
+    private void waitForRecordingStart(PluginCall call, int attempt) {
+        mainHandler.postDelayed(() -> {
+            if (AudioRecordingController.isRecording()) {
+                call.resolve();
+                return;
+            }
+            if (attempt >= START_CHECK_MAX_ATTEMPTS) {
+                String lastError = AudioRecordingController.getLastError();
+                call.reject(lastError != null ? lastError : "无法启动录音，请确认系统允许前台录音服务。");
+                return;
+            }
+            waitForRecordingStart(call, attempt + 1);
+        }, START_CHECK_DELAY_MS);
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
-        if (recorder == null || outputFile == null) {
+        if (!AudioRecordingController.isRecording()) {
             call.reject("当前没有正在进行的录音。");
             return;
         }
+
+        File outputFile;
         try {
-            recorder.stop();
-        } catch (RuntimeException error) {
-            cleanupRecorder();
-            call.reject("录音时间过短或保存失败，请重新录制。", error);
+            outputFile = AudioRecordingController.stop();
+            RecordingForegroundService.stop(getContext());
+        } catch (Exception error) {
+            RecordingForegroundService.stop(getContext());
+            call.reject(error.getMessage() != null ? error.getMessage() : "停止录音失败。", error);
             return;
         }
-        cleanupRecorderOnly();
+
         try {
             byte[] bytes = readBytes(outputFile);
             JSObject result = new JSObject();
@@ -95,15 +103,25 @@ public class NativeAudioRecorderPlugin extends Plugin {
             result.put("mimeType", "audio/mp4");
             call.resolve(result);
             outputFile.delete();
-            outputFile = null;
         } catch (Exception error) {
-            cleanupRecorder();
+            outputFile.delete();
             call.reject("读取录音文件失败：" + error.getMessage(), error);
         }
     }
 
+    @PluginMethod
+    public void status(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("recording", AudioRecordingController.isRecording());
+        long startedAt = AudioRecordingController.getStartedAt();
+        if (startedAt > 0) {
+            result.put("startedAt", startedAt);
+        }
+        call.resolve(result);
+    }
+
     private byte[] readBytes(File file) throws IOException {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             return Files.readAllBytes(file.toPath());
         }
         java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
@@ -115,21 +133,5 @@ public class NativeAudioRecorderPlugin extends Plugin {
         }
         input.close();
         return output.toByteArray();
-    }
-
-    private void cleanupRecorderOnly() {
-        if (recorder != null) {
-            recorder.reset();
-            recorder.release();
-            recorder = null;
-        }
-    }
-
-    private void cleanupRecorder() {
-        cleanupRecorderOnly();
-        if (outputFile != null) {
-            outputFile.delete();
-            outputFile = null;
-        }
     }
 }

@@ -1,14 +1,15 @@
-import { FileText, Star } from "lucide-react";
+import { BrainCircuit, FileText, Star } from "lucide-react";
 
 import type { RecordBlock } from "../types";
 
 interface RecordCardProps {
   record: RecordBlock;
   onOpen: (record: RecordBlock) => void;
+  onAskAi?: (date: string) => void;
   onToggleFavorite?: (favorite: boolean) => void;
 }
 
-export const RecordCard = ({ record, onOpen, onToggleFavorite }: RecordCardProps) => {
+export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite }: RecordCardProps) => {
   const assetText = record.assets.length > 0 ? `${record.assets.length} 个资源` : "无资源";
   const formulaText = record.formulas.length > 0 ? `${record.formulas.length} 个公式` : "无公式";
 
@@ -26,6 +27,17 @@ export const RecordCard = ({ record, onOpen, onToggleFavorite }: RecordCardProps
         </div>
         <span>{record.subject}</span>
       </button>
+      {onAskAi && (
+        <button
+          type="button"
+          className="record-ai-button"
+          onClick={() => onAskAi(record.date)}
+          aria-label={`AI问答 ${record.date}`}
+          title="AI问答"
+        >
+          <BrainCircuit size={17} />
+        </button>
+      )}
       {onToggleFavorite && (
         <button
           type="button"
