@@ -11,6 +11,9 @@ import type {
   DayEntry,
   MistakeCard,
   RecordDraft,
+  RecordReviewDayStat,
+  RecordReviewLog,
+  RecordReviewState,
   ReviewSchedule,
   StudySession,
   Tag,
@@ -24,6 +27,9 @@ export class StudyJournalDatabase extends Dexie {
   entries!: Table<DayEntry, string>;
   blocks!: Table<Block, string>;
   recordDrafts!: Table<RecordDraft, string>;
+  recordReviews!: Table<RecordReviewState, string>;
+  recordReviewLogs!: Table<RecordReviewLog, string>;
+  recordReviewDayStats!: Table<RecordReviewDayStat, string>;
   mistakes!: Table<MistakeCard, string>;
   reviews!: Table<ReviewSchedule, string>;
   tags!: Table<Tag, string>;
@@ -74,6 +80,24 @@ export class StudyJournalDatabase extends Dexie {
       entries: "id, date, updatedAt, pinned, favorite",
       blocks: "id, date, type, order, updatedAt",
       recordDrafts: "id, recordId, updatedAt",
+      mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
+      reviews: "id, mistakeId, dueAt, completedAt, stage",
+      tags: "id, &name, parent",
+      assets: "id, kind, fileName, updatedAt",
+      studySessions: "id, date, subject, blockId",
+      settings: "id",
+      aiSessions: "id, sourceDate, updatedAt, createdAt",
+      aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiAttachments: "id, sessionId, messageId, createdAt, updatedAt",
+      aiSecrets: "id",
+    });
+    this.version(5).stores({
+      entries: "id, date, updatedAt, pinned, favorite",
+      blocks: "id, date, type, order, updatedAt",
+      recordDrafts: "id, recordId, updatedAt",
+      recordReviews: "id, recordId, status, nextReviewDate, lastReviewDate, updatedAt, [status+nextReviewDate]",
+      recordReviewLogs: "id, recordId, reviewedAt, rating",
+      recordReviewDayStats: "id, date, updatedAt, completedAt",
       mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
       reviews: "id, mistakeId, dueAt, completedAt, stage",
       tags: "id, &name, parent",

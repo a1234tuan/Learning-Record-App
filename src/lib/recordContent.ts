@@ -1,9 +1,11 @@
 import type { Asset, RecordAssetRef, RecordBlock, RecordFormula } from "../types";
+import { structureBlockMarkdownFromElement, structureBlockPlainTextFromElement } from "./recordStructureBlocks";
 
 export type LinearNode =
   | { kind: "text"; text: string }
   | { kind: "asset"; ref: RecordAssetRef; asset?: Asset; ocrText?: string }
-  | { kind: "formula"; formula: RecordFormula };
+  | { kind: "formula"; formula: RecordFormula }
+  | { kind: "structure"; text: string; markdown: string };
 
 const escapeHtml = (value: string): string =>
   value
@@ -42,7 +44,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula)\b/i.test(contentHtml);
+  /<record-(asset|formula|structure-diagram|comparison-table|sticky-board|collapse)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -129,6 +131,37 @@ export const renameRecordAssetTitle = (
   };
 };
 
+const isStructureBlockTag = (tag: string): boolean =>
+  tag === "record-structure-diagram" || tag === "record-comparison-table" || tag === "record-sticky-board";
+
+const collapseElementText = (element: Element, assetMap: Map<string, Asset>): string => {
+  const title = element.getAttribute("data-title") ?? "折叠块";
+  const summary = element.getAttribute("data-summary") ?? "";
+  const bodyText = decodeHtml(stripHtml(element.innerHTML));
+  const structures = Array.from(element.querySelectorAll("record-structure-diagram, record-comparison-table, record-sticky-board"))
+    .map(structureBlockPlainTextFromElement);
+  const formulas = Array.from(element.querySelectorAll("record-formula")).map((node) =>
+    [node.getAttribute("data-title"), node.getAttribute("data-latex")].filter(Boolean).join("\n"),
+  );
+  const assets = Array.from(element.querySelectorAll("record-asset")).map((node) => {
+    const id = node.getAttribute("data-asset-id") ?? "";
+    const asset = assetMap.get(id);
+    return [node.getAttribute("data-title"), asset?.title, asset?.fileName, asset?.ocrText].filter(Boolean).join("\n");
+  });
+  return [title, summary, bodyText, ...structures, ...formulas, ...assets].filter(Boolean).join("\n");
+};
+
+const collapseElementMarkdown = (element: Element, assetMap: Map<string, Asset>): string => {
+  const open = element.getAttribute("data-default-open") === "true" ? " open" : "";
+  const title = element.getAttribute("data-title") ?? "折叠块";
+  const summary = element.getAttribute("data-summary");
+  const body = collapseElementText(element, assetMap)
+    .split("\n")
+    .filter((line) => line !== title && line !== summary)
+    .join("\n");
+  return [`<details${open}>`, `<summary>${[title, summary].filter(Boolean).join(" · ")}</summary>`, "", body, "</details>"].join("\n");
+};
+
 export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = []): LinearNode[] => {
   const contentHtml = normalizeRecordContent(record);
   const doc = parseElement(contentHtml);
@@ -165,6 +198,22 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
         });
         continue;
       }
+      if (isStructureBlockTag(tag)) {
+        nodes.push({
+          kind: "structure",
+          text: structureBlockPlainTextFromElement(element),
+          markdown: structureBlockMarkdownFromElement(element),
+        });
+        continue;
+      }
+      if (tag === "record-collapse") {
+        nodes.push({
+          kind: "structure",
+          text: collapseElementText(element, assetMap),
+          markdown: collapseElementMarkdown(element, assetMap),
+        });
+        continue;
+      }
     }
 
     const wrapper = document.createElement("div");
@@ -187,6 +236,9 @@ export const recordToPlainText = (record: RecordBlock, assets: Asset[] = []): st
       if (node.kind === "formula") {
         return [node.formula.title, node.formula.latex].filter(Boolean).join("\n");
       }
+      if (node.kind === "structure") {
+        return node.text;
+      }
       const assetLabel = [node.ref.title, node.asset?.title, node.asset?.fileName].filter(Boolean).join(" / ");
       return [assetLabel, node.ocrText].filter(Boolean).join("\n");
     })
@@ -208,6 +260,9 @@ export const recordToLinearMarkdown = (record: RecordBlock, assets: Asset[] = []
           node.formula.title ? `### ${node.formula.title}` : "",
           `$$\n${node.formula.latex}\n$$`,
         ].filter(Boolean).join("\n");
+      }
+      if (node.kind === "structure") {
+        return node.markdown;
       }
       const assetName = node.asset?.fileName ?? node.ref.title;
       const assetText = node.ref.kind === "image"

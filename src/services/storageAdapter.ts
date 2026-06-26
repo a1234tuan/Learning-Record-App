@@ -1,4 +1,4 @@
-import { liveQuery } from "dexie";
+import Dexie, { liveQuery } from "dexie";
 
 import type {
   AiChatAttachment,
@@ -12,6 +12,12 @@ import type {
   MistakeCard,
   RecordDraft,
   RecordBlock,
+  RecordReviewBulkResult,
+  RecordReviewDayStat,
+  RecordReviewLog,
+  RecordReviewRating,
+  RecordReviewState,
+  RecordReviewStats,
   ReviewSchedule,
   StorageAdapter,
   StorageSnapshot,
@@ -29,12 +35,13 @@ import {
   isCurrentDefaultAiPresetSetWithoutModes,
   isLegacyDefaultAiPresetSet,
 } from "../db/defaults";
-import { nowISO, todayISO } from "../lib/date";
+import { addDaysISO, nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
+import { DEFAULT_REVIEW_EASE, applySm2Review } from "../lib/reviewScheduler";
 
 export class DexieStorageAdapter implements StorageAdapter {
   async initialize(): Promise<void> {
@@ -59,6 +66,30 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   private async recordBlocks(): Promise<RecordBlock[]> {
     return (await db.blocks.toArray()).filter((block): block is RecordBlock => block.type === "record");
+  }
+
+  private async activeRecord(recordId: string): Promise<RecordBlock | undefined> {
+    const block = await db.blocks.get(recordId);
+    return block?.type === "record" && !block.deletedAt ? block : undefined;
+  }
+
+  private reviewStateForNewCycle(recordId: string, existing?: RecordReviewState): RecordReviewState {
+    const now = nowISO();
+    return {
+      ...(existing ?? createBaseEntity()),
+      id: recordId,
+      recordId,
+      status: "active",
+      easeFactor: DEFAULT_REVIEW_EASE,
+      repetition: 0,
+      intervalDays: 1,
+      nextReviewDate: addDaysISO(todayISO(), 1),
+      lastReviewDate: existing?.lastReviewDate,
+      lastReviewedAt: existing?.lastReviewedAt,
+      consecutiveRemembered: 0,
+      totalReviews: existing?.totalReviews ?? 0,
+      updatedAt: now,
+    };
   }
 
   private async cleanupOrphanAssetsForRecord(record: RecordBlock, draft?: RecordDraft): Promise<void> {
@@ -313,14 +344,255 @@ export class DexieStorageAdapter implements StorageAdapter {
     await db.recordDrafts.delete(recordId);
   }
 
+  async listRecordReviews(): Promise<RecordReviewState[]> {
+    return db.recordReviews.toArray();
+  }
+
+  async getRecordReview(recordId: string): Promise<RecordReviewState | undefined> {
+    return db.recordReviews.get(recordId);
+  }
+
+  async listDueRecordReviews(date: string): Promise<RecordReviewState[]> {
+    const candidates = await db.recordReviews
+      .where("[status+nextReviewDate]")
+      .between(["active", Dexie.minKey], ["active", date], true, true)
+      .toArray();
+    const activeBlocks = new Map((await this.recordBlocks()).filter((record) => !record.deletedAt).map((record) => [record.id, record]));
+    return candidates
+      .filter((review) => review.status === "active" && Boolean(review.nextReviewDate) && review.lastReviewDate !== date && activeBlocks.has(review.recordId))
+      .sort((a, b) => {
+        const aToday = a.nextReviewDate === date ? 0 : 1;
+        const bToday = b.nextReviewDate === date ? 0 : 1;
+        if (aToday !== bToday) {
+          return aToday - bToday;
+        }
+        const byDue = (a.nextReviewDate ?? "").localeCompare(b.nextReviewDate ?? "");
+        if (byDue !== 0) {
+          return byDue;
+        }
+        const aRecord = activeBlocks.get(a.recordId);
+        const bRecord = activeBlocks.get(b.recordId);
+        return (bRecord?.date ?? "").localeCompare(aRecord?.date ?? "") || (aRecord?.order ?? 0) - (bRecord?.order ?? 0);
+      });
+  }
+
+  async addRecordToReview(recordId: string): Promise<RecordReviewState | undefined> {
+    const record = await this.activeRecord(recordId);
+    if (!record) {
+      return undefined;
+    }
+    const existing = await db.recordReviews.get(recordId);
+    if (existing?.status === "active") {
+      return existing;
+    }
+    const saved = this.reviewStateForNewCycle(recordId, existing);
+    await db.recordReviews.put(saved);
+    return saved;
+  }
+
+  async addRecordsToReview(recordIds: string[]): Promise<RecordReviewBulkResult> {
+    const uniqueIds = Array.from(new Set(recordIds));
+    const result: RecordReviewBulkResult = { added: 0, reset: 0, skippedActive: 0 };
+    for (const recordId of uniqueIds) {
+      const record = await this.activeRecord(recordId);
+      if (!record) {
+        continue;
+      }
+      const existing = await db.recordReviews.get(recordId);
+      if (existing?.status === "active") {
+        result.skippedActive += 1;
+        continue;
+      }
+      await db.recordReviews.put(this.reviewStateForNewCycle(recordId, existing));
+      if (existing) {
+        result.reset += 1;
+      } else {
+        result.added += 1;
+      }
+    }
+    return result;
+  }
+
+  async resetRecordReview(recordId: string): Promise<RecordReviewState | undefined> {
+    const record = await this.activeRecord(recordId);
+    if (!record) {
+      return undefined;
+    }
+    const existing = await db.recordReviews.get(recordId);
+    const saved = this.reviewStateForNewCycle(recordId, existing);
+    await db.recordReviews.put(saved);
+    return saved;
+  }
+
+  async removeRecordFromReview(recordId: string): Promise<RecordReviewState | undefined> {
+    const existing = await db.recordReviews.get(recordId);
+    if (!existing) {
+      return undefined;
+    }
+    const saved: RecordReviewState = {
+      ...existing,
+      status: "removed",
+      nextReviewDate: undefined,
+      updatedAt: nowISO(),
+    };
+    await db.recordReviews.put(saved);
+    return saved;
+  }
+
+  async ensureRecordReviewDay(date: string, dueCountAtFirstOpen: number): Promise<RecordReviewDayStat> {
+    const existing = await db.recordReviewDayStats.get(date);
+    if (existing) {
+      return existing;
+    }
+    const stat: RecordReviewDayStat = {
+      ...createBaseEntity(),
+      id: date,
+      date,
+      dueCountAtFirstOpen,
+      reviewedCount: 0,
+      rememberedCount: 0,
+      fuzzyCount: 0,
+      forgotCount: 0,
+    };
+    await db.recordReviewDayStats.put(stat);
+    return stat;
+  }
+
+  async rateRecordReview(recordId: string, rating: RecordReviewRating, reviewedAt = nowISO()): Promise<RecordReviewState | undefined> {
+    const review = await db.recordReviews.get(recordId);
+    const record = await this.activeRecord(recordId);
+    if (!review || !record || review.status !== "active") {
+      if (review) {
+        await this.removeRecordFromReview(recordId);
+      }
+      return undefined;
+    }
+    const reviewedDate = reviewedAt.slice(0, 10);
+    if (review.lastReviewDate === reviewedDate) {
+      return review;
+    }
+
+    const scheduled = applySm2Review(review, rating, reviewedDate, reviewedAt);
+    const saved = { ...scheduled.state, updatedAt: nowISO() };
+    const log: RecordReviewLog = {
+      ...createBaseEntity(),
+      recordId,
+      rating,
+      reviewedAt,
+      previousEaseFactor: review.easeFactor,
+      nextEaseFactor: saved.easeFactor,
+      previousRepetition: review.repetition,
+      nextRepetition: saved.repetition,
+      previousIntervalDays: review.intervalDays,
+      nextIntervalDays: saved.intervalDays,
+      previousNextReviewDate: review.nextReviewDate,
+      nextReviewDate: saved.nextReviewDate,
+    };
+
+    await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+      await db.recordReviews.put(saved);
+      await db.recordReviewLogs.put(log);
+      const stat = await db.recordReviewDayStats.get(reviewedDate) ?? {
+        ...createBaseEntity(),
+        id: reviewedDate,
+        date: reviewedDate,
+        dueCountAtFirstOpen: 0,
+        reviewedCount: 0,
+        rememberedCount: 0,
+        fuzzyCount: 0,
+        forgotCount: 0,
+      };
+      const nextStat: RecordReviewDayStat = {
+        ...stat,
+        reviewedCount: stat.reviewedCount + 1,
+        rememberedCount: stat.rememberedCount + (rating === "remembered" ? 1 : 0),
+        fuzzyCount: stat.fuzzyCount + (rating === "fuzzy" ? 1 : 0),
+        forgotCount: stat.forgotCount + (rating === "forgot" ? 1 : 0),
+        updatedAt: nowISO(),
+      };
+      await db.recordReviewDayStats.put(nextStat);
+    });
+
+    const remainingDue = await this.listDueRecordReviews(reviewedDate);
+    if (remainingDue.length === 0) {
+      const stat = await db.recordReviewDayStats.get(reviewedDate);
+      if (stat && !stat.completedAt) {
+        await db.recordReviewDayStats.put({ ...stat, completedAt: nowISO(), updatedAt: nowISO() });
+      }
+    }
+    return saved;
+  }
+
+  async listRecordReviewLogs(recordId?: string): Promise<RecordReviewLog[]> {
+    const logs = recordId
+      ? await db.recordReviewLogs.where("recordId").equals(recordId).toArray()
+      : await db.recordReviewLogs.toArray();
+    return logs.sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
+  }
+
+  async getRecordReviewStats(date = todayISO()): Promise<RecordReviewStats> {
+    const [reviews, dayStats, logs, dueReviews] = await Promise.all([
+      db.recordReviews.toArray(),
+      db.recordReviewDayStats.toArray(),
+      db.recordReviewLogs.toArray(),
+      this.listDueRecordReviews(date),
+    ]);
+    const active = reviews.filter((review) => review.status === "active");
+    const mastered = reviews.filter((review) => review.status === "mastered");
+    const overdueCount = dueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < date).length;
+    const sortedStats = dayStats.sort((a, b) => b.date.localeCompare(a.date));
+    const todayReviewed = dayStats.find((stat) => stat.date === date && stat.reviewedCount > 0);
+    let streakCursor = todayReviewed ? date : addDaysISO(date, -1);
+    let streakDays = 0;
+    while (streakCursor) {
+      const stat = dayStats.find((item) => item.date === streakCursor);
+      if (!stat || stat.reviewedCount <= 0) {
+        break;
+      }
+      streakDays += 1;
+      streakCursor = addDaysISO(streakCursor, -1);
+    }
+    const byDate = new Map<string, { remembered: number; reviewed: number }>();
+    for (const log of logs) {
+      const key = log.reviewedAt.slice(0, 10);
+      const current = byDate.get(key) ?? { remembered: 0, reviewed: 0 };
+      current.reviewed += 1;
+      if (log.rating === "remembered") {
+        current.remembered += 1;
+      }
+      byDate.set(key, current);
+    }
+    const masteryTrend = Array.from(byDate, ([trendDate, value]) => ({
+      date: trendDate,
+      rememberedRate: value.reviewed > 0 ? value.remembered / value.reviewed : 0,
+      reviewedCount: value.reviewed,
+    })).sort((a, b) => a.date.localeCompare(b.date)).slice(-30);
+
+    return {
+      activeCount: active.length,
+      masteredCount: mastered.length,
+      dueCount: dueReviews.length,
+      overdueCount,
+      totalReviews: logs.length,
+      streakDays,
+      todayStat: dayStats.find((stat) => stat.date === date),
+      dayStats: sortedStats,
+      masteryTrend,
+    };
+  }
+
   async deleteBlock(blockId: string): Promise<void> {
     const block = await db.blocks.get(blockId);
     if (!block) {
       return;
     }
-    await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
+    await db.transaction("rw", db.blocks, db.recordDrafts, db.recordReviews, async () => {
       await db.blocks.put({ ...block, deletedAt: nowISO(), updatedAt: nowISO() });
       await db.recordDrafts.delete(blockId);
+      const review = await db.recordReviews.get(blockId);
+      if (review) {
+        await db.recordReviews.put({ ...review, status: "removed", nextReviewDate: undefined, updatedAt: nowISO() });
+      }
     });
   }
 
@@ -349,10 +621,12 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const draft = await db.recordDrafts.get(blockId);
 
-    await db.transaction("rw", db.blocks, db.recordDrafts, db.assets, db.studySessions, async () => {
+    await db.transaction("rw", [db.blocks, db.recordDrafts, db.assets, db.studySessions, db.recordReviews, db.recordReviewLogs], async () => {
       await db.blocks.delete(blockId);
       await db.recordDrafts.delete(blockId);
       await db.studySessions.where("blockId").equals(blockId).delete();
+      await db.recordReviews.delete(blockId);
+      await db.recordReviewLogs.where("recordId").equals(blockId).delete();
       if (block.type === "record") {
         await this.cleanupOrphanAssetsForRecord(block, draft);
       }
@@ -564,6 +838,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       settings,
       assets,
       recordDrafts,
+      recordReviews,
+      recordReviewLogs,
+      recordReviewDayStats,
     ] = await Promise.all([
       db.entries.toArray(),
       db.blocks.toArray(),
@@ -572,6 +849,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       this.getSettings(),
       db.assets.toArray(),
       db.recordDrafts.toArray(),
+      db.recordReviews.toArray(),
+      db.recordReviewLogs.toArray(),
+      db.recordReviewDayStats.toArray(),
     ]);
     const cleanedBlocks: Block[] = blocks.map((block) =>
       block.type === "record" ? { ...block, mistakeRefs: [] as string[] } : block,
@@ -581,7 +861,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       payload: {
         manifest: {
           format: "study-journal",
-          version: 3,
+          version: 4,
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
@@ -592,6 +872,9 @@ export class DexieStorageAdapter implements StorageAdapter {
             tags: tags.length,
             reviews: 0,
             studySessions: studySessions.length,
+            recordReviews: recordReviews.length,
+            recordReviewLogs: recordReviewLogs.length,
+            recordReviewDayStats: recordReviewDayStats.length,
           },
         },
         entries,
@@ -600,8 +883,11 @@ export class DexieStorageAdapter implements StorageAdapter {
         mistakes: [],
         tags,
         reviews: [],
+        recordReviews,
+        recordReviewLogs,
+        recordReviewDayStats,
         studySessions,
-        settings: ensureSettingsSubjects(settings, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        settings: ensureSettingsSubjects({ ...settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
       },
       assets,
       recordDrafts,
@@ -611,12 +897,28 @@ export class DexieStorageAdapter implements StorageAdapter {
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
     await db.transaction(
       "rw",
-      [db.entries, db.blocks, db.recordDrafts, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets],
+      [
+        db.entries,
+        db.blocks,
+        db.recordDrafts,
+        db.recordReviews,
+        db.recordReviewLogs,
+        db.recordReviewDayStats,
+        db.mistakes,
+        db.tags,
+        db.reviews,
+        db.studySessions,
+        db.settings,
+        db.assets,
+      ],
       async () => {
         await Promise.all([
           db.entries.clear(),
           db.blocks.clear(),
           db.recordDrafts.clear(),
+          db.recordReviews.clear(),
+          db.recordReviewLogs.clear(),
+          db.recordReviewDayStats.clear(),
           db.mistakes.clear(),
           db.tags.clear(),
           db.reviews.clear(),
@@ -630,9 +932,12 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.entries.bulkPut(snapshot.payload.entries),
           db.blocks.bulkPut(restoredBlocks),
           db.recordDrafts.bulkPut(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
+          db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
+          db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),
+          db.recordReviewDayStats.bulkPut(snapshot.payload.recordReviewDayStats ?? []),
           db.tags.bulkPut(snapshot.payload.tags),
           db.studySessions.bulkPut(snapshot.payload.studySessions),
-          db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 3 }, restoredRecords)),
+          db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
           db.assets.bulkPut(snapshot.assets),
         ]);
       },

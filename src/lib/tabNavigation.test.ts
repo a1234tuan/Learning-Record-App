@@ -9,13 +9,14 @@ describe("tabNavigation", () => {
       ...memory,
       today: { recordId: "today-record", recordEditing: true },
       categories: { ...memory.categories, activeSubject: "数学" },
-      recordings: { ...memory.recordings, query: "同步录音", searchOpen: true },
+      review: { ...memory.review, queueIds: ["review-record"], currentRecordId: "review-record" },
+      more: { ...memory.more, recordingsState: { ...memory.more.recordingsState, query: "同步录音", searchOpen: true } },
     };
 
     expect(getTabDepth("today", next)).toBe(1);
     expect(getTabDepth("categories", next)).toBe(1);
-    expect(getTabDepth("recordings", next)).toBe(1);
-    expect(next.recordings.query).toBe("同步录音");
+    expect(getTabDepth("review", next)).toBe(0);
+    expect(next.more.recordingsState.query).toBe("同步录音");
   });
 
   it("pops only the current tab record depth", () => {
@@ -101,42 +102,44 @@ describe("tabNavigation", () => {
     expect(next.journal.searchQuery).toBe("进程同步");
   });
 
-  it("returns recordings player to its folder first", () => {
+  it("keeps review queue as root-level tab state", () => {
     const memory = {
       ...createInitialTabMemory(),
-      recordings: {
-        ...createInitialTabMemory().recordings,
-        selectedSubject: "OS",
-        playerAssetId: "audio-1",
-      },
+      review: { queueIds: ["record-1"], currentRecordId: "record-1" },
     };
 
-    const next = popTabDepth(memory, "recordings");
+    const next = popTabDepth(memory, "review");
 
-    expect(next.recordings.playerAssetId).toBeUndefined();
-    expect(next.recordings.selectedSubject).toBe("OS");
+    expect(next.review.queueIds).toEqual(["record-1"]);
+    expect(next.review.currentRecordId).toBe("record-1");
   });
 
-  it("closes recordings search before leaving the recordings tab", () => {
+  it("stores recordings state under More", () => {
     const memory = {
       ...createInitialTabMemory(),
-      recordings: {
-        ...createInitialTabMemory().recordings,
-        query: "讲解",
-        searchOpen: true,
+      more: {
+        ...createInitialTabMemory().more,
+        subRoute: "recordings" as const,
+        recordingsState: {
+          ...createInitialTabMemory().more.recordingsState,
+          query: "讲解",
+          searchOpen: true,
+        },
       },
     };
 
-    const next = popTabDepth(memory, "recordings");
+    const next = popTabDepth(memory, "more");
 
-    expect(next.recordings.searchOpen).toBe(false);
-    expect(next.recordings.query).toBe("讲解");
+    expect(next.more.subRoute).toBeNull();
+    expect(next.more.recordingsState.searchOpen).toBe(true);
+    expect(next.more.recordingsState.query).toBe("讲解");
   });
 
   it("pops more subpages back to the More root", () => {
     const memory = {
       ...createInitialTabMemory(),
       more: {
+        ...createInitialTabMemory().more,
         subRoute: "settings" as const,
       },
     };
@@ -150,11 +153,11 @@ describe("tabNavigation", () => {
   it("treats More backup and AI tools as subpages", () => {
     const backupMemory = {
       ...createInitialTabMemory(),
-      more: { subRoute: "backup" as const },
+      more: { ...createInitialTabMemory().more, subRoute: "backup" as const },
     };
     const aiToolsMemory = {
       ...createInitialTabMemory(),
-      more: { subRoute: "aiTools" as const },
+      more: { ...createInitialTabMemory().more, subRoute: "aiTools" as const },
     };
 
     expect(getTabDepth("more", backupMemory)).toBe(1);

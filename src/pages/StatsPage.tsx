@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, LineChart, Line } from "recharts";
 
-import type { Asset, Block, SubjectConfig } from "../types";
+import type { Asset, Block, RecordReviewStats, SubjectConfig } from "../types";
 import { Heatmap } from "../components/Heatmap";
 import { weekRangeLabel } from "../lib/date";
 import { getRecordBlocks, getSubjectCounts } from "../lib/journalSelectors";
@@ -10,11 +10,12 @@ interface StatsPageProps {
   blocks: Block[];
   assets: Asset[];
   subjects: SubjectConfig[];
+  reviewStats?: RecordReviewStats | null;
 }
 
 const COLORS = ["#2f6f5e", "#d29045", "#5e6f9f", "#a85858", "#6c7a4a"];
 
-export const StatsPage = ({ blocks, assets, subjects }: StatsPageProps) => {
+export const StatsPage = ({ blocks, assets, subjects, reviewStats }: StatsPageProps) => {
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const subjectStats = useMemo(() => {
     return getSubjectCounts(records, subjects)
@@ -57,6 +58,22 @@ export const StatsPage = ({ blocks, assets, subjects }: StatsPageProps) => {
           <span>资源文件</span>
           <strong>{assets.length}</strong>
         </article>
+        <article>
+          <span>复习中</span>
+          <strong>{reviewStats?.activeCount ?? 0}</strong>
+        </article>
+        <article>
+          <span>已掌握</span>
+          <strong>{reviewStats?.masteredCount ?? 0}</strong>
+        </article>
+        <article>
+          <span>今日待复习</span>
+          <strong>{reviewStats?.dueCount ?? 0}</strong>
+        </article>
+        <article>
+          <span>连续打卡</span>
+          <strong>{reviewStats?.streakDays ?? 0}</strong>
+        </article>
       </section>
       <section className="chart-grid">
         <article className="chart-panel">
@@ -80,6 +97,21 @@ export const StatsPage = ({ blocks, assets, subjects }: StatsPageProps) => {
               <YAxis />
               <Tooltip />
               <Line type="monotone" dataKey="count" stroke="#2f6f5e" strokeWidth={3} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </article>
+        <article className="chart-panel">
+          <h2>复习掌握率趋势</h2>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={reviewStats?.masteryTrend.map((item) => ({
+              date: item.date.slice(5),
+              rate: Math.round(item.rememberedRate * 100),
+              count: item.reviewedCount,
+            })) ?? []}>
+              <XAxis dataKey="date" />
+              <YAxis domain={[0, 100]} />
+              <Tooltip />
+              <Line type="monotone" dataKey="rate" stroke="#d29045" strokeWidth={3} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </article>

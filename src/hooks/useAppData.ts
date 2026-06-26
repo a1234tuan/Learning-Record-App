@@ -6,6 +6,12 @@ import type {
   Block,
   DayEntry,
   RecordBlock,
+  RecordReviewBulkResult,
+  RecordReviewDayStat,
+  RecordReviewLog,
+  RecordReviewRating,
+  RecordReviewState,
+  RecordReviewStats,
   Subject,
   SubjectConfig,
 } from "../types";
@@ -32,21 +38,33 @@ export const useAppData = () => {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [deletedRecords, setDeletedRecords] = useState<RecordBlock[]>([]);
+  const [recordReviews, setRecordReviews] = useState<RecordReviewState[]>([]);
+  const [dueRecordReviews, setDueRecordReviews] = useState<RecordReviewState[]>([]);
+  const [recordReviewLogs, setRecordReviewLogs] = useState<RecordReviewLog[]>([]);
+  const [recordReviewStats, setRecordReviewStats] = useState<RecordReviewStats | null>(null);
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, currentSettings, assetList, deletedList] = await Promise.all([
+    const [entryList, blockList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.getSettings(),
       storage.listAssets(),
       storage.listDeletedBlocks(),
+      storage.listRecordReviews(),
+      storage.listDueRecordReviews(todayISO()),
+      storage.listRecordReviewLogs(),
+      storage.getRecordReviewStats(todayISO()),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
     setSettings(currentSettings);
     setAssets(assetList);
     setDeletedRecords(deletedList);
+    setRecordReviews(reviewList);
+    setDueRecordReviews(dueReviews);
+    setRecordReviewLogs(reviewLogs);
+    setRecordReviewStats(reviewStats);
   }, []);
 
   useEffect(() => {
@@ -191,6 +209,75 @@ export const useAppData = () => {
     await storage.deleteRecordDraft(recordId);
     await markAutoBackupDirty("record-draft-delete");
   }, []);
+
+  const addRecordToReview = useCallback(
+    async (recordId: string) => {
+      const saved = await storage.addRecordToReview(recordId);
+      await refresh();
+      if (saved) {
+        await markAutoBackupDirty("record-review-add");
+      }
+      return saved;
+    },
+    [refresh],
+  );
+
+  const addRecordsToReview = useCallback(
+    async (recordIds: string[]): Promise<RecordReviewBulkResult> => {
+      const result = await storage.addRecordsToReview(recordIds);
+      await refresh();
+      if (result.added + result.reset > 0) {
+        await markAutoBackupDirty("record-review-bulk-add");
+      }
+      return result;
+    },
+    [refresh],
+  );
+
+  const rateRecordReview = useCallback(
+    async (recordId: string, rating: RecordReviewRating) => {
+      const saved = await storage.rateRecordReview(recordId, rating);
+      await refresh();
+      if (saved) {
+        await markAutoBackupDirty("record-review-rate");
+      }
+      return saved;
+    },
+    [refresh],
+  );
+
+  const resetRecordReview = useCallback(
+    async (recordId: string) => {
+      const saved = await storage.resetRecordReview(recordId);
+      await refresh();
+      if (saved) {
+        await markAutoBackupDirty("record-review-reset");
+      }
+      return saved;
+    },
+    [refresh],
+  );
+
+  const removeRecordFromReview = useCallback(
+    async (recordId: string) => {
+      const saved = await storage.removeRecordFromReview(recordId);
+      await refresh();
+      if (saved) {
+        await markAutoBackupDirty("record-review-remove");
+      }
+      return saved;
+    },
+    [refresh],
+  );
+
+  const ensureRecordReviewDay = useCallback(
+    async (date: string, dueCountAtFirstOpen: number): Promise<RecordReviewDayStat> => {
+      const stat = await storage.ensureRecordReviewDay(date, dueCountAtFirstOpen);
+      await refresh();
+      return stat;
+    },
+    [refresh],
+  );
 
   const createRecordBlock = useCallback(
     async (date = todayISO(), subject?: Subject, contentHtml = "<p></p>") => {
@@ -407,6 +494,10 @@ export const useAppData = () => {
     assets,
     settings,
     deletedRecords,
+    recordReviews,
+    dueRecordReviews,
+    recordReviewLogs,
+    recordReviewStats,
     subjects,
     activeSubjects,
     todayEntry,
@@ -424,6 +515,12 @@ export const useAppData = () => {
     getRecordDraft,
     saveRecordDraft,
     deleteRecordDraft,
+    addRecordToReview,
+    addRecordsToReview,
+    rateRecordReview,
+    resetRecordReview,
+    removeRecordFromReview,
+    ensureRecordReviewDay,
     addRichTextBlock,
     createRecordBlock,
     addTemplate,

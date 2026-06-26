@@ -1,7 +1,7 @@
 import type { EntityId, Subject } from "../types";
 
-export type TabKey = "today" | "journal" | "categories" | "recordings" | "more";
-export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | "backup" | "aiTools" | null;
+export type TabKey = "today" | "journal" | "categories" | "review" | "more";
+export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | "backup" | "aiTools" | "recordings" | null;
 
 export type RecordTabState = {
   recordId?: string;
@@ -22,14 +22,18 @@ export type TabMemory = {
     activeSubject: Subject | null;
     managing: boolean;
   };
-  recordings: RecordTabState & {
-    selectedSubject?: Subject;
-    playerAssetId?: EntityId;
-    query: string;
-    searchOpen: boolean;
+  review: {
+    queueIds: EntityId[];
+    currentRecordId?: EntityId;
   };
   more: RecordTabState & {
     subRoute: MoreSubRoute;
+    recordingsState: {
+      selectedSubject?: Subject;
+      playerAssetId?: EntityId;
+      query: string;
+      searchOpen: boolean;
+    };
   };
 };
 
@@ -44,12 +48,15 @@ export const createInitialTabMemory = (): TabMemory => ({
     activeSubject: null,
     managing: false,
   },
-  recordings: {
-    query: "",
-    searchOpen: false,
+  review: {
+    queueIds: [],
   },
   more: {
     subRoute: null,
+    recordingsState: {
+      query: "",
+      searchOpen: false,
+    },
   },
 });
 
@@ -61,8 +68,8 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
       return memory.journal.recordId ? 2 : memory.journal.searchOpen || memory.journal.selectedDate ? 1 : 0;
     case "categories":
       return memory.categories.recordId ? 2 : memory.categories.activeSubject || memory.categories.managing ? 1 : 0;
-    case "recordings":
-      return memory.recordings.playerAssetId ? 2 : memory.recordings.searchOpen || memory.recordings.selectedSubject ? 1 : 0;
+    case "review":
+      return 0;
     case "more":
       return memory.more.recordId ? 2 : memory.more.subRoute ? 1 : 0;
   }
@@ -76,8 +83,8 @@ export const getRecordState = (tab: TabKey, memory: TabMemory): RecordTabState =
       return memory.journal;
     case "categories":
       return memory.categories;
-    case "recordings":
-      return memory.recordings;
+    case "review":
+      return {};
     case "more":
       return memory.more;
   }
@@ -124,28 +131,10 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
         ...memory,
         categories: { ...memory.categories, activeSubject: null, managing: false },
       };
-    case "recordings":
-      if (memory.recordings.playerAssetId) {
-        return {
-          ...memory,
-          recordings: { ...memory.recordings, playerAssetId: undefined },
-        };
-      }
-      if (memory.recordings.searchOpen) {
-        return {
-          ...memory,
-          recordings: { ...memory.recordings, searchOpen: false },
-        };
-      }
+    case "review":
       return {
         ...memory,
-        recordings: {
-          ...memory.recordings,
-          selectedSubject: undefined,
-          recordId: undefined,
-          highlightAssetId: undefined,
-          recordEditing: undefined,
-        },
+        review: { ...memory.review },
       };
     case "more":
       if (memory.more.recordId) {

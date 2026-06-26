@@ -5,6 +5,7 @@ import {
   BarChart3,
   BrainCircuit,
   CalendarDays,
+  CalendarCheck,
   ClipboardCheck,
   Home,
   Layers,
@@ -19,6 +20,7 @@ import { JournalPage } from "./pages/JournalPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { SearchPage } from "./pages/SearchPage";
 import { RecordingsPage } from "./pages/RecordingsPage";
+import { ReviewPage } from "./pages/ReviewPage";
 import { StatsPage } from "./pages/StatsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { RecordEditorPage } from "./pages/RecordEditorPage";
@@ -107,7 +109,8 @@ const navItems: Array<{ tab: TabKey; subRoute?: Exclude<MoreSubRoute, null>; lab
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
   { tab: "categories", label: "分类", icon: Layers },
-  { tab: "recordings", label: "录音", icon: Mic2 },
+  { tab: "review", label: "复习", icon: CalendarCheck },
+  { tab: "more", subRoute: "recordings", label: "录音", icon: Mic2 },
   { tab: "more", subRoute: "ai", label: "AI问答", icon: BrainCircuit },
   { tab: "more", subRoute: "stats", label: "统计", icon: BarChart3 },
   { tab: "more", subRoute: "settings", label: "设置", icon: Settings },
@@ -117,7 +120,7 @@ const bottomNavItems: Array<{ tab: TabKey; label: string; icon: typeof Home }> =
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
   { tab: "categories", label: "分类", icon: Layers },
-  { tab: "recordings", label: "录音", icon: Mic2 },
+  { tab: "review", label: "复习", icon: CalendarCheck },
   { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
 
@@ -126,6 +129,7 @@ export const App = () => {
   const [tabMemory, setTabMemory] = useState<TabMemory>(() => createInitialTabMemory());
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
   const [backToast, setBackToast] = useState("");
+  const [reviewToast, setReviewToast] = useState("");
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
   const app = useAppData();
@@ -219,6 +223,21 @@ export const App = () => {
   }, [app.settings]);
 
   useEffect(() => {
+    if (!app.initialized || app.dueRecordReviews.length === 0) {
+      return;
+    }
+    const key = "study-journal-review-toast-date";
+    const today = new Date().toISOString().slice(0, 10);
+    if (localStorage.getItem(key) === today) {
+      return;
+    }
+    localStorage.setItem(key, today);
+    setReviewToast(`今天有 ${app.dueRecordReviews.length} 条笔记待复习`);
+    const timer = window.setTimeout(() => setReviewToast(""), 4200);
+    return () => window.clearTimeout(timer);
+  }, [app.dueRecordReviews.length, app.initialized]);
+
+  useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return undefined;
     }
@@ -285,6 +304,21 @@ export const App = () => {
     () => getFavoriteRecords(app.blocks.filter((block): block is RecordBlock => block.type === "record")),
     [app.blocks],
   );
+  const recordReviewsByRecord = useMemo(
+    () => Object.fromEntries(app.recordReviews.map((review) => [review.recordId, review])),
+    [app.recordReviews],
+  );
+  const reviewLogsByRecord = useMemo(() => {
+    const grouped: Record<string, typeof app.recordReviewLogs> = {};
+    for (const log of app.recordReviewLogs) {
+      grouped[log.recordId] = [...(grouped[log.recordId] ?? []), log];
+    }
+    return grouped;
+  }, [app.recordReviewLogs]);
+  const recordTitlesById = useMemo(
+    () => Object.fromEntries(app.blocks.filter((block): block is RecordBlock => block.type === "record").map((record) => [record.id, record.title])),
+    [app.blocks],
+  );
 
   if (!app.initialized || !app.settings) {
     return (
@@ -316,10 +350,7 @@ export const App = () => {
       initialEditing={Boolean(currentRecordState.recordEditing)}
       onEditingChange={setCurrentRecordEditing}
       onBack={closeRecordInCurrentTab}
-      onSave={async (nextRecord) => {
-        await app.saveBlock(nextRecord);
-        closeRecordInCurrentTab();
-      }}
+      onSave={async (nextRecord) => app.saveBlock(nextRecord)}
       onDelete={async (recordId) => {
         await app.deleteBlock(recordId);
         closeRecordInCurrentTab();
@@ -333,6 +364,17 @@ export const App = () => {
       onGetDraft={app.getRecordDraft}
       onSaveDraft={app.saveRecordDraft}
       onDeleteDraft={app.deleteRecordDraft}
+      reviewState={recordReviewsByRecord[record.id]}
+      reviewLogs={reviewLogsByRecord[record.id] ?? []}
+      onAddToReview={async (recordId) => {
+        await app.addRecordToReview(recordId);
+      }}
+      onResetReview={async (recordId) => {
+        await app.resetRecordReview(recordId);
+      }}
+      onRemoveReview={async (recordId) => {
+        await app.removeRecordFromReview(recordId);
+      }}
     />
   );
 
@@ -343,7 +385,45 @@ export const App = () => {
 
     switch (tabMemory.more.subRoute) {
       case "stats":
-        return <StatsPage blocks={app.blocks} assets={app.assets} subjects={app.subjects} />;
+        return <StatsPage blocks={app.blocks} assets={app.assets} subjects={app.subjects} reviewStats={app.recordReviewStats} />;
+      case "recordings":
+        return (
+          <RecordingsPage
+            blocks={app.blocks}
+            assets={app.assets}
+            subjects={app.subjects}
+            selectedSubject={tabMemory.more.recordingsState.selectedSubject}
+            playerAssetId={tabMemory.more.recordingsState.playerAssetId}
+            query={tabMemory.more.recordingsState.query}
+            searchOpen={tabMemory.more.recordingsState.searchOpen}
+            onSelectedSubjectChange={(selectedSubject) =>
+              setTabMemory((current) => ({
+                ...current,
+                more: { ...current.more, recordingsState: { ...current.more.recordingsState, selectedSubject } },
+              }))
+            }
+            onPlayerChange={(playerAssetId) =>
+              setTabMemory((current) => ({
+                ...current,
+                more: { ...current.more, recordingsState: { ...current.more.recordingsState, playerAssetId } },
+              }))
+            }
+            onQueryChange={(query) =>
+              setTabMemory((current) => ({
+                ...current,
+                more: { ...current.more, recordingsState: { ...current.more.recordingsState, query } },
+              }))
+            }
+            onSearchOpenChange={(searchOpen) =>
+              setTabMemory((current) => ({
+                ...current,
+                more: { ...current.more, recordingsState: { ...current.more.recordingsState, searchOpen } },
+              }))
+            }
+            onRenameAudio={app.renameAssetTitle}
+            onDurationKnown={app.updateAssetDuration}
+          />
+        );
       case "settings":
         return (
           <SettingsPage
@@ -359,6 +439,8 @@ export const App = () => {
             onOpenRecord={(record) => openRecordInTab(record, "more")}
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+            reviewStatesByRecord={recordReviewsByRecord}
+            onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
           />
         );
       case "trash":
@@ -422,6 +504,7 @@ export const App = () => {
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenSettings={() => openMoreSubRoute("settings")}
             onOpenTrash={() => openMoreSubRoute("trash")}
+            onOpenRecordings={() => openMoreSubRoute("recordings")}
             settings={settings}
           />
         );
@@ -443,8 +526,13 @@ export const App = () => {
             onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
             onOpenFavorites={() => openMoreSubRoute("favorites")}
             onOpenRecord={(record) => openRecordInTab(record, "today")}
+            onOpenReview={() => switchTab("review")}
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+            reviewStatesByRecord={recordReviewsByRecord}
+            dueReviewStates={app.dueRecordReviews}
+            reviewTitlesByRecord={recordTitlesById}
+            onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
           />
         );
       case "journal":
@@ -494,6 +582,12 @@ export const App = () => {
             }
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+            reviewStatesByRecord={recordReviewsByRecord}
+            onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
+            onAddManyToReview={async (recordIds) => {
+              const result = await app.addRecordsToReview(recordIds);
+              return `成功加入 ${result.added} 条，重置 ${result.reset} 条，跳过 ${result.skippedActive} 条已在复习中的记录。`;
+            }}
           />
         );
       case "categories":
@@ -517,32 +611,29 @@ export const App = () => {
             onRenameSubject={app.renameSubject}
             onSaveSubjects={app.saveSubjects}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
+            reviewStatesByRecord={recordReviewsByRecord}
+            onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
           />
         );
-      case "recordings":
+      case "review":
         return (
-          <RecordingsPage
-            blocks={app.blocks}
-            assets={app.assets}
-            subjects={app.subjects}
-            selectedSubject={tabMemory.recordings.selectedSubject}
-            playerAssetId={tabMemory.recordings.playerAssetId}
-            query={tabMemory.recordings.query}
-            searchOpen={tabMemory.recordings.searchOpen}
-            onSelectedSubjectChange={(selectedSubject) =>
-              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, selectedSubject } }))
+          <ReviewPage
+            records={app.blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt)}
+            dueReviews={app.dueRecordReviews}
+            stats={app.recordReviewStats}
+            queueIds={tabMemory.review.queueIds}
+            currentRecordId={tabMemory.review.currentRecordId}
+            onQueueChange={(queueIds) =>
+              setTabMemory((current) => ({ ...current, review: { ...current.review, queueIds } }))
             }
-            onPlayerChange={(playerAssetId) =>
-              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, playerAssetId } }))
+            onCurrentRecordChange={(currentRecordId) =>
+              setTabMemory((current) => ({ ...current, review: { ...current.review, currentRecordId } }))
             }
-            onQueryChange={(query) =>
-              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, query } }))
-            }
-            onSearchOpenChange={(searchOpen) =>
-              setTabMemory((current) => ({ ...current, recordings: { ...current.recordings, searchOpen } }))
-            }
-            onRenameAudio={app.renameAssetTitle}
-            onDurationKnown={app.updateAssetDuration}
+            onEnsureDay={app.ensureRecordReviewDay}
+            onRate={async (recordId, rating) => {
+              await app.rateRecordReview(recordId, rating);
+            }}
+            onRefresh={app.refresh}
           />
         );
       case "more":
@@ -559,8 +650,8 @@ export const App = () => {
     if (activeTab === "categories") {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.categories.managing ? "manage" : tabMemory.categories.activeSubject ?? "all"}`;
     }
-    if (activeTab === "recordings") {
-      return `${activeTab}-${depth}-${tabMemory.recordings.playerAssetId ?? "root"}-${tabMemory.recordings.selectedSubject ?? "all"}-${tabMemory.recordings.searchOpen ? "search" : "folders"}`;
+    if (activeTab === "review") {
+      return `${activeTab}-${depth}-${tabMemory.review.currentRecordId ?? "root"}-${tabMemory.review.queueIds.join(".")}`;
     }
     if (activeTab === "more") {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
@@ -620,6 +711,11 @@ export const App = () => {
           {backToast}
         </div>
       )}
+      {reviewToast && (
+        <div className="app-toast review-toast" role="status" aria-live="polite">
+          {reviewToast}
+        </div>
+      )}
       <nav className="bottom-nav">
         {bottomNavItems.map((item) => {
           const Icon = item.icon;
@@ -633,6 +729,9 @@ export const App = () => {
             >
               <Icon size={20} />
               <span>{item.label}</span>
+              {item.tab === "review" && app.dueRecordReviews.length > 0 && (
+                <b className="bottom-nav-badge">{app.dueRecordReviews.length}</b>
+              )}
             </button>
           );
         })}

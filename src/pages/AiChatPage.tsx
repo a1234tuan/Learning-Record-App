@@ -13,7 +13,6 @@ import {
   User,
   X,
 } from "lucide-react";
-import { Camera as CapacitorCamera, CameraResultType, CameraSource, MediaTypeSelection } from "@capacitor/camera";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -27,6 +26,7 @@ import { buildAiContextPack } from "../services/aiContextService";
 import { createAiImageAttachment, runLocalOcrForAiAttachment } from "../services/aiChatAttachmentService";
 import { createAiSessionForDate, createAiSessionFromExistingAttachment, titleFromFirstPrompt } from "../services/aiSessionService";
 import { DEFAULT_AI_MEMORY_TURNS, getCurrentAiProvider } from "../lib/aiProviders";
+import { pickNativeCameraImageFile, pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 
 interface AiChatPageProps {
   sessionId: string | null;
@@ -219,45 +219,15 @@ export const AiChatPage = ({
     setStatus(imageInputMode === "local-ocr" ? "图片已加入，发送时会先进行本地 OCR。" : "图片已加入。");
   };
 
-  const mediaResultToFile = async (media: { webPath?: string; format?: string; metadata?: { format?: string } }, prefix: string) => {
-    if (!media.webPath) {
-      return undefined;
-    }
-    const response = await fetch(media.webPath);
-    const blob = await response.blob();
-    const format = media.format ?? media.metadata?.format;
-    const extension = format ? `.${format}` : ".jpg";
-    return new File([blob], `${prefix}-${Date.now()}${extension}`, {
-      type: blob.type || `image/${format ?? "jpeg"}`,
-    });
-  };
-
-  const pickNativeImage = async (source: CameraSource) => {
-    const photo = await CapacitorCamera.getPhoto({
-      quality: 88,
-      resultType: CameraResultType.Uri,
-      source,
-    });
-    const file = await mediaResultToFile(photo, "ai-chat-image");
-    if (file) {
-      await addImageFile(file);
-    }
-  };
-
-  const pickNativeGalleryImage = async () => {
+  const pickNativeImage = async (picker: () => Promise<File | undefined>) => {
     try {
-      const result = await CapacitorCamera.chooseFromGallery({
-        mediaType: MediaTypeSelection.Photo,
-        allowMultipleSelection: false,
-        quality: 88,
-      });
-      const photo = result.results?.[0];
-      const file = photo ? await mediaResultToFile(photo, "ai-gallery-image") : undefined;
+      const file = await picker();
       if (file) {
         await addImageFile(file);
       }
-    } catch {
-      await pickNativeImage(CameraSource.Photos);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setStatus(`图片选择失败：${message}`);
     }
   };
 
@@ -536,10 +506,10 @@ export const AiChatPage = ({
               <div className="ai-image-actions">
                 {native ? (
                   <>
-                    <button type="button" className="icon-button" disabled={busy} onClick={() => void pickNativeImage(CameraSource.Camera)} aria-label="拍照上传">
+                    <button type="button" className="icon-button" disabled={busy} onClick={() => void pickNativeImage(() => pickNativeCameraImageFile("ai-camera-image"))} aria-label="拍照上传">
                       <Camera size={18} />
                     </button>
-                    <button type="button" className="icon-button" disabled={busy} onClick={() => void pickNativeGalleryImage()} aria-label="从相册上传">
+                    <button type="button" className="icon-button" disabled={busy} onClick={() => void pickNativeImage(() => pickNativeGalleryImageFile("ai-gallery-image"))} aria-label="从相册上传">
                       <ImagePlus size={18} />
                     </button>
                   </>

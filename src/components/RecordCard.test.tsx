@@ -11,22 +11,23 @@ const record: RecordBlock = {
   type: "record",
   date: "2026-06-01",
   order: 0,
-  subject: "OS",
-  title: "进程调度",
-  contentHtml: "<p>内容</p>",
+  subject: "操作系统",
+  title: "进程同步与互斥",
+  contentHtml: "<p>信号量机制实现</p>",
   assets: [],
   formulas: [],
   mistakeRefs: [],
 };
 
 describe("RecordCard", () => {
-  it("opens day-level AI without opening the record", () => {
+  it("keeps action buttons from opening the record", () => {
     const onOpen = vi.fn();
     const onAskAi = vi.fn();
 
     render(<RecordCard record={record} onOpen={onOpen} onAskAi={onAskAi} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "AI问答 2026-06-01" }));
+    const aiButton = screen.getByTitle("AI问答");
+    fireEvent.click(aiButton);
 
     expect(onAskAi).toHaveBeenCalledWith("2026-06-01");
     expect(onOpen).not.toHaveBeenCalled();

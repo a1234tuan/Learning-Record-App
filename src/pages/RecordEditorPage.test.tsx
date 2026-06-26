@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RecordBlock, SubjectConfig } from "../types";
@@ -18,8 +18,8 @@ const record: RecordBlock = {
   type: "record",
   date: "2026-06-21",
   order: 0,
-  subject: "数学",
-  title: "数学记录 1",
+  subject: "Math",
+  title: "Math note 1",
   contentHtml: "<p></p>",
   assets: [],
   formulas: [],
@@ -32,7 +32,7 @@ const subjects: SubjectConfig[] = [
     id: "subject-math",
     createdAt: stamp,
     updatedAt: stamp,
-    name: "数学",
+    name: "Math",
     order: 0,
   },
 ];
@@ -46,7 +46,7 @@ describe("RecordEditorPage", () => {
         record={record}
         initialEditing
         onBack={vi.fn()}
-        onSave={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(record)}
         onDelete={vi.fn()}
         onToggleFavorite={vi.fn()}
         onAddAsset={vi.fn()}
@@ -59,7 +59,33 @@ describe("RecordEditorPage", () => {
 
     await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
 
-    expect(screen.queryByLabelText("新增学科")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "数学" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create subject/i })).not.toBeInTheDocument();
+  });
+
+  it("switches to read-only after saving the record", async () => {
+    const onGetDraft = vi.fn().mockResolvedValue(undefined);
+    const onSave = vi.fn().mockResolvedValue(record);
+
+    render(
+      <RecordEditorPage
+        record={record}
+        initialEditing
+        onBack={vi.fn()}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        onToggleFavorite={vi.fn()}
+        onAddAsset={vi.fn()}
+        subjects={subjects}
+        onGetDraft={onGetDraft}
+        onSaveDraft={vi.fn()}
+        onDeleteDraft={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    fireEvent.click(screen.getAllByRole("button")[3]);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { name: "Math note 1" })).toBeInTheDocument();
   });
 });

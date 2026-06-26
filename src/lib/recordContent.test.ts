@@ -9,6 +9,12 @@ import {
   recordToPlainText,
   syncRecordRefsFromContent,
 } from "./recordContent";
+import {
+  createDefaultComparisonTable,
+  createDefaultStickyBoard,
+  createDefaultStructureDiagram,
+  serializeStructureData,
+} from "./recordStructureBlocks";
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -103,5 +109,59 @@ describe("recordContent", () => {
     expect(text.indexOf("树截图")).toBeLessThan(text.indexOf("第二段"));
     expect(markdown).toContain("![树截图](../assets/a1-tree.png)");
     expect(markdown).toContain("图片 OCR：二叉树遍历");
+  });
+  it("exports structure blocks to plain text and markdown", () => {
+    const diagram = createDefaultStructureDiagram();
+    expect(diagram.orientation).toBe("horizontal");
+    diagram.title = "File system layers";
+    diagram.chain[0] = {
+      ...diagram.chain[0],
+      title: "IO control",
+      body: "talks to devices",
+      note: "worker",
+      branches: [[{ ...diagram.chain[0], id: "branch-1", title: "device driver", body: "parallel path", branches: [] }]],
+    };
+    const comparison = createDefaultComparisonTable();
+    comparison.rows[0].cells[comparison.columns[0].id] = "logical file system";
+    comparison.rows[0].cells[comparison.columns[2].id] = "gatekeeper";
+    const sticky = createDefaultStickyBoard();
+    sticky.notes[0].text = "remember by role";
+
+    const structureRecord = {
+      ...record,
+      contentHtml: [
+        `<record-structure-diagram data-json='${serializeStructureData(diagram)}'></record-structure-diagram>`,
+        `<record-comparison-table data-json='${serializeStructureData(comparison)}'></record-comparison-table>`,
+        `<record-sticky-board data-json='${serializeStructureData(sticky)}'></record-sticky-board>`,
+      ].join(""),
+    };
+
+    const text = recordToPlainText(structureRecord);
+    const markdown = recordToLinearMarkdown(structureRecord);
+
+    expect(text).toContain("IO control");
+    expect(text).toContain("worker");
+    expect(text).toContain("gatekeeper");
+    expect(text).toContain("remember by role");
+    expect(markdown).toContain("### File system layers");
+    expect(markdown).toContain("分叉 1");
+    expect(markdown).toContain("| 概念 | 作用 | 类比 | 易错点 |");
+  });
+
+  it("exports collapse block content", () => {
+    const collapseRecord = {
+      ...record,
+      contentHtml:
+        '<record-collapse data-title="Recall first" data-summary="standard answer" data-default-open="false"><p>hidden detail</p><record-formula data-formula-id="fx" data-title="formula" data-latex="a=b"></record-formula></record-collapse>',
+    };
+
+    const text = recordToPlainText(collapseRecord);
+    const markdown = recordToLinearMarkdown(collapseRecord);
+
+    expect(text).toContain("Recall first");
+    expect(text).toContain("hidden detail");
+    expect(text).toContain("a=b");
+    expect(markdown).toContain("<details>");
+    expect(markdown).toContain("<summary>Recall first · standard answer</summary>");
   });
 });

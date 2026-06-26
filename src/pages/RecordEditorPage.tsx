@@ -1,15 +1,25 @@
-import { ArrowLeft, Edit3, FilePlus, ImagePlus, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Edit3, FilePlus, ImagePlus, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, RecordBlock, RecordDraft, Subject, SubjectConfig } from "../types";
+import type { Asset, RecordBlock, RecordDraft, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
+import { StructureInsertMenu } from "../components/StructureInsertMenu";
 import { newId } from "../lib/entity";
 import { nowISO } from "../lib/date";
+import { isNativePlatform } from "../lib/platform";
+import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
+import {
+  createDefaultComparisonTable,
+  createDefaultStickyBoard,
+  createDefaultStructureDiagram,
+  serializeStructureData,
+  type StructureBlockKind,
+} from "../lib/recordStructureBlocks";
 import {
   canUseNativeAudioRecorder,
   getNativeAudioRecordingStatus,
@@ -21,7 +31,7 @@ interface RecordEditorPageProps {
   initialEditing?: boolean;
   onEditingChange?: (editing: boolean) => void;
   onBack: () => void;
-  onSave: (record: RecordBlock) => Promise<void>;
+  onSave: (record: RecordBlock) => Promise<RecordBlock | void>;
   onDelete: (recordId: string) => Promise<void>;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => Promise<void> | void;
   onAddAsset: (file: File, kind: Asset["kind"], title?: string) => Promise<Asset>;
@@ -32,6 +42,11 @@ interface RecordEditorPageProps {
   onGetDraft: (recordId: string) => Promise<RecordDraft | undefined>;
   onSaveDraft: (draft: RecordDraft) => Promise<RecordDraft>;
   onDeleteDraft: (recordId: string) => Promise<void>;
+  reviewState?: RecordReviewState;
+  reviewLogs?: RecordReviewLog[];
+  onAddToReview?: (recordId: string) => Promise<void> | void;
+  onResetReview?: (recordId: string) => Promise<void> | void;
+  onRemoveReview?: (recordId: string) => Promise<void> | void;
 }
 
 const cloneRecord = (record: RecordBlock): RecordBlock =>
@@ -46,6 +61,32 @@ const escapeAttribute = (value: string): string =>
 
 const recordAssetHtml = (asset: Asset, kind: Asset["kind"], title: string): string =>
   `<record-asset data-asset-id="${escapeAttribute(asset.id)}" data-kind="${escapeAttribute(kind)}" data-title="${escapeAttribute(asset.title ?? title)}"></record-asset><p></p>`;
+
+const structureBlockNode = (kind: StructureBlockKind): Record<string, unknown> => {
+  switch (kind) {
+    case "diagram":
+      return {
+        type: "recordStructureDiagram",
+        attrs: { data: serializeStructureData(createDefaultStructureDiagram()) },
+      };
+    case "comparison":
+      return {
+        type: "recordComparisonTable",
+        attrs: { data: serializeStructureData(createDefaultComparisonTable()) },
+      };
+    case "sticky":
+      return {
+        type: "recordStickyBoard",
+        attrs: { data: serializeStructureData(createDefaultStickyBoard()) },
+      };
+    case "collapse":
+      return {
+        type: "recordCollapseBlock",
+        attrs: { title: "折叠块", summary: "", defaultOpen: false },
+        content: [{ type: "paragraph" }],
+      };
+  }
+};
 
 const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
   draft.title !== record.title ||
@@ -70,7 +111,13 @@ export const RecordEditorPage = ({
   onGetDraft,
   onSaveDraft,
   onDeleteDraft,
+  reviewState,
+  reviewLogs = [],
+  onAddToReview,
+  onResetReview,
+  onRemoveReview,
 }: RecordEditorPageProps) => {
+  const native = isNativePlatform();
   const [editing, setEditingState] = useState(initialEditing);
   const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
@@ -220,6 +267,18 @@ export const RecordEditorPage = ({
     scheduleDraftSave(nextDraft);
   }, [insertAfterCurrentBlock, onAddAsset, scheduleDraftSave]);
 
+  const pickNativeEditorImage = useCallback(async (editor: Editor) => {
+    try {
+      const file = await pickNativeGalleryImageFile("record-gallery-image");
+      if (file) {
+        await addAsset(editor, file, "image");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      window.alert(`图片选择失败：${message}`);
+    }
+  }, [addAsset]);
+
   const stopRecordingIntoDraft = useCallback(async () => {
     if (stoppingRecordingRef.current) {
       return stoppingRecordingRef.current;
@@ -283,15 +342,21 @@ export const RecordEditorPage = ({
 
   const save = async () => {
     setSaving(true);
-    if (saveTimerRef.current) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
+    try {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      await flushDraft();
+      const savedDraft = cloneRecord(draftRef.current);
+      initialEditingRef.current = false;
+      setEditing(false);
+      await onSave(savedDraft);
+      await onDeleteDraft(record.id);
+      setDraftRestored(false);
+    } finally {
+      setSaving(false);
     }
-    const savedDraft = cloneRecord(draftRef.current);
-    await onSave(savedDraft);
-    await onDeleteDraft(record.id);
-    setDraftRestored(false);
-    setSaving(false);
   };
 
   const discardDraft = async () => {
@@ -322,6 +387,16 @@ export const RecordEditorPage = ({
     await onToggleFavorite(record, !record.favorite);
   };
 
+  const reviewButtonText = reviewState?.status === "active"
+    ? `连续记住 ${reviewState.consecutiveRemembered}/5`
+    : reviewState?.status === "mastered"
+      ? "已掌握"
+      : "加入复习";
+
+  const addReview = async () => {
+    await onAddToReview?.(record.id);
+  };
+
   return (
     <main className="page record-editor-page">
       <section className="record-editor-topbar">
@@ -335,6 +410,21 @@ export const RecordEditorPage = ({
               <button type="button" className="secondary-button" onClick={() => void discardDraft()} disabled={saving}>
                 <RotateCcw size={17} />
                 丢弃草稿
+              </button>
+            )}
+            {onAddToReview && (
+              <button
+                type="button"
+                className={`secondary-button review-inline-button ${reviewState?.status === "active" ? "active" : ""}`}
+                onClick={() => {
+                  if (reviewState?.status !== "active") {
+                    void addReview();
+                  }
+                }}
+                disabled={saving}
+              >
+                <CalendarCheck size={17} />
+                {reviewButtonText}
               </button>
             )}
             <button
@@ -356,6 +446,20 @@ export const RecordEditorPage = ({
           </div>
         ) : (
           <div className="record-action-row">
+            {onAddToReview && (
+              <button
+                type="button"
+                className={`secondary-button review-inline-button ${reviewState?.status === "active" ? "active" : ""}`}
+                onClick={() => {
+                  if (reviewState?.status !== "active") {
+                    void addReview();
+                  }
+                }}
+              >
+                <CalendarCheck size={17} />
+                {reviewButtonText}
+              </button>
+            )}
             <button
               type="button"
               className={`icon-button ${record.favorite ? "active" : ""}`}
@@ -388,18 +492,24 @@ export const RecordEditorPage = ({
               editorRef.current = editor;
               return (
               <>
-                <label className="editor-file-button" title="图片">
-                  <ImagePlus size={16} />
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) void addAsset(editor, file, "image");
-                      event.target.value = "";
-                    }}
-                  />
-                </label>
+                {native ? (
+                  <button type="button" className="editor-file-button" title="图片" onClick={() => void pickNativeEditorImage(editor)}>
+                    <ImagePlus size={16} />
+                  </button>
+                ) : (
+                  <label className="editor-file-button" title="图片">
+                    <ImagePlus size={16} />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void addAsset(editor, file, "image");
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
                 <label className="editor-file-button" title="音频">
                   <Volume2 size={16} />
                   <input
@@ -436,6 +546,10 @@ export const RecordEditorPage = ({
                 >
                   <Pi size={16} />
                 </button>
+                <StructureInsertMenu
+                  compact
+                  onInsert={(kind) => insertAfterCurrentBlock(editor, structureBlockNode(kind))}
+                />
               </>
               );
             }}
@@ -457,6 +571,42 @@ export const RecordEditorPage = ({
             onAssetChanged={onAssetChanged}
             onAssetTitleChange={onAssetTitleChange}
           />
+          {(reviewState || reviewLogs.length > 0) && (
+            <section className="record-review-panel">
+              <details open>
+                <summary>复习进度</summary>
+                <div className="record-review-summary">
+                  <span>{reviewState?.status === "mastered" ? "已掌握" : reviewState?.status === "active" ? "复习中" : "未在队列中"}</span>
+                  <strong>连续记住 {reviewState?.consecutiveRemembered ?? 0}/5</strong>
+                  <small>累计复习 {reviewState?.totalReviews ?? reviewLogs.length} 次</small>
+                  {reviewState?.nextReviewDate && <small>下次复习：{reviewState.nextReviewDate}</small>}
+                </div>
+                <div className="record-review-actions">
+                  {onResetReview && (
+                    <button type="button" className="secondary-button" onClick={() => void onResetReview(record.id)}>
+                      <RotateCcw size={16} />
+                      重置复习
+                    </button>
+                  )}
+                  {onRemoveReview && reviewState?.status === "active" && (
+                    <button type="button" className="secondary-button danger" onClick={() => void onRemoveReview(record.id)}>
+                      移出复习队列
+                    </button>
+                  )}
+                </div>
+                {reviewLogs.length > 0 && (
+                  <div className="record-review-history">
+                    {reviewLogs.slice(0, 12).map((log) => (
+                      <article key={log.id}>
+                        <strong>{log.reviewedAt.slice(0, 10)} · {log.rating === "remembered" ? "记住了" : log.rating === "fuzzy" ? "模糊" : "忘了"}</strong>
+                        <small>间隔 {log.previousIntervalDays} 天 → {log.nextIntervalDays} 天</small>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </details>
+            </section>
+          )}
         </article>
       )}
     </main>

@@ -1,6 +1,6 @@
 import { Star } from "lucide-react";
 
-import type { RecordBlock } from "../types";
+import type { RecordBlock, RecordReviewState } from "../types";
 import { RecordCard } from "../components/RecordCard";
 import { PageHeader } from "../components/ui";
 import { getFavoriteRecords } from "../lib/journalSelectors";
@@ -10,9 +10,11 @@ interface FavoritesPageProps {
   onOpenRecord: (record: RecordBlock) => void;
   onAskAi?: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
+  reviewStatesByRecord?: Record<string, RecordReviewState>;
+  onAddToReview?: (recordId: string) => void;
 }
 
-export const FavoritesPage = ({ records, onOpenRecord, onAskAi, onToggleFavorite }: FavoritesPageProps) => {
+export const FavoritesPage = ({ records, onOpenRecord, onAskAi, onToggleFavorite, reviewStatesByRecord = {}, onAddToReview = () => undefined }: FavoritesPageProps) => {
   const favoriteRecords = getFavoriteRecords(records);
 
   return (
@@ -38,6 +40,8 @@ export const FavoritesPage = ({ records, onOpenRecord, onAskAi, onToggleFavorite
               onOpen={onOpenRecord}
               onAskAi={onAskAi}
               onToggleFavorite={(nextFavorite) => onToggleFavorite(record, nextFavorite)}
+              reviewState={reviewStatesByRecord[record.id]}
+              onAddReview={() => onAddToReview(record.id)}
             />
           ))
         )}

@@ -11,6 +11,12 @@ import cpp from "highlight.js/lib/languages/cpp";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
 import { RecordAssetNode, RecordFormulaNode } from "./RecordEditorNodes";
+import {
+  RecordCollapseBlockNode,
+  RecordComparisonTableNode,
+  RecordStickyBoardNode,
+  RecordStructureDiagramNode,
+} from "./RecordStructureNodes";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -49,6 +55,10 @@ export const RichTextEditor = ({
       TaskItem.configure({ nested: true }),
       RecordAssetNode.configure({ highlightedAssetId, onAssetChanged, onAssetTitleChange }),
       RecordFormulaNode,
+      RecordStructureDiagramNode,
+      RecordComparisonTableNode,
+      RecordStickyBoardNode,
+      RecordCollapseBlockNode,
       Placeholder.configure({
         placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心得...",
       }),

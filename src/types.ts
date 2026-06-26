@@ -6,6 +6,8 @@ export type Subject = string;
 export type MasteryStatus = "待复习" | "复习中" | "已掌握";
 export type Difficulty = 1 | 2 | 3 | 4 | 5;
 export type ReviewResult = "remembered" | "forgot";
+export type RecordReviewRating = "remembered" | "fuzzy" | "forgot";
+export type RecordReviewStatus = "active" | "mastered" | "removed";
 export type ExportKind = "full-backup" | "subject-markdown" | "knowledge-json" | "plain-text";
 
 export interface BaseEntity {
@@ -58,6 +60,61 @@ export interface RecordDraft {
   baseUpdatedAt: ISODateTime;
   draft: RecordBlock;
   updatedAt: ISODateTime;
+}
+
+export interface RecordReviewState extends BaseEntity {
+  recordId: EntityId;
+  status: RecordReviewStatus;
+  easeFactor: number;
+  repetition: number;
+  intervalDays: number;
+  nextReviewDate?: ISODate;
+  lastReviewDate?: ISODate;
+  lastReviewedAt?: ISODateTime;
+  consecutiveRemembered: number;
+  totalReviews: number;
+}
+
+export interface RecordReviewLog extends BaseEntity {
+  recordId: EntityId;
+  rating: RecordReviewRating;
+  reviewedAt: ISODateTime;
+  previousEaseFactor: number;
+  nextEaseFactor: number;
+  previousRepetition: number;
+  nextRepetition: number;
+  previousIntervalDays: number;
+  nextIntervalDays: number;
+  previousNextReviewDate?: ISODate;
+  nextReviewDate?: ISODate;
+}
+
+export interface RecordReviewDayStat extends BaseEntity {
+  date: ISODate;
+  dueCountAtFirstOpen: number;
+  reviewedCount: number;
+  rememberedCount: number;
+  fuzzyCount: number;
+  forgotCount: number;
+  completedAt?: ISODateTime;
+}
+
+export interface RecordReviewBulkResult {
+  added: number;
+  reset: number;
+  skippedActive: number;
+}
+
+export interface RecordReviewStats {
+  activeCount: number;
+  masteredCount: number;
+  dueCount: number;
+  overdueCount: number;
+  totalReviews: number;
+  streakDays: number;
+  todayStat?: RecordReviewDayStat;
+  dayStats: RecordReviewDayStat[];
+  masteryTrend: Array<{ date: ISODate; rememberedRate: number; reviewedCount: number }>;
 }
 
 export interface RichTextBlock extends BaseEntity {
@@ -352,12 +409,12 @@ export interface AppSettings {
   subjects?: SubjectConfig[];
   autoBackup?: AutoBackupSettings;
   ai?: AiProviderConfig;
-  schemaVersion?: 1 | 2 | 3;
+  schemaVersion?: 1 | 2 | 3 | 4;
 }
 
 export interface BackupManifest {
   format: "408-study-journal" | "study-journal";
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   exportedAt: ISODateTime;
   appVersion: string;
   counts: {
@@ -368,6 +425,9 @@ export interface BackupManifest {
     tags: number;
     reviews: number;
     studySessions: number;
+    recordReviews?: number;
+    recordReviewLogs?: number;
+    recordReviewDayStats?: number;
   };
 }
 
@@ -379,6 +439,9 @@ export interface BackupPayload {
   mistakes: MistakeCard[];
   tags: Tag[];
   reviews: ReviewSchedule[];
+  recordReviews?: RecordReviewState[];
+  recordReviewLogs?: RecordReviewLog[];
+  recordReviewDayStats?: RecordReviewDayStat[];
   studySessions: StudySession[];
   settings: AppSettings;
 }
@@ -447,6 +510,17 @@ export interface StorageAdapter {
   listRecordDrafts(): Promise<RecordDraft[]>;
   saveRecordDraft(draft: RecordDraft): Promise<RecordDraft>;
   deleteRecordDraft(recordId: EntityId): Promise<void>;
+  listRecordReviews(): Promise<RecordReviewState[]>;
+  getRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
+  listDueRecordReviews(date: ISODate): Promise<RecordReviewState[]>;
+  addRecordToReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
+  addRecordsToReview(recordIds: EntityId[]): Promise<RecordReviewBulkResult>;
+  rateRecordReview(recordId: EntityId, rating: RecordReviewRating, reviewedAt?: ISODateTime): Promise<RecordReviewState | undefined>;
+  resetRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
+  removeRecordFromReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
+  listRecordReviewLogs(recordId?: EntityId): Promise<RecordReviewLog[]>;
+  getRecordReviewStats(date?: ISODate): Promise<RecordReviewStats>;
+  ensureRecordReviewDay(date: ISODate, dueCountAtFirstOpen: number): Promise<RecordReviewDayStat>;
   deleteBlock(blockId: EntityId): Promise<void>;
   listDeletedBlocks(): Promise<RecordBlock[]>;
   restoreBlock(blockId: EntityId): Promise<RecordBlock | undefined>;

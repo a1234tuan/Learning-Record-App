@@ -141,7 +141,7 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
   if (
     !data.manifest ||
     !["408-study-journal", "study-journal"].includes(data.manifest.format) ||
-    ![1, 2, 3].includes(data.manifest.version)
+    ![1, 2, 3, 4].includes(data.manifest.version)
   ) {
     const format = data.manifest?.format ?? "未知";
     const version = data.manifest?.version ?? "未知";
@@ -176,8 +176,11 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
       mistakes: [],
       tags: data.tags ?? [],
       reviews: [],
+      recordReviews: data.recordReviews ?? [],
+      recordReviewLogs: data.recordReviewLogs ?? [],
+      recordReviewDayStats: data.recordReviewDayStats ?? [],
       studySessions: data.studySessions ?? [],
-      settings: ensureSettingsSubjects({ ...data.settings, schemaVersion: 3 }, recordBlocks),
+      settings: ensureSettingsSubjects({ ...data.settings, schemaVersion: 4 }, recordBlocks),
     },
     assets,
   };

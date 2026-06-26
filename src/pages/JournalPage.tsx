@@ -1,7 +1,7 @@
-import { useMemo } from "react";
-import { Search } from "lucide-react";
+import { useMemo, useState } from "react";
+import { CheckSquare, Search, Square, X } from "lucide-react";
 
-import type { Block, RecordBlock, Subject, SubjectConfig } from "../types";
+import type { Block, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { MonthlyHeatmap } from "../components/MonthlyHeatmap";
 import { DayLogCard } from "../components/DayLogCard";
 import { RecordCard } from "../components/RecordCard";
@@ -21,6 +21,9 @@ interface JournalPageProps {
   onOpenSearch: () => void;
   onAskAi: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
+  reviewStatesByRecord?: Record<string, RecordReviewState>;
+  onAddToReview?: (recordId: string) => void;
+  onAddManyToReview?: (recordIds: string[]) => Promise<string> | string;
 }
 
 export const JournalPage = ({
@@ -36,13 +39,32 @@ export const JournalPage = ({
   onOpenSearch,
   onAskAi,
   onToggleFavorite,
+  reviewStatesByRecord = {},
+  onAddToReview = () => undefined,
+  onAddManyToReview = () => "",
 }: JournalPageProps) => {
+  const [selecting, setSelecting] = useState(false);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [batchMessage, setBatchMessage] = useState("");
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const dates = useMemo(() => getRecordDatesForMonth(records, month), [month, records]);
 
   const subjectRecords = selectedDate && selectedSubject
     ? getRecordsForDateSubject(records, selectedDate, selectedSubject)
     : [];
+
+  const toggleSelected = (recordId: string) => {
+    setSelectedRecordIds((current) =>
+      current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId],
+    );
+  };
+
+  const addSelected = async () => {
+    const message = await onAddManyToReview(selectedRecordIds);
+    setBatchMessage(message);
+    setSelectedRecordIds([]);
+    setSelecting(false);
+  };
 
   return (
     <main className="page journal-page">
@@ -71,21 +93,51 @@ export const JournalPage = ({
 
       {selectedDate && selectedSubject ? (
         <section className="record-list-panel page-section-transition">
-          <button type="button" className="subtle-button" onClick={() => onSelectedSubjectChange(undefined)}>
-            返回学科列表
-          </button>
+          <div className="record-list-panel-header">
+            <button type="button" className="subtle-button" onClick={() => onSelectedSubjectChange(undefined)}>
+              返回学科列表
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                setSelecting(!selecting);
+                setSelectedRecordIds([]);
+              }}
+            >
+              {selecting ? <X size={17} /> : <CheckSquare size={17} />}
+              {selecting ? "取消" : "选择"}
+            </button>
+          </div>
           <h2>{selectedDate} / {selectedSubject}</h2>
+          {batchMessage && <p className="status-message">{batchMessage}</p>}
           <div className="record-list">
             {subjectRecords.map((record) => (
-              <RecordCard
-                key={record.id}
-                record={record}
-                onOpen={onOpenRecord}
-                onAskAi={onAskAi}
-                onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
-              />
+              <div key={record.id} className={`selectable-record-row ${selectedRecordIds.includes(record.id) ? "selected" : ""}`}>
+                {selecting && (
+                  <button type="button" className="record-select-button" onClick={() => toggleSelected(record.id)} aria-label="选择记录">
+                    {selectedRecordIds.includes(record.id) ? <CheckSquare size={18} /> : <Square size={18} />}
+                  </button>
+                )}
+                <RecordCard
+                  record={record}
+                  onOpen={selecting ? () => toggleSelected(record.id) : onOpenRecord}
+                  onAskAi={selecting ? undefined : onAskAi}
+                  onToggleFavorite={selecting ? undefined : (favorite) => onToggleFavorite(record, favorite)}
+                  reviewState={reviewStatesByRecord[record.id]}
+                  onAddReview={selecting ? undefined : () => onAddToReview(record.id)}
+                />
+              </div>
             ))}
           </div>
+          {selecting && (
+            <div className="batch-review-bar">
+              <span>已选 {selectedRecordIds.length} 条</span>
+              <button type="button" className="primary-button" onClick={() => void addSelected()} disabled={selectedRecordIds.length === 0}>
+                加入复习
+              </button>
+            </div>
+          )}
         </section>
       ) : (
         <>

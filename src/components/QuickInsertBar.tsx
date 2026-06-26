@@ -10,10 +10,12 @@ import {
   Plus,
   Timer,
 } from "lucide-react";
-import { Camera as CapacitorCamera, CameraResultType, CameraSource } from "@capacitor/camera";
 
 import type { Subject } from "../types";
 import { isNativePlatform } from "../lib/platform";
+import { pickNativeCameraImageFile, pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
+import type { StructureBlockKind } from "../lib/recordStructureBlocks";
+import { StructureInsertMenu } from "./StructureInsertMenu";
 
 interface QuickInsertBarProps {
   onText: () => void;
@@ -23,6 +25,7 @@ interface QuickInsertBarProps {
   onFormula: () => void;
   onCode: () => void;
   onQuote: () => void;
+  onStructureBlock?: (kind: StructureBlockKind) => void;
   onImage: (file: File) => void;
   onAttachment: (file: File) => void;
 }
@@ -35,26 +38,21 @@ export const QuickInsertBar = ({
   onFormula,
   onCode,
   onQuote,
+  onStructureBlock,
   onImage,
   onAttachment,
 }: QuickInsertBarProps) => {
   const native = isNativePlatform();
-  const pickNativeImage = async (source: CameraSource) => {
-    const photo = await CapacitorCamera.getPhoto({
-      quality: 88,
-      resultType: CameraResultType.Uri,
-      source,
-    });
-    if (!photo.webPath) {
-      return;
+  const pickNativeImage = async (picker: () => Promise<File | undefined>) => {
+    try {
+      const file = await picker();
+      if (file) {
+        onImage(file);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      window.alert(`图片选择失败：${message}`);
     }
-    const response = await fetch(photo.webPath);
-    const blob = await response.blob();
-    const extension = photo.format ? `.${photo.format}` : ".jpg";
-    const file = new File([blob], `study-image-${Date.now()}${extension}`, {
-      type: blob.type || `image/${photo.format ?? "jpeg"}`,
-    });
-    onImage(file);
   };
 
   return (
@@ -87,13 +85,14 @@ export const QuickInsertBar = ({
       <MessageSquareQuote size={18} />
       <span>引用</span>
     </button>
+    {onStructureBlock && <StructureInsertMenu onInsert={onStructureBlock} />}
     {native ? (
       <>
-        <button type="button" title="拍照" onClick={() => void pickNativeImage(CameraSource.Camera)}>
+        <button type="button" title="拍照" onClick={() => void pickNativeImage(() => pickNativeCameraImageFile("study-camera-image"))}>
           <Camera size={18} />
           <span>拍照</span>
         </button>
-        <button type="button" title="相册" onClick={() => void pickNativeImage(CameraSource.Photos)}>
+        <button type="button" title="相册" onClick={() => void pickNativeImage(() => pickNativeGalleryImageFile("study-gallery-image"))}>
           <ImagePlus size={18} />
           <span>相册</span>
         </button>

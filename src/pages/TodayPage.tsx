@@ -1,7 +1,7 @@
-import { CalendarClock, Plus, Star } from "lucide-react";
+import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
-import type { Block, DayEntry, RecordBlock, Subject, SubjectConfig } from "../types";
+import type { Block, DayEntry, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
@@ -17,8 +17,13 @@ interface TodayPageProps {
   onCreateRecord: (date: string, subject: Subject) => Promise<RecordBlock>;
   onOpenFavorites: () => void;
   onOpenRecord: (record: RecordBlock) => void;
+  onOpenReview?: () => void;
   onAskAi?: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
+  reviewStatesByRecord?: Record<string, RecordReviewState>;
+  dueReviewStates?: RecordReviewState[];
+  reviewTitlesByRecord?: Record<string, string>;
+  onAddToReview?: (recordId: string) => void;
 }
 
 export const TodayPage = ({
@@ -30,8 +35,13 @@ export const TodayPage = ({
   onCreateRecord,
   onOpenFavorites,
   onOpenRecord,
+  onOpenReview = () => undefined,
   onAskAi,
   onToggleFavorite,
+  reviewStatesByRecord = {},
+  dueReviewStates = [],
+  reviewTitlesByRecord = {},
+  onAddToReview = () => undefined,
 }: TodayPageProps) => {
   const [subject, setSubject] = useState<Subject>(() =>
     subjects.find((item) => !item.archivedAt)?.name ??
@@ -39,6 +49,9 @@ export const TodayPage = ({
   );
   const countdown = daysUntil(examDate);
   const records = blocks.filter((block): block is RecordBlock => block.type === "record");
+  const todayDue = dueReviewStates.filter((review) => review.nextReviewDate === todayISO());
+  const overdue = dueReviewStates.filter((review) => review.nextReviewDate && review.nextReviewDate < todayISO());
+  const previewDue = dueReviewStates.slice(0, 3).map((review) => reviewTitlesByRecord[review.recordId]).filter(Boolean);
 
   return (
     <main className="page today-page">
@@ -78,6 +91,22 @@ export const TodayPage = ({
         </SurfaceCard>
       </section>
 
+      {dueReviewStates.length > 0 && (
+        <section className="review-due-banner">
+          <div>
+            <CalendarCheck size={22} />
+            <span>
+              <strong>今天有 {todayDue.length} 条待复习</strong>
+              {overdue.length > 0 && <small>另有 {overdue.length} 条已过期</small>}
+            </span>
+          </div>
+          {previewDue.length > 0 && <p>{previewDue.join("、")}</p>}
+          <button type="button" className="primary-button" onClick={onOpenReview}>
+            开始复习
+          </button>
+        </section>
+      )}
+
       {entry && (
         <section className="entry-meta-panel">
           <input
@@ -102,6 +131,8 @@ export const TodayPage = ({
               onOpen={onOpenRecord}
               onAskAi={onAskAi}
               onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+              reviewState={reviewStatesByRecord[record.id]}
+              onAddReview={() => onAddToReview(record.id)}
             />
           ))
         )}

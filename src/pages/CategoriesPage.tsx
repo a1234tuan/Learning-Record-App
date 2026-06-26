@@ -1,7 +1,7 @@
 import { Archive, ArrowDown, ArrowLeft, ArrowUp, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { Block, RecordBlock, Subject, SubjectConfig } from "../types";
+import type { Block, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { formatChineseDate, nowISO } from "../lib/date";
 import {
   getRecordBlocks,
@@ -23,6 +23,8 @@ interface CategoriesPageProps {
   onRenameSubject: (oldName: Subject, newName: Subject) => Promise<void>;
   onSaveSubjects: (subjects: SubjectConfig[]) => Promise<void>;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
+  reviewStatesByRecord?: Record<string, RecordReviewState>;
+  onAddToReview?: (recordId: string) => void;
 }
 
 export const CategoriesPage = ({
@@ -38,6 +40,8 @@ export const CategoriesPage = ({
   onRenameSubject,
   onSaveSubjects,
   onToggleFavorite,
+  reviewStatesByRecord = {},
+  onAddToReview = () => undefined,
 }: CategoriesPageProps) => {
   const [newSubject, setNewSubject] = useState("");
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
@@ -233,6 +237,8 @@ export const CategoriesPage = ({
                     onOpen={onOpenRecord}
                     onAskAi={onAskAi}
                     onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                    reviewState={reviewStatesByRecord[record.id]}
+                    onAddReview={() => onAddToReview(record.id)}
                   />
                 </div>
               ))}
