@@ -18,7 +18,7 @@ const options: Array<{ kind: StructureBlockKind; label: string; description: str
 ];
 
 const POPOVER_WIDTH = 260;
-const POPOVER_HEIGHT = 264;
+const POPOVER_ESTIMATED_HEIGHT = 264;
 
 export const StructureInsertMenu = ({ onInsert, compact = false }: StructureInsertMenuProps) => {
   const [open, setOpen] = useState(false);
@@ -37,7 +37,7 @@ export const StructureInsertMenu = ({ onInsert, compact = false }: StructureInse
       height: window.innerHeight,
     }, {
       width: POPOVER_WIDTH,
-      height: POPOVER_HEIGHT,
+      height: popoverRef.current?.offsetHeight ?? POPOVER_ESTIMATED_HEIGHT,
       align: compact ? "right" : "left",
     }));
   }, [compact]);
@@ -50,7 +50,10 @@ export const StructureInsertMenu = ({ onInsert, compact = false }: StructureInse
   useLayoutEffect(() => {
     if (open) {
       updatePosition();
+      const frame = window.requestAnimationFrame(updatePosition);
+      return () => window.cancelAnimationFrame(frame);
     }
+    return undefined;
   }, [open, updatePosition]);
 
   useEffect(() => {

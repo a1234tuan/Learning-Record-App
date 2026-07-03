@@ -59,22 +59,24 @@ export const TodayPage = ({
         eyebrow={formatChineseDate(todayISO())}
         title="今天"
         subtitle="把正在发生的学习留下来。文字、截图、公式和录音，都可以自然地放进同一个记录块。"
+        density="compact"
         actions={(
-          <button type="button" className="icon-button" onClick={onOpenFavorites} title="收藏夹" aria-label="打开收藏夹">
-            <Star size={18} />
-          </button>
+          <>
+            <div className="today-goal-pill" title="距离目标" aria-label={`距离目标 ${countdown >= 0 ? `${countdown} 天` : "已结束"}`}>
+              <CalendarClock size={16} />
+              <span>距离目标</span>
+              <strong>{countdown >= 0 ? `${countdown} 天` : "已结束"}</strong>
+            </div>
+            <button type="button" className="icon-button" onClick={onOpenFavorites} title="收藏夹" aria-label="打开收藏夹">
+              <Star size={18} />
+            </button>
+          </>
         )}
       />
 
       <section className="today-workbench">
-        <SurfaceCard className="today-goal-card" variant="raised">
-          <CalendarClock size={20} />
-          <span>距离目标</span>
-          <strong>{countdown >= 0 ? `${countdown} 天` : "已结束"}</strong>
-        </SurfaceCard>
-
         <SurfaceCard className="new-record-panel" variant="raised">
-          <div>
+          <div className="new-record-copy">
             <p className="eyebrow">New Record</p>
             <h2>新建学习记录</h2>
             <p>先选择学科，再进入像笔记页一样的线性编辑器。</p>

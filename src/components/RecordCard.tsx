@@ -2,6 +2,7 @@ import { BrainCircuit, FileText, RefreshCw, Star } from "lucide-react";
 
 import type { RecordBlock, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
+import { isReviewDueOn } from "../lib/reviewScheduler";
 
 interface RecordCardProps {
   record: RecordBlock;
@@ -15,14 +16,14 @@ interface RecordCardProps {
 const reviewLabel = (review?: RecordReviewState): string => {
   if (!review || review.status === "removed") return "加入复习";
   if (review.status === "mastered") return "已掌握";
-  if (review.nextReviewDate && review.nextReviewDate <= todayISO()) return "待复习";
+  if (isReviewDueOn(review, todayISO())) return "待复习";
   return review.nextReviewDate ? `下次 ${review.nextReviewDate.slice(5)}` : "复习中";
 };
 
 const compactReviewLabel = (review?: RecordReviewState): string => {
   if (!review || review.status === "removed") return "加入";
   if (review.status === "mastered") return "掌握";
-  if (review.nextReviewDate && review.nextReviewDate <= todayISO()) return "复习";
+  if (isReviewDueOn(review, todayISO())) return "复习";
   return review.nextReviewDate ? review.nextReviewDate.slice(5) : "复习";
 };
 
@@ -31,7 +32,7 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
   const formulaText = record.formulas.length > 0 ? `${record.formulas.length} 个公式` : "无公式";
   const canAddReview = onAddReview && (!reviewState || reviewState.status === "removed" || reviewState.status === "mastered");
   const reviewActive = reviewState?.status === "active";
-  const reviewDue = reviewActive && reviewState.nextReviewDate && reviewState.nextReviewDate <= todayISO();
+  const reviewDue = isReviewDueOn(reviewState, todayISO());
 
   return (
     <article className="record-card">

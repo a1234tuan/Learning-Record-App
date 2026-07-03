@@ -532,6 +532,7 @@ export interface KnowledgeRecord {
   subject: Subject;
   title: string;
   contentText: string;
+  contentMarkdown: string;
   formulas: string[];
   assetTexts: string[];
   ocrTexts: string[];

@@ -164,4 +164,20 @@ describe("recordContent", () => {
     expect(markdown).toContain("<details>");
     expect(markdown).toContain("<summary>Recall first · standard answer</summary>");
   });
+
+  it("exports highlight block content as searchable text and markdown", () => {
+    const highlightRecord = {
+      ...record,
+      contentHtml:
+        '<p>前文</p><record-highlight-block data-tone="pink"><p><strong>重点结论</strong></p><ul><li>可搜索</li></ul></record-highlight-block><p>后文</p>',
+    };
+
+    const text = recordToPlainText(highlightRecord);
+    const markdown = recordToLinearMarkdown(highlightRecord);
+
+    expect(text).toContain("重点结论");
+    expect(text).toContain("可搜索");
+    expect(markdown).toContain("浅粉色高亮");
+    expect(markdown).toContain("> 重点结论");
+  });
 });

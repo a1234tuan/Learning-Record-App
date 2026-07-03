@@ -5,6 +5,7 @@ export type LinearNode =
   | { kind: "text"; text: string }
   | { kind: "asset"; ref: RecordAssetRef; asset?: Asset; ocrText?: string }
   | { kind: "formula"; formula: RecordFormula }
+  | { kind: "highlight"; text: string; markdown: string }
   | { kind: "structure"; text: string; markdown: string };
 
 const escapeHtml = (value: string): string =>
@@ -44,7 +45,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|structure-diagram|comparison-table|sticky-board|collapse)\b/i.test(contentHtml);
+  /<record-(asset|formula|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -162,6 +163,26 @@ const collapseElementMarkdown = (element: Element, assetMap: Map<string, Asset>)
   return [`<details${open}>`, `<summary>${[title, summary].filter(Boolean).join(" · ")}</summary>`, "", body, "</details>"].join("\n");
 };
 
+const highlightToneLabel = (tone: string | null): string => {
+  switch (tone) {
+    case "yellow":
+      return "浅黄色高亮";
+    case "pink":
+      return "浅粉色高亮";
+    default:
+      return "浅绿色高亮";
+  }
+};
+
+const highlightElementText = (element: Element): string =>
+  decodeHtml(stripHtml(element.innerHTML));
+
+const highlightElementMarkdown = (element: Element): string => {
+  const text = highlightElementText(element);
+  const lines = text.split("\n").filter(Boolean);
+  return [`> ${highlightToneLabel(element.getAttribute("data-tone"))}`, ...lines.map((line) => `> ${line}`)].join("\n");
+};
+
 export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = []): LinearNode[] => {
   const contentHtml = normalizeRecordContent(record);
   const doc = parseElement(contentHtml);
@@ -214,6 +235,14 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
         });
         continue;
       }
+      if (tag === "record-highlight-block") {
+        nodes.push({
+          kind: "highlight",
+          text: highlightElementText(element),
+          markdown: highlightElementMarkdown(element),
+        });
+        continue;
+      }
     }
 
     const wrapper = document.createElement("div");
@@ -239,6 +268,9 @@ export const recordToPlainText = (record: RecordBlock, assets: Asset[] = []): st
       if (node.kind === "structure") {
         return node.text;
       }
+      if (node.kind === "highlight") {
+        return node.text;
+      }
       const assetLabel = [node.ref.title, node.asset?.title, node.asset?.fileName].filter(Boolean).join(" / ");
       return [assetLabel, node.ocrText].filter(Boolean).join("\n");
     })
@@ -262,6 +294,9 @@ export const recordToLinearMarkdown = (record: RecordBlock, assets: Asset[] = []
         ].filter(Boolean).join("\n");
       }
       if (node.kind === "structure") {
+        return node.markdown;
+      }
+      if (node.kind === "highlight") {
         return node.markdown;
       }
       const assetName = node.asset?.fileName ?? node.ref.title;

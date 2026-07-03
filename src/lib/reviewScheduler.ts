@@ -21,6 +21,12 @@ export const qualityForRating = (rating: RecordReviewRating): number => {
   }
 };
 
+export const isReviewDueOn = (review: RecordReviewState | undefined, date: ISODate): boolean =>
+  review?.status === "active" &&
+  typeof review.nextReviewDate === "string" &&
+  review.nextReviewDate <= date &&
+  review.lastReviewDate !== date;
+
 export const nextEaseFactor = (easeFactor: number, quality: number): number => {
   const next = easeFactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
   return Math.max(MIN_REVIEW_EASE, Number(next.toFixed(4)));

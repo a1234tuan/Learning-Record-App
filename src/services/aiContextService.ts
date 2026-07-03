@@ -255,6 +255,26 @@ export const buildAiContextPack = (
         continue;
       }
 
+      if (node.kind === "highlight") {
+        const parts = splitText(node.text);
+        for (const [partIndex, part] of parts.entries()) {
+          allChunks.push({
+            chunkId: `${record.id}-highlight-${nodeIndex}-${partIndex + 1}`,
+            recordId: record.id,
+            date: record.date,
+            subject: record.subject,
+            title: record.title,
+            kind: "text",
+            content: part,
+            sourceLabel: `${record.subject} / ${record.title} / 高亮块${parts.length > 1 ? partIndex + 1 : ""}`,
+            order,
+          });
+          order += 1;
+        }
+        markdownLines.push(node.markdown, "");
+        continue;
+      }
+
       const kind = node.asset?.kind ?? node.ref.kind;
       const title = assetTitle(node.asset, node.ref.title);
       if (kind === "image") {

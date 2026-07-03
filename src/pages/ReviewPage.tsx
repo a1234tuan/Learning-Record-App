@@ -17,6 +17,7 @@ import { RichTextEditor } from "../components/RichTextEditor";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
 import { todayISO } from "../lib/date";
+import { isReviewDueOn } from "../lib/reviewScheduler";
 import type { ReviewMode } from "../lib/tabNavigation";
 
 interface ReviewPageProps {
@@ -48,8 +49,7 @@ const ratingConfig: Array<{ rating: RecordReviewRating; label: string; icon: typ
   { rating: "forgot", label: "忘记了", icon: XCircle, className: "forgot" },
 ];
 
-const isDueReview = (review: RecordReviewState | undefined, today: string) =>
-  review?.status === "active" && typeof review.nextReviewDate === "string" && review.nextReviewDate <= today;
+const isDueReview = (review: RecordReviewState | undefined, today: string) => isReviewDueOn(review, today);
 
 const reviewStatusLabel = (review: RecordReviewState | undefined, today: string) => {
   if (!review) return "新卡";
@@ -114,9 +114,16 @@ export const ReviewPage = ({
   const [filter, setFilter] = useState<ReviewCardFilter>("all");
   const [subjectFilter, setSubjectFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
+  const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
+  const [ratingError, setRatingError] = useState("");
   const today = todayISO();
   const reviewMap = useMemo(() => new Map(reviewStates.map((review) => [review.recordId, review])), [reviewStates]);
-  const dueIds = useMemo(() => new Set(dueReviews.map((review) => review.recordId)), [dueReviews]);
+  const availableDueReviews = useMemo(
+    () => dueReviews.filter((review) => !ratedRecordIds.has(review.recordId) && isReviewDueOn(review, today)),
+    [dueReviews, ratedRecordIds, today],
+  );
+  const dueIds = useMemo(() => new Set(availableDueReviews.map((review) => review.recordId)), [availableDueReviews]);
   const recordMap = useMemo(() => new Map(records.map((record) => [record.id, record])), [records]);
   const effectiveQueue = useMemo(
     () => queueIds.filter((id) => dueIds.has(id) && recordMap.has(id)),
@@ -124,10 +131,10 @@ export const ReviewPage = ({
   );
   const currentId = currentRecordId && effectiveQueue.includes(currentRecordId) ? currentRecordId : effectiveQueue[0];
   const currentRecord = currentId ? recordMap.get(currentId) : undefined;
-  const currentReview = currentId ? dueReviews.find((review) => review.recordId === currentId) : undefined;
+  const currentReview = currentId ? availableDueReviews.find((review) => review.recordId === currentId) : undefined;
   const currentIndex = currentId ? effectiveQueue.indexOf(currentId) + 1 : 0;
-  const overdueCount = dueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
-  const todayCount = dueReviews.filter((review) => review.nextReviewDate === today).length;
+  const overdueCount = availableDueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
+  const todayCount = availableDueReviews.filter((review) => review.nextReviewDate === today).length;
   const subjects = useMemo(() => Array.from(new Set(records.map((record) => record.subject))).sort(), [records]);
   const newCount = records.filter((record) => {
     const review = reviewMap.get(record.id);
@@ -156,7 +163,7 @@ export const ReviewPage = ({
   }, [onEnsureDay, today, dueReviews.length]);
 
   useEffect(() => {
-    const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : dueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
+    const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
     if (nextQueue.join("|") !== queueIds.join("|")) {
       onQueueChange(nextQueue);
     }
@@ -166,16 +173,54 @@ export const ReviewPage = ({
     if (nextQueue.length === 0 && currentRecordId) {
       onCurrentRecordChange(undefined);
     }
-  }, [currentRecordId, dueReviews, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, recordMap]);
+  }, [availableDueReviews, currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, recordMap]);
+
+  useEffect(() => {
+    setRatedRecordIds(new Set());
+  }, [today]);
+
+  useEffect(() => {
+    setRatedRecordIds((current) => {
+      const next = new Set(
+        Array.from(current).filter((id) =>
+          dueReviews.some((review) => review.recordId === id && isReviewDueOn(review, today)),
+        ),
+      );
+      if (next.size === current.size && Array.from(next).every((id) => current.has(id))) {
+        return current;
+      }
+      return next;
+    });
+  }, [dueReviews, today]);
 
   const rate = async (rating: RecordReviewRating) => {
-    if (!currentId) {
+    if (!currentId || ratingRecordId) {
       return;
     }
+    const ratedId = currentId;
+    const previousQueue = effectiveQueue;
+    const previousCurrentId = currentId;
     const nextQueue = effectiveQueue.filter((id) => id !== currentId);
+    setRatingError("");
+    setRatingRecordId(ratedId);
+    setRatedRecordIds((current) => new Set(current).add(ratedId));
     onQueueChange(nextQueue);
     onCurrentRecordChange(nextQueue[0]);
-    await onRate(currentId, rating);
+    try {
+      await onRate(ratedId, rating);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setRatedRecordIds((current) => {
+        const next = new Set(current);
+        next.delete(ratedId);
+        return next;
+      });
+      onQueueChange(previousQueue);
+      onCurrentRecordChange(previousCurrentId);
+      setRatingError(`复习评分失败：${message}`);
+    } finally {
+      setRatingRecordId(null);
+    }
   };
 
   const touchStart = (clientY: number) => {
@@ -218,6 +263,7 @@ export const ReviewPage = ({
         )}
       />
       {pullReady && <p className="status-message">松手刷新复习列表</p>}
+      {ratingError && <p className="status-message">{ratingError}</p>}
 
       <div className="review-mode-tabs" role="tablist" aria-label="复习视图">
         <button type="button" className={mode === "queue" ? "active" : ""} onClick={() => onModeChange("queue")}>
@@ -278,6 +324,7 @@ export const ReviewPage = ({
                     key={item.rating}
                     type="button"
                     className={item.className}
+                    disabled={Boolean(ratingRecordId)}
                     onClick={() => void rate(item.rating)}
                   >
                     <Icon size={18} />

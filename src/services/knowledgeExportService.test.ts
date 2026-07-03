@@ -132,6 +132,25 @@ const snapshot: StorageSnapshot = {
   assets: [imageAsset],
 };
 
+const structuredContentHtml = [
+  "<h2>遍历</h2><p>先序和后序</p>",
+  '<record-structure-diagram data-json=\'{"title":"结构图","orientation":"horizontal","chain":[{"id":"n1","title":"内容链路","body":"AI 读取","note":"","pitfall":"","branches":[]}]}\'></record-structure-diagram>',
+  '<record-comparison-table data-json=\'{"title":"链路表","columns":[{"id":"c1","label":"概念"},{"id":"c2","label":"作用"}],"rows":[{"id":"row1","cells":{"c1":"高亮块","c2":"进入导出"}}]}\'></record-comparison-table>',
+  '<record-sticky-board data-json=\'{"title":"便签板","collapsedTypes":[],"notes":[{"id":"note1","type":"question","text":"AI 是否能读到"}]}\'></record-sticky-board>',
+  '<record-collapse data-title="折叠块" data-summary="复习提示"><p>折叠正文</p></record-collapse>',
+  '<record-highlight-block data-tone="pink"><p><strong>浅粉重点</strong></p><ul><li>导出可读</li></ul></record-highlight-block>',
+].join("");
+
+const structuredSnapshot: StorageSnapshot = {
+  ...snapshot,
+  payload: {
+    ...snapshot.payload,
+    blocks: snapshot.payload.blocks.map((block) =>
+      block.id === "r1" ? { ...block, contentHtml: structuredContentHtml } : block,
+    ),
+  },
+};
+
 describe("knowledge export", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -172,6 +191,27 @@ describe("knowledge export", () => {
     expect(payload.records[0].assetTexts[0]).toContain("tree.png");
   });
 
+  it("keeps structure blocks and highlight blocks readable in knowledge exports", async () => {
+    const payload = createKnowledgeJsonPayload(structuredSnapshot);
+    const record = payload.records.find((item) => item.id === "r1");
+
+    expect(record?.contentText).toContain("内容链路");
+    expect(record?.contentText).toContain("AI 是否能读到");
+    expect(record?.contentText).toContain("折叠正文");
+    expect(record?.contentText).toContain("浅粉重点");
+    expect(record?.contentMarkdown).toContain("| 概念 | 作用 |");
+    expect(record?.contentMarkdown).toContain("<details>");
+    expect(record?.contentMarkdown).toContain("> 浅粉色高亮");
+
+    const zip = await JSZip.loadAsync(await createSubjectMarkdownZip(structuredSnapshot));
+    const dataStructure = await zip.file("subjects/数据结构.md")?.async("string");
+    expect(dataStructure).toContain("### 结构图");
+    expect(dataStructure).toContain("| 高亮块 | 进入导出 |");
+    expect(dataStructure).toContain("#### 疑问");
+    expect(dataStructure).toContain("<summary>折叠块 · 复习提示</summary>");
+    expect(dataStructure).toContain("> 浅粉色高亮");
+  });
+
   it("exports readable plain text", () => {
     const text = createPlainText(snapshot);
 
@@ -180,8 +220,8 @@ describe("knowledge export", () => {
     expect(text).toContain("图片文字");
   });
 
-  it("round-trips full backup assets and OCR metadata", async () => {
-    const backup = await snapshotToZip(snapshot);
+  it("round-trips full backup assets, OCR metadata and custom block HTML", async () => {
+    const backup = await snapshotToZip(structuredSnapshot);
     const restored = await zipToSnapshot(new File([backup], "backup.zip", { type: "application/zip" }));
 
     expect(restored.assets[0]).toMatchObject({
@@ -191,6 +231,9 @@ describe("knowledge export", () => {
       ocrStatus: "done",
       ocrText: "二叉树遍历 OCR 文本",
     });
+    const restoredRecord = restored.payload.blocks.find((block) => block.id === "r1");
+    expect(restoredRecord && "contentHtml" in restoredRecord ? restoredRecord.contentHtml : "").toContain("record-highlight-block");
+    expect(restoredRecord && "contentHtml" in restoredRecord ? restoredRecord.contentHtml : "").toContain("record-comparison-table");
   });
 
   it.each([

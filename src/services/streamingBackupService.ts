@@ -13,6 +13,7 @@ import { canUseNativeZipArchive, NativeZipArchive, type NativeZipExportDestinati
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
 import type { RecordBlock } from "../types";
+import { entryToMarkdown } from "../lib/markdown";
 
 const ENTRY_CHUNK_BYTES = 768 * 1024;
 
@@ -71,12 +72,13 @@ export const writeNativeStreamableBackupSnapshot = async (
       JSON.stringify({ ...payload, assets: snapshot.assets }, null, 2),
     );
 
+    const markdownAssets = snapshot.assets.map((meta) => metaToAsset(meta, new Blob()));
     for (const entry of payload.entries) {
       const blocks = payload.blocks.filter((block) => block.date === entry.date);
       await writeTextEntry(
         session.sessionId,
         `entries/${entry.date}.md`,
-        [`# ${entry.title || entry.date}`, "", ...blocks.map((block) => block.type === "record" ? `## ${block.title}` : "")].join("\n"),
+        entryToMarkdown(entry, blocks, markdownAssets),
       );
     }
 

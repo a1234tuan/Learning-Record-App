@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RecordReviewState } from "../types";
-import { applySm2Review } from "./reviewScheduler";
+import { applySm2Review, isReviewDueOn } from "./reviewScheduler";
 
 const state = (patch: Partial<RecordReviewState> = {}): RecordReviewState => ({
   id: "record-1",
@@ -69,5 +69,11 @@ describe("reviewScheduler", () => {
     expect(next.status).toBe("mastered");
     expect(next.nextReviewDate).toBeUndefined();
     expect(next.consecutiveRemembered).toBe(5);
+  });
+
+  it("treats cards reviewed today as no longer due even if the due date is stale", () => {
+    expect(isReviewDueOn(state({ nextReviewDate: "2026-07-02" }), "2026-07-03")).toBe(true);
+    expect(isReviewDueOn(state({ nextReviewDate: "2026-07-02", lastReviewDate: "2026-07-03" }), "2026-07-03")).toBe(false);
+    expect(isReviewDueOn(state({ status: "mastered", nextReviewDate: undefined }), "2026-07-03")).toBe(false);
   });
 });

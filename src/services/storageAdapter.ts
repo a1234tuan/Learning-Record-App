@@ -45,7 +45,7 @@ import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
-import { DEFAULT_REVIEW_EASE, applySm2Review } from "../lib/reviewScheduler";
+import { DEFAULT_REVIEW_EASE, applySm2Review, isReviewDueOn } from "../lib/reviewScheduler";
 
 const assetToMeta = (asset: Asset): BackupAssetMeta => {
   const { data: _data, ...meta } = asset;
@@ -368,7 +368,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       .toArray();
     const activeBlocks = new Map((await this.recordBlocks()).filter((record) => !record.deletedAt).map((record) => [record.id, record]));
     return candidates
-      .filter((review) => review.status === "active" && Boolean(review.nextReviewDate) && review.lastReviewDate !== date && activeBlocks.has(review.recordId))
+      .filter((review) => isReviewDueOn(review, date) && activeBlocks.has(review.recordId))
       .sort((a, b) => {
         const aToday = a.nextReviewDate === date ? 0 : 1;
         const bToday = b.nextReviewDate === date ? 0 : 1;

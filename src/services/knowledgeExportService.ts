@@ -16,7 +16,7 @@ import { getAllVisibleSubjects } from "../lib/subjects";
 import { snapshotToZip } from "./backup";
 import { isNativePlatform } from "../lib/platform";
 import { sanitizeFileName } from "./assetDownloadService";
-import { parseLinearRecordContent, recordToPlainText } from "../lib/recordContent";
+import { parseLinearRecordContent, recordToLinearMarkdown, recordToPlainText } from "../lib/recordContent";
 import { normalizeNativeShareError, writeBlobToNativeShareCache } from "./nativeFileWriter";
 import { canUseNativeZipArchive } from "./nativeZipArchive";
 import { exportNativeStreamableBackupForShare } from "./streamingBackupService";
@@ -38,15 +38,17 @@ const getAssetMap = (snapshot: StorageSnapshot): Map<string, Asset> =>
 
 export const createKnowledgeRecords = (snapshot: StorageSnapshot): KnowledgeRecord[] => {
   const assets = getAssetMap(snapshot);
+  const assetList = Array.from(assets.values());
   return getRecords(snapshot).map((record) => {
-    const nodes = parseLinearRecordContent(record, Array.from(assets.values()));
+    const nodes = parseLinearRecordContent(record, assetList);
 
     return {
       id: record.id,
       date: record.date,
       subject: record.subject,
       title: record.title,
-      contentText: recordToPlainText(record, Array.from(assets.values())),
+      contentText: recordToPlainText(record, assetList),
+      contentMarkdown: recordToLinearMarkdown(record, assetList),
       formulas: nodes
         .filter((node) => node.kind === "formula")
         .map((node) => node.formula.latex),
@@ -76,7 +78,7 @@ const recordToMarkdown = (record: KnowledgeRecord): string => {
     `- 学科：${record.subject}`,
     `- 更新时间：${record.updatedAt}`,
     "",
-    record.contentText,
+    record.contentMarkdown || record.contentText,
   ];
 
   if (record.formulas.length > 0) {
