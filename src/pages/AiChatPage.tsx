@@ -14,10 +14,10 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
+import { AiMarkdown } from "../components/AiMarkdown";
 import type { AiChatAttachment, AiChatMessage, AiChatSession, AppSettings, Asset, Block } from "../types";
+import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
 import { isNativePlatform } from "../lib/platform";
 import { storage } from "../services/storageAdapter";
@@ -169,8 +169,8 @@ export const AiChatPage = ({
   }, [messages.length, busy, sessionId]);
 
   const copy = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-    setStatus("已复制。");
+    const copied = await copyTextToClipboard(text);
+    setStatus(copied ? "已复制。" : "复制失败，请长按选择文本后手动复制。");
   };
 
   const openNewChat = async () => {
@@ -452,7 +452,7 @@ export const AiChatPage = ({
                         ))}
                       </div>
                     )}
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                    <AiMarkdown content={message.content} />
                   </div>
                 </div>
                 {message.role === "user" && (

@@ -18,6 +18,9 @@ const SYSTEM_PROMPT = [
   "回答具体知识问题时，请尽量在结尾列出“依据来源”，引用日志片段的来源标签。",
   "如果用户要求出题、抽问、白纸复述、盲区挖掘或费曼讲解，先出题或追问并等待用户回答，除非用户明确要求直接给答案。",
   "批改时要指出正确、错误、不完整和遗漏点，不要只做泛泛鼓励。",
+  "默认使用 GitHub-flavored Markdown 输出；表格请使用 Markdown 表格，代码请使用 fenced code block。",
+  "数学公式请使用 LaTeX：行内公式用 $...$，独立公式用 $$...$$。",
+  "不要输出 HTML 或依赖 HTML 标签排版。",
 ].join("\n");
 
 export const normalizeAiChatCompletionsUrl = (baseUrl: string): string => {

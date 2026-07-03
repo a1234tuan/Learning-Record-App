@@ -2205,6 +2205,39 @@ button:disabled {
   line-height: var(--reading-line-height);
   overflow-wrap: anywhere;
   word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.ai-markdown * {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.ai-markdown::selection,
+.ai-markdown *::selection {
+  background: rgba(47, 111, 94, 0.32);
+  color: var(--text);
+}
+
+.ai-markdown::-moz-selection,
+.ai-markdown *::-moz-selection {
+  background: rgba(47, 111, 94, 0.32);
+  color: var(--text);
+}
+
+.ai-bubble-row.user .ai-markdown::selection,
+.ai-bubble-row.user .ai-markdown *::selection {
+  background: rgba(255, 255, 255, 0.38);
+  color: #fff;
+}
+
+.ai-bubble-row.user .ai-markdown::-moz-selection,
+.ai-bubble-row.user .ai-markdown *::-moz-selection {
+  background: rgba(255, 255, 255, 0.38);
+  color: #fff;
 }
 
 .ai-markdown :first-child {
@@ -2221,7 +2254,8 @@ button:disabled {
   padding: 10px;
   border-radius: 8px;
   background: var(--surface-2);
-  white-space: pre-wrap;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ai-markdown code {
@@ -2230,11 +2264,41 @@ button:disabled {
   word-break: break-word;
 }
 
+.ai-markdown pre code {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+}
+
 .ai-markdown table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-markdown th,
+.ai-markdown td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.ai-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0 4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-markdown .katex {
+  white-space: normal;
+}
+
+.ai-markdown .katex-display > .katex {
+  white-space: nowrap;
 }
 
 .ai-markdown img {

@@ -63,6 +63,18 @@ const imageAttachment = (patch: Partial<AiChatAttachment> = {}): AiChatAttachmen
 });
 
 describe("buildAiMessages", () => {
+  it("asks the model to answer with Markdown, formulas and no HTML", () => {
+    const messages = buildAiMessages(undefined, [], "继续");
+    const systemPrompt = String(messages[0].content);
+
+    expect(systemPrompt).toContain("GitHub-flavored Markdown");
+    expect(systemPrompt).toContain("$...$");
+    expect(systemPrompt).toContain("$$...$$");
+    expect(systemPrompt).toContain("Markdown 表格");
+    expect(systemPrompt).toContain("fenced code block");
+    expect(systemPrompt).toContain("不要输出 HTML");
+  });
+
   it("builds OpenAI-compatible messages with log context and history", () => {
     const messages = buildAiMessages(
       attachment,
