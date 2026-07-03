@@ -287,6 +287,31 @@
   padding: 12px;
 }
 
+.review-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.review-mode-tabs button {
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.review-mode-tabs button.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
 .review-progress-panel {
   display: flex;
   align-items: center;
@@ -338,6 +363,132 @@
 
 .review-rating-bar .forgot {
   color: var(--color-danger);
+}
+
+.review-manager {
+  display: grid;
+  gap: 12px;
+  margin-top: var(--space-section);
+}
+
+.review-manager-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) minmax(120px, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.review-search-box {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+
+.review-search-box input,
+.review-manager-toolbar select {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.review-manager-toolbar select {
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+}
+
+.review-manager-list {
+  display: grid;
+  gap: 10px;
+}
+
+.review-manager-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-raised);
+}
+
+.review-manager-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.review-manager-main strong,
+.review-manager-main small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-manager-main small {
+  margin-top: 3px;
+  color: var(--color-muted);
+}
+
+.review-status-pill {
+  justify-self: end;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.review-status-pill.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
+.review-status-pill.new {
+  background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface));
+  color: var(--color-accent-strong);
+}
+
+.review-status-pill.done {
+  background: color-mix(in srgb, var(--color-success) 13%, var(--color-surface));
+  color: var(--color-success);
+}
+
+.review-manager-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-manager-actions button {
+  min-height: 36px;
+}
+
+@media (max-width: 720px) {
+  .review-manager-toolbar,
+  .review-manager-card,
+  .review-manager-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-status-pill {
+    justify-self: start;
+  }
 }
 
 .record-review-panel {

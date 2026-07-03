@@ -1,10 +1,9 @@
-import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { saveAs } from "file-saver";
 
 import type { Asset } from "../types";
-import { blobToBase64 } from "./backup";
 import { isNativePlatform } from "../lib/platform";
+import { normalizeNativeShareError, writeBlobToNativeShareCache } from "./nativeFileWriter";
 
 export const sanitizeFileName = (fileName: string): string => {
   const cleaned = fileName.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
@@ -19,20 +18,22 @@ export const downloadAsset = async (asset: Asset): Promise<string> => {
     return "已开始下载。";
   }
 
-  const base64 = await blobToBase64(asset.data);
-  const writeResult = await Filesystem.writeFile({
-    path: fileName,
-    data: base64,
-    directory: Directory.Documents,
-    recursive: true,
+  const writeResult = await writeBlobToNativeShareCache({
+    blob: asset.data,
+    fileName,
+    mimeType: asset.mimeType || asset.data.type || "application/octet-stream",
   });
 
-  await Share.share({
-    title: asset.title ?? fileName,
-    text: `导出文件：${fileName}`,
-    files: [writeResult.uri],
-    dialogTitle: "保存或分享文件",
-  });
+  try {
+    await Share.share({
+      title: asset.title ?? fileName,
+      text: `导出文件：${fileName}`,
+      files: [writeResult.uri],
+      dialogTitle: "保存或分享文件",
+    });
+  } catch (error) {
+    throw normalizeNativeShareError(error);
+  }
 
   return "已打开系统保存/分享面板。";
 };

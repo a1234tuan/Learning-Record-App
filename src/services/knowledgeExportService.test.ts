@@ -1,13 +1,43 @@
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Filesystem } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
 
-import type { Asset, StorageSnapshot } from "../types";
+import type { Asset, ExportKind, StorageSnapshot } from "../types";
 import {
   createKnowledgeJsonPayload,
   createPlainText,
   createSubjectMarkdownZip,
+  exportKnowledge,
 } from "./knowledgeExportService";
 import { snapshotToZip, summarizeSnapshot, zipToSnapshot } from "./backup";
+
+vi.mock("@capacitor/filesystem", () => ({
+  Directory: {
+    Cache: "CACHE",
+    Documents: "DOCUMENTS",
+  },
+  Filesystem: {
+    writeFile: vi.fn(),
+    appendFile: vi.fn(),
+    deleteFile: vi.fn(),
+    getUri: vi.fn(),
+  },
+}));
+
+vi.mock("@capacitor/share", () => ({
+  Share: {
+    share: vi.fn(),
+  },
+}));
+
+vi.mock("file-saver", () => ({
+  saveAs: vi.fn(),
+}));
+
+vi.mock("../lib/platform", () => ({
+  isNativePlatform: () => true,
+}));
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -103,6 +133,19 @@ const snapshot: StorageSnapshot = {
 };
 
 describe("knowledge export", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(Filesystem.writeFile).mockImplementation(async (options) => ({
+      uri: `file:///cache/${options.path}`,
+    }));
+    vi.mocked(Filesystem.appendFile).mockResolvedValue(undefined);
+    vi.mocked(Filesystem.deleteFile).mockResolvedValue(undefined);
+    vi.mocked(Filesystem.getUri).mockImplementation(async (options) => ({
+      uri: `file:///cache/${options.path}`,
+    }));
+    vi.mocked(Share.share).mockResolvedValue({});
+  });
+
   it("creates subject markdown files sorted by subject", async () => {
     const zip = await JSZip.loadAsync(await createSubjectMarkdownZip(snapshot));
     const dataStructure = await zip.file("subjects/数据结构.md")?.async("string");
@@ -148,6 +191,37 @@ describe("knowledge export", () => {
       ocrStatus: "done",
       ocrText: "二叉树遍历 OCR 文本",
     });
+  });
+
+  it.each([
+    ["full-backup", "shared-exports/study-journal-2026-06-21.zip"],
+    ["subject-markdown", "shared-exports/study-journal-subjects-2026-06-21.zip"],
+    ["knowledge-json", "shared-exports/study-journal-knowledge-2026-06-21.json"],
+    ["plain-text", "shared-exports/study-journal-knowledge-2026-06-21.txt"],
+  ] as Array<[ExportKind, string]>)("shares native %s exports from cache", async (kind, expectedPath) => {
+    await exportKnowledge(kind, snapshot);
+
+    expect(Filesystem.writeFile).toHaveBeenLastCalledWith(expect.objectContaining({
+      path: expectedPath,
+      directory: "CACHE",
+    }));
+    expect(Share.share).toHaveBeenLastCalledWith(expect.objectContaining({
+      files: [`file:///cache/${expectedPath}`],
+    }));
+  });
+
+  it("reports import progress while parsing backup assets", async () => {
+    const backup = await snapshotToZip(snapshot);
+    const progress: string[] = [];
+
+    await zipToSnapshot(new File([backup], "backup.zip", { type: "application/zip" }), {
+      onProgress: (item) => progress.push(`${item.stage}:${item.current ?? 0}/${item.total ?? 0}`),
+    });
+
+    expect(progress).toContain("loading:0/0");
+    expect(progress).toContain("parsing:0/0");
+    expect(progress).toContain("assets:1/1");
+    expect(progress).toContain("done:0/0");
   });
 
   it("rejects non-zip restore files with a clear message", async () => {

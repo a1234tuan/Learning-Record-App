@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 
-import type { Asset, BackupPayload, ImportSummary, RecordBlock, StorageSnapshot } from "../types";
+import type { Asset, BackupPayload, ExportOptions, ImportOptions, ImportSummary, RecordBlock, StorageSnapshot } from "../types";
 import { entryToMarkdown } from "../lib/markdown";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
@@ -14,8 +14,9 @@ const serializeAssetMeta = (asset: Asset) => {
   return meta;
 };
 
-export const snapshotToZip = async (snapshot: StorageSnapshot): Promise<Blob> => {
+export const snapshotToZip = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<Blob> => {
   const zip = new JSZip();
+  options.onProgress?.({ stage: "zipping", message: "正在生成完整备份 zip。" });
   const payload = {
     ...snapshot.payload,
     blocks: snapshot.payload.blocks.map((block) =>
@@ -58,7 +59,14 @@ export const snapshotToZip = async (snapshot: StorageSnapshot): Promise<Blob> =>
     assetsFolder?.file(`${asset.id}-${asset.fileName}`, asset.data);
   }
 
-  return zip.generateAsync({ type: "blob" });
+  return zip.generateAsync({ type: "blob" }, (metadata) => {
+    options.onProgress?.({
+      stage: "zipping",
+      message: `正在生成完整备份 zip ${Math.round(metadata.percent)}% 。`,
+      current: Math.round(metadata.percent),
+      total: 100,
+    });
+  });
 };
 
 export const blobToBase64 = (blob: Blob): Promise<string> =>
@@ -109,7 +117,7 @@ export const summarizeSnapshot = (snapshot: StorageSnapshot): ImportSummary => {
   };
 };
 
-export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
+export const zipToSnapshot = async (file: File, options: ImportOptions = {}): Promise<StorageSnapshot> => {
   const looksLikeZip = file.name.toLocaleLowerCase().endsWith(".zip") || file.type.includes("zip");
   if (!looksLikeZip) {
     throw new Error("不支持的文件格式：只支持完整备份 zip。Markdown、JSON 和 TXT 仅用于 AI 阅读，不能恢复数据。");
@@ -117,11 +125,13 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
 
   let zip: JSZip;
   try {
+    options.onProgress?.({ stage: "loading", message: "正在载入 zip 备份文件。" });
     zip = await JSZip.loadAsync(file);
   } catch {
     throw new Error("文件不是有效 zip 或已损坏，请重新选择完整备份文件。");
   }
 
+  options.onProgress?.({ stage: "parsing", message: "正在检查备份结构和 data.json。" });
   const dataFile = zip.file("data.json");
   if (!dataFile) {
     throw new Error("不是学习日志完整备份：备份包缺少 data.json。");
@@ -152,7 +162,14 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
   const recordBlocks = migratedBlocks.filter((block) => block.type === "record");
 
   const assets: Asset[] = [];
-  for (const assetMeta of data.assets ?? []) {
+  const assetMetas = data.assets ?? [];
+  for (const [index, assetMeta] of assetMetas.entries()) {
+    options.onProgress?.({
+      stage: "assets",
+      message: `正在读取资源 ${index + 1}/${assetMetas.length}。`,
+      current: index + 1,
+      total: assetMetas.length,
+    });
     const path = Object.keys(zip.files).find((name) => name.startsWith(`assets/${assetMeta.id}-`));
     if (!path) {
       continue;
@@ -166,6 +183,7 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
       data: blobToFile(blob, assetMeta.fileName, assetMeta.mimeType),
     });
   }
+  options.onProgress?.({ stage: "done", message: "备份解析完成。" });
 
   return {
     payload: {
@@ -186,8 +204,8 @@ export const zipToSnapshot = async (file: File): Promise<StorageSnapshot> => {
   };
 };
 
-export const downloadSnapshot = async (snapshot: StorageSnapshot): Promise<void> => {
-  const zip = await snapshotToZip(snapshot);
+export const downloadSnapshot = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<void> => {
+  const zip = await snapshotToZip(snapshot, options);
   const date = snapshot.payload.manifest.exportedAt.slice(0, 10);
   saveAs(zip, `study-journal-${date}.zip`);
 };

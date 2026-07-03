@@ -1,10 +1,9 @@
 import { Download, Upload } from "lucide-react";
 import { useState } from "react";
 
-import type { AppSettings, ExportKind, ImportSummary } from "../types";
-import { summarizeSnapshot } from "../services/backup";
-import { flushAutoBackupNow } from "../services/autoBackupService";
-import { exportKnowledge } from "../services/knowledgeExportService";
+import type { AppSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary } from "../types";
+import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
+import { importAndRestoreSnapshot } from "../services/importRestoreService";
 import { nativeBackupAdapter } from "../services/nativeBackupAdapter";
 import { storage } from "../services/storageAdapter";
 import { manualZipSyncAdapter } from "../services/syncAdapters";
@@ -28,6 +27,9 @@ type ImportStatus =
 
 const formatImportSummary = (summary: ImportSummary) =>
   `导入 ${summary.records} 条日志，覆盖 ${summary.days} 天；资源 ${summary.assets} 个（图片 ${summary.images}、音频 ${summary.audio}、附件 ${summary.attachments}）。`;
+
+const progressDetail = (progress: ImportProgress | ExportProgress) =>
+  progress.total ? `${progress.message}（${progress.current ?? 0}/${progress.total}）` : progress.message;
 
 const ImportStatusCard = ({ status }: { status: ImportStatus }) => {
   if (status.state === "idle") {
@@ -93,7 +95,9 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
 
   const exportFull = () =>
     run("full-backup", async () => {
-      const result = await exportKnowledge("full-backup", await storage.createSnapshot());
+      const result = await exportFullBackupFromStorage(storage, {
+        onProgress: (progress) => setMessage(progressDetail(progress)),
+      });
       return `${result} 这是可导入恢复的完整备份。`;
     });
 
@@ -107,30 +111,57 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
       }
       const adapter = native ? nativeBackupAdapter : manualZipSyncAdapter;
       setImportStatus({ state: "choosing", title: "选择备份文件", detail: "请在文件选择器中选择完整备份 zip。" });
-      let snapshot;
+      let activeSummary: ImportSummary | undefined;
       try {
-        setImportStatus({ state: "parsing", title: "正在解析备份", detail: "正在检查 zip 格式、manifest 和 data.json。" });
-        snapshot = await adapter.importSnapshot?.();
+        const summary = await importAndRestoreSnapshot({
+          adapter,
+          onRestored,
+          onSummary: (summary) => {
+            activeSummary = summary;
+            setImportStatus({
+              state: "restoring",
+              title: "正在恢复数据",
+              detail: "备份已通过校验，正在覆盖当前本地数据。",
+              summary,
+            });
+          },
+          onProgress: (progress) => {
+            if (progress.stage === "choosing") {
+              setImportStatus({ state: "choosing", title: "选择备份文件", detail: progressDetail(progress) });
+              return;
+            }
+            if (progress.stage === "restoring" && activeSummary) {
+              setImportStatus({
+                state: "restoring",
+                title: "正在恢复数据",
+                detail: progressDetail(progress),
+                summary: activeSummary,
+              });
+              return;
+            }
+            setImportStatus({
+              state: "parsing",
+              title: progress.stage === "reading" ? "正在读取备份" : "正在解析备份",
+              detail: progressDetail(progress),
+            });
+          },
+          onAutoBackupError: (detail) => setMessage(`导入已完成，但后台自动备份更新失败：${detail}`),
+        });
+        if (!summary) {
+          setImportStatus({ state: "cancelled", title: "已取消导入", detail: "未选择备份文件，没有修改当前本地数据。" });
+          return;
+        }
+        setImportStatus({
+          state: "success",
+          title: "导入成功",
+          detail: `${formatImportSummary(summary)} 备份版本 v${summary.version}。自动备份会在后台更新。`,
+          summary,
+        });
       } catch (error) {
         const detail = error instanceof Error ? error.message : "导入失败，无法读取所选文件。";
         setImportStatus({ state: "error", title: "导入失败", detail });
         throw error;
       }
-      if (!snapshot) {
-        setImportStatus({ state: "cancelled", title: "已取消导入", detail: "未选择备份文件，没有修改当前本地数据。" });
-        return;
-      }
-      const summary = summarizeSnapshot(snapshot);
-      setImportStatus({ state: "restoring", title: "正在恢复数据", detail: "备份已通过校验，正在覆盖当前本地数据。", summary });
-      await storage.restoreSnapshot(snapshot);
-      await onRestored();
-      await flushAutoBackupNow("restore");
-      setImportStatus({
-        state: "success",
-        title: "导入成功",
-        detail: `${formatImportSummary(summary)} 备份版本 v${summary.version}。`,
-        summary,
-      });
     });
 
   return (

@@ -19,6 +19,9 @@ export const nowISO = (): ISODateTime => new Date().toISOString();
 
 export const toISODate = (date: Date): ISODate => format(date, "yyyy-MM-dd");
 
+export const isoDateTimeToLocalDate = (dateTime: ISODateTime): ISODate =>
+  toISODate(new Date(dateTime));
+
 export const addDaysISO = (date: ISODate, days: number): ISODate =>
   toISODate(addDays(parseISO(date), days));
 

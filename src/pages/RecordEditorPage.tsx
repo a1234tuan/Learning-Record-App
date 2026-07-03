@@ -9,7 +9,7 @@ import { SubjectPicker } from "../components/SubjectPicker";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
 import { StructureInsertMenu } from "../components/StructureInsertMenu";
 import { newId } from "../lib/entity";
-import { nowISO } from "../lib/date";
+import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
 import { isNativePlatform } from "../lib/platform";
 import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
@@ -128,9 +128,13 @@ export const RecordEditorPage = ({
   const editorRef = useRef<Editor | null>(null);
   const audioRecorderRef = useRef<AudioRecorderHandle | null>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const flushingRef = useRef(false);
+  const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const committingRef = useRef(false);
+  const ignoreEditorChangesRef = useRef(false);
+  const pendingAssetTasksRef = useRef<Set<Promise<void>>>(new Set());
   const leavingRef = useRef(false);
   const stoppingRecordingRef = useRef<Promise<void> | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     initialEditingRef.current = initialEditing;
@@ -138,6 +142,10 @@ export const RecordEditorPage = ({
 
   const setEditing = useCallback(
     (nextEditing: boolean) => {
+      if (nextEditing) {
+        ignoreEditorChangesRef.current = false;
+        setSaveError(null);
+      }
       setEditingState(nextEditing);
       onEditingChange?.(nextEditing);
     },
@@ -145,12 +153,15 @@ export const RecordEditorPage = ({
   );
 
   const flushDraft = useCallback(
-    async (nextDraft = draftRef.current) => {
-      if (flushingRef.current || !hasDraftChanges(nextDraft, record)) {
+    async (nextDraft = draftRef.current, options: { force?: boolean } = {}) => {
+      if ((!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
         return;
       }
-      flushingRef.current = true;
-      try {
+
+      const task = draftSaveQueueRef.current.then(async () => {
+        if ((!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+          return;
+        }
         await onSaveDraft({
           id: record.id,
           recordId: record.id,
@@ -158,9 +169,10 @@ export const RecordEditorPage = ({
           draft: cloneRecord(nextDraft),
           updatedAt: nowISO(),
         });
-      } finally {
-        flushingRef.current = false;
-      }
+      });
+
+      draftSaveQueueRef.current = task.catch(() => undefined);
+      await task;
     },
     [onSaveDraft, record],
   );
@@ -168,7 +180,7 @@ export const RecordEditorPage = ({
   const scheduleDraftSave = useCallback(
     (nextDraft: RecordBlock) => {
       draftRef.current = nextDraft;
-      if (!hasDraftChanges(nextDraft, record)) {
+      if (committingRef.current || ignoreEditorChangesRef.current || !hasDraftChanges(nextDraft, record)) {
         return;
       }
       if (saveTimerRef.current) {
@@ -176,15 +188,55 @@ export const RecordEditorPage = ({
       }
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null;
-        void flushDraft(nextDraft);
+        void flushDraft(nextDraft).catch(() => undefined);
       }, 350);
     },
     [flushDraft, record],
   );
 
+  const cancelScheduledDraftSave = useCallback(() => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
+
+  const waitForDraftSaves = useCallback(async () => {
+    await draftSaveQueueRef.current;
+  }, []);
+
+  const waitForPendingAssets = useCallback(async () => {
+    while (pendingAssetTasksRef.current.size > 0) {
+      await Promise.all(Array.from(pendingAssetTasksRef.current));
+    }
+  }, []);
+
+  const trackAssetTask = useCallback(<T,>(task: Promise<T>): Promise<T> => {
+    const tracked = task.then(() => undefined);
+    pendingAssetTasksRef.current.add(tracked);
+    void tracked.catch(() => undefined).finally(() => {
+      pendingAssetTasksRef.current.delete(tracked);
+    });
+    return task;
+  }, []);
+
+  const setCurrentDraft = useCallback(
+    (nextDraft: RecordBlock, options: { autosave?: boolean } = {}) => {
+      const cleanDraft = cloneRecord(nextDraft);
+      draftRef.current = cleanDraft;
+      setDraft(cleanDraft);
+      if (options.autosave !== false) {
+        scheduleDraftSave(cleanDraft);
+      }
+      return cleanDraft;
+    },
+    [scheduleDraftSave],
+  );
+
   useEffect(() => {
     let cancelled = false;
     const loadDraft = async () => {
+      const loadStartedDuringCommit = committingRef.current;
       if (recordIdRef.current !== record.id) {
         recordIdRef.current = record.id;
         setDraftRestored(false);
@@ -193,7 +245,7 @@ export const RecordEditorPage = ({
       if (cancelled) {
         return;
       }
-      if (storedDraft && storedDraft.updatedAt > record.updatedAt) {
+      if (!loadStartedDuringCommit && !committingRef.current && storedDraft && storedDraft.updatedAt > record.updatedAt) {
         const restored = cloneRecord(storedDraft.draft);
         setDraft(restored);
         draftRef.current = restored;
@@ -204,6 +256,10 @@ export const RecordEditorPage = ({
       const clean = cloneRecord(record);
       setDraft(clean);
       draftRef.current = clean;
+      if (loadStartedDuringCommit || committingRef.current) {
+        setDraftRestored(false);
+        return;
+      }
       setEditing(initialEditingRef.current);
       setDraftRestored(false);
     };
@@ -218,31 +274,27 @@ export const RecordEditorPage = ({
   useEffect(() => {
     const flushOnHide = () => {
       if (document.visibilityState === "hidden") {
-        void flushDraft();
+        void flushDraft().catch(() => undefined);
       }
     };
     const flushOnPageHide = () => {
-      void flushDraft();
+      void flushDraft().catch(() => undefined);
     };
     document.addEventListener("visibilitychange", flushOnHide);
     window.addEventListener("pagehide", flushOnPageHide);
     return () => {
       document.removeEventListener("visibilitychange", flushOnHide);
       window.removeEventListener("pagehide", flushOnPageHide);
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-      void flushDraft();
+      cancelScheduledDraftSave();
+      void flushDraft().catch(() => undefined);
     };
-  }, [flushDraft]);
+  }, [cancelScheduledDraftSave, flushDraft]);
 
   const update = (patch: Partial<RecordBlock>) => {
-    setDraft((current) => {
-      const next = { ...current, ...patch, mistakeRefs: [] };
-      scheduleDraftSave(next);
-      return next;
-    });
+    if (ignoreEditorChangesRef.current) {
+      return;
+    }
+    setCurrentDraft({ ...draftRef.current, ...patch, mistakeRefs: [] });
   };
 
   const insertAfterCurrentBlock = useCallback((editor: Editor, node: Record<string, unknown>) => {
@@ -255,17 +307,18 @@ export const RecordEditorPage = ({
       .run();
   }, []);
 
-  const addAsset = useCallback(async (editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
-    const asset = await onAddAsset(file, kind, title);
-    insertAfterCurrentBlock(editor, {
-      type: "recordAsset",
-      attrs: { assetId: asset.id, title: asset.title ?? title, kind },
-    });
-    const nextDraft = cloneRecord({ ...draftRef.current, contentHtml: editor.getHTML() });
-    draftRef.current = nextDraft;
-    setDraft(nextDraft);
-    scheduleDraftSave(nextDraft);
-  }, [insertAfterCurrentBlock, onAddAsset, scheduleDraftSave]);
+  const addAsset = useCallback((editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
+    const task = (async () => {
+      const asset = await onAddAsset(file, kind, title);
+      insertAfterCurrentBlock(editor, {
+        type: "recordAsset",
+        attrs: { assetId: asset.id, title: asset.title ?? title, kind },
+      });
+      setCurrentDraft({ ...draftRef.current, contentHtml: editor.getHTML() });
+    })();
+
+    return trackAssetTask(task);
+  }, [insertAfterCurrentBlock, onAddAsset, setCurrentDraft, trackAssetTask]);
 
   const pickNativeEditorImage = useCallback(async (editor: Editor) => {
     try {
@@ -304,13 +357,10 @@ export const RecordEditorPage = ({
       }
 
       const asset = await onAddAsset(file, "audio", "录音");
-      const nextDraft = cloneRecord({
+      const nextDraft = setCurrentDraft({
         ...draftRef.current,
         contentHtml: `${draftRef.current.contentHtml || "<p></p>"}${recordAssetHtml(asset, "audio", "录音")}`,
       });
-      draftRef.current = nextDraft;
-      setDraft(nextDraft);
-      scheduleDraftSave(nextDraft);
       await flushDraft(nextDraft);
     })();
 
@@ -320,7 +370,7 @@ export const RecordEditorPage = ({
     } finally {
       stoppingRecordingRef.current = null;
     }
-  }, [addAsset, flushDraft, onAddAsset, scheduleDraftSave]);
+  }, [addAsset, flushDraft, onAddAsset, setCurrentDraft]);
 
   const back = async () => {
     if (leavingRef.current) {
@@ -341,34 +391,57 @@ export const RecordEditorPage = ({
   }, [stopRecordingIntoDraft]);
 
   const save = async () => {
+    if (saving) {
+      return;
+    }
     setSaving(true);
+    setSaveError(null);
+    committingRef.current = true;
+    ignoreEditorChangesRef.current = true;
+    let draftToSave: RecordBlock | null = null;
     try {
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-      await flushDraft();
-      const savedDraft = cloneRecord(draftRef.current);
-      initialEditingRef.current = false;
-      setEditing(false);
-      await onSave(savedDraft);
+      cancelScheduledDraftSave();
+      await waitForPendingAssets();
+      await waitForDraftSaves();
+
+      const editor = editorRef.current;
+      draftToSave = cloneRecord({
+        ...draftRef.current,
+        contentHtml: editor && !editor.isDestroyed ? editor.getHTML() : draftRef.current.contentHtml,
+      });
+      draftRef.current = draftToSave;
+      setDraft(draftToSave);
+
+      await onSave(draftToSave);
+      await waitForDraftSaves();
       await onDeleteDraft(record.id);
       setDraftRestored(false);
+      initialEditingRef.current = false;
+      setEditing(false);
+    } catch (error) {
+      committingRef.current = false;
+      ignoreEditorChangesRef.current = false;
+      const fallbackDraft = draftToSave ?? draftRef.current;
+      draftRef.current = fallbackDraft;
+      setDraft(fallbackDraft);
+      await flushDraft(fallbackDraft, { force: true }).catch(() => undefined);
+      const message = error instanceof Error ? error.message : "未知错误";
+      setSaveError(`保存失败，内容已留在草稿中。${message}`);
     } finally {
+      committingRef.current = false;
       setSaving(false);
     }
   };
 
   const discardDraft = async () => {
-    if (saveTimerRef.current) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
+    cancelScheduledDraftSave();
+    await waitForDraftSaves();
     await onDeleteDraft(record.id);
     const clean = cloneRecord(record);
     setDraft(clean);
     draftRef.current = clean;
     setDraftRestored(false);
+    setSaveError(null);
     setEditing(false);
   };
 
@@ -479,6 +552,7 @@ export const RecordEditorPage = ({
       {editing ? (
         <>
           {draftRestored && <p className="status-message draft-status">已恢复未保存草稿，点击保存后才会写入正式记录。</p>}
+          {saveError && <p className="status-message draft-status">{saveError}</p>}
           <section className="record-editor-head">
             <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" />
             <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} />
@@ -598,7 +672,7 @@ export const RecordEditorPage = ({
                   <div className="record-review-history">
                     {reviewLogs.slice(0, 12).map((log) => (
                       <article key={log.id}>
-                        <strong>{log.reviewedAt.slice(0, 10)} · {log.rating === "remembered" ? "记住了" : log.rating === "fuzzy" ? "模糊" : "忘了"}</strong>
+                        <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {log.rating === "remembered" ? "记住了" : log.rating === "fuzzy" ? "模糊" : "忘了"}</strong>
                         <small>间隔 {log.previousIntervalDays} 天 → {log.nextIntervalDays} 天</small>
                       </article>
                     ))}

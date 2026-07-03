@@ -1220,11 +1220,11 @@ button:disabled {
 }
 
 .image-lightbox-stage img {
-  max-width: calc(100vw - 24px);
-  max-height: calc(100vh - 84px);
+  display: block;
   object-fit: contain;
   user-select: none;
-  transition: transform 80ms linear;
+  transform-origin: center center;
+  will-change: transform;
 }
 
 .audio-asset {
@@ -2921,23 +2921,15 @@ button:disabled {
 }
 
 .structure-insert-popover {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 8px);
-  right: 0;
+  z-index: 80;
   display: grid;
-  min-width: 230px;
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow);
-}
-
-.quick-insert .structure-insert-popover {
-  left: 0;
-  right: auto;
+  overflow-y: auto;
 }
 
 .structure-insert-popover button {

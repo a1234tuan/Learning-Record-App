@@ -14,6 +14,9 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.OutputStream;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 @CapacitorPlugin(name = "NativeAutoBackup")
 public class NativeAutoBackupPlugin extends Plugin {
@@ -21,6 +24,19 @@ public class NativeAutoBackupPlugin extends Plugin {
     private static final String KEY_TREE_URI = "tree_uri";
     private static final String KEY_FOLDER_NAME = "folder_name";
     private static final String LATEST_FILE_NAME = "study-journal-latest.zip";
+    private final Map<String, WriteSession> writeSessions = new ConcurrentHashMap<>();
+
+    private static class WriteSession {
+        final Uri uri;
+        final OutputStream output;
+        long size;
+
+        WriteSession(Uri uri, OutputStream output) {
+            this.uri = uri;
+            this.output = output;
+            this.size = 0;
+        }
+    }
 
     @PluginMethod
     public void bindFolder(PluginCall call) {
@@ -110,6 +126,129 @@ public class NativeAutoBackupPlugin extends Plugin {
         });
     }
 
+    @PluginMethod
+    public void beginWriteLatest(PluginCall call) {
+        String mimeType = call.getString("mimeType", "application/zip");
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri treeUri = Uri.parse(treeUriText);
+                Uri documentUri = DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    DocumentsContract.getTreeDocumentId(treeUri)
+                );
+                Uri fileUri = findOrCreateFile(documentUri, mimeType);
+                OutputStream output = getContext().getContentResolver().openOutputStream(fileUri, "wt");
+                if (output == null) {
+                    throw new IllegalStateException("无法打开备份文件写入流。");
+                }
+
+                String sessionId = UUID.randomUUID().toString();
+                writeSessions.put(sessionId, new WriteSession(fileUri, output));
+
+                JSObject response = new JSObject();
+                response.put("sessionId", sessionId);
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("uri", fileUri.toString());
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "开始自动备份写入失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void appendWriteLatest(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        String data = call.getString("data");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.reject("缺少自动备份写入会话。");
+            return;
+        }
+        if (data == null) {
+            call.reject("备份数据为空。");
+            return;
+        }
+
+        WriteSession session = writeSessions.get(sessionId);
+        if (session == null) {
+            call.reject("自动备份写入会话已失效。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+                session.output.write(bytes);
+                session.size += bytes.length;
+
+                JSObject response = new JSObject();
+                response.put("size", session.size);
+                call.resolve(response);
+            } catch (Exception error) {
+                writeSessions.remove(sessionId);
+                closeQuietly(session.output);
+                call.reject(error.getMessage() != null ? error.getMessage() : "写入自动备份分块失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void finishWriteLatest(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.reject("缺少自动备份写入会话。");
+            return;
+        }
+
+        WriteSession session = writeSessions.remove(sessionId);
+        if (session == null) {
+            call.reject("自动备份写入会话已失效。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                session.output.flush();
+                session.output.close();
+
+                JSObject response = new JSObject();
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("size", session.size);
+                response.put("uri", session.uri.toString());
+                call.resolve(response);
+            } catch (Exception error) {
+                closeQuietly(session.output);
+                call.reject(error.getMessage() != null ? error.getMessage() : "完成自动备份写入失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelWriteLatest(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.resolve();
+            return;
+        }
+
+        WriteSession session = writeSessions.remove(sessionId);
+        if (session == null) {
+            call.resolve();
+            return;
+        }
+
+        execute(() -> {
+            closeQuietly(session.output);
+            call.resolve();
+        });
+    }
+
     private Uri findOrCreateFile(Uri documentUri, String mimeType) throws Exception {
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
             documentUri,
@@ -145,6 +284,13 @@ public class NativeAutoBackupPlugin extends Plugin {
             throw new IllegalStateException("无法创建自动备份文件。");
         }
         return created;
+    }
+
+    private void closeQuietly(OutputStream output) {
+        try {
+            output.close();
+        } catch (Exception ignored) {
+        }
     }
 
     private SharedPreferences prefs() {

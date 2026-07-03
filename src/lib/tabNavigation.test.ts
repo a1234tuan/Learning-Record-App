@@ -105,13 +105,28 @@ describe("tabNavigation", () => {
   it("keeps review queue as root-level tab state", () => {
     const memory = {
       ...createInitialTabMemory(),
-      review: { queueIds: ["record-1"], currentRecordId: "record-1" },
+      review: { ...createInitialTabMemory().review, queueIds: ["record-1"], currentRecordId: "record-1" },
     };
 
     const next = popTabDepth(memory, "review");
 
     expect(next.review.queueIds).toEqual(["record-1"]);
     expect(next.review.currentRecordId).toBe("record-1");
+  });
+
+  it("opens and pops record depth inside review tab", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      review: { ...createInitialTabMemory().review, recordId: "record-1", recordEditing: true },
+    };
+
+    expect(getTabDepth("review", memory)).toBe(1);
+
+    const next = popTabDepth(memory, "review");
+
+    expect(getTabDepth("review", next)).toBe(0);
+    expect(next.review.recordId).toBeUndefined();
+    expect(next.review.recordEditing).toBeUndefined();
   });
 
   it("stores recordings state under More", () => {

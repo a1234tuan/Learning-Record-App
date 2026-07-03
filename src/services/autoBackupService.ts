@@ -103,7 +103,7 @@ export const flushAutoBackupNow = async (
 
   running = true;
   try {
-    const result = await adapter.writeLatest(await store.createSnapshot());
+    const result = await adapter.writeLatest(store);
     dirty = false;
     const nextSettings: AppSettings = {
       ...settings,

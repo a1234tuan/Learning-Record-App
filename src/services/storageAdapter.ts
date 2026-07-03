@@ -7,6 +7,7 @@ import type {
   AiSecret,
   AppSettings,
   Asset,
+  BackupAssetMeta,
   Block,
   DayEntry,
   MistakeCard,
@@ -21,6 +22,9 @@ import type {
   ReviewSchedule,
   StorageAdapter,
   StorageSnapshot,
+  StreamableBackupSnapshot,
+  StreamedAssetReader,
+  StreamingImportOptions,
   Subject,
   SubjectConfig,
   StudySession,
@@ -35,13 +39,18 @@ import {
   isCurrentDefaultAiPresetSetWithoutModes,
   isLegacyDefaultAiPresetSet,
 } from "../db/defaults";
-import { addDaysISO, nowISO, todayISO } from "../lib/date";
+import { addDaysISO, isoDateTimeToLocalDate, nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
 import { DEFAULT_REVIEW_EASE, applySm2Review } from "../lib/reviewScheduler";
+
+const assetToMeta = (asset: Asset): BackupAssetMeta => {
+  const { data: _data, ...meta } = asset;
+  return meta;
+};
 
 export class DexieStorageAdapter implements StorageAdapter {
   async initialize(): Promise<void> {
@@ -459,38 +468,41 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async rateRecordReview(recordId: string, rating: RecordReviewRating, reviewedAt = nowISO()): Promise<RecordReviewState | undefined> {
-    const review = await db.recordReviews.get(recordId);
     const record = await this.activeRecord(recordId);
+    const review = await db.recordReviews.get(recordId);
     if (!review || !record || review.status !== "active") {
       if (review) {
         await this.removeRecordFromReview(recordId);
       }
       return undefined;
     }
-    const reviewedDate = reviewedAt.slice(0, 10);
-    if (review.lastReviewDate === reviewedDate) {
-      return review;
-    }
+    const reviewedDate = isoDateTimeToLocalDate(reviewedAt);
 
-    const scheduled = applySm2Review(review, rating, reviewedDate, reviewedAt);
-    const saved = { ...scheduled.state, updatedAt: nowISO() };
-    const log: RecordReviewLog = {
-      ...createBaseEntity(),
-      recordId,
-      rating,
-      reviewedAt,
-      previousEaseFactor: review.easeFactor,
-      nextEaseFactor: saved.easeFactor,
-      previousRepetition: review.repetition,
-      nextRepetition: saved.repetition,
-      previousIntervalDays: review.intervalDays,
-      nextIntervalDays: saved.intervalDays,
-      previousNextReviewDate: review.nextReviewDate,
-      nextReviewDate: saved.nextReviewDate,
-    };
-
-    await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
-      await db.recordReviews.put(saved);
+    const saved = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+      const current = await db.recordReviews.get(recordId);
+      if (!current || current.status !== "active") {
+        return undefined;
+      }
+      if (current.lastReviewDate === reviewedDate) {
+        return current;
+      }
+      const scheduled = applySm2Review(current, rating, reviewedDate, reviewedAt);
+      const nextState = { ...scheduled.state, updatedAt: nowISO() };
+      const log: RecordReviewLog = {
+        ...createBaseEntity(),
+        recordId,
+        rating,
+        reviewedAt,
+        previousEaseFactor: current.easeFactor,
+        nextEaseFactor: nextState.easeFactor,
+        previousRepetition: current.repetition,
+        nextRepetition: nextState.repetition,
+        previousIntervalDays: current.intervalDays,
+        nextIntervalDays: nextState.intervalDays,
+        previousNextReviewDate: current.nextReviewDate,
+        nextReviewDate: nextState.nextReviewDate,
+      };
+      await db.recordReviews.put(nextState);
       await db.recordReviewLogs.put(log);
       const stat = await db.recordReviewDayStats.get(reviewedDate) ?? {
         ...createBaseEntity(),
@@ -511,8 +523,12 @@ export class DexieStorageAdapter implements StorageAdapter {
         updatedAt: nowISO(),
       };
       await db.recordReviewDayStats.put(nextStat);
+      return nextState;
     });
 
+    if (!saved) {
+      return undefined;
+    }
     const remainingDue = await this.listDueRecordReviews(reviewedDate);
     if (remainingDue.length === 0) {
       const stat = await db.recordReviewDayStats.get(reviewedDate);
@@ -554,7 +570,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const byDate = new Map<string, { remembered: number; reviewed: number }>();
     for (const log of logs) {
-      const key = log.reviewedAt.slice(0, 10);
+      const key = isoDateTimeToLocalDate(log.reviewedAt);
       const current = byDate.get(key) ?? { remembered: 0, reviewed: 0 };
       current.reviewed += 1;
       if (log.rating === "remembered") {
@@ -894,6 +910,79 @@ export class DexieStorageAdapter implements StorageAdapter {
     };
   }
 
+  async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
+    const collectAssetMetas = async () => {
+      const assetMetas: BackupAssetMeta[] = [];
+      await db.assets.each((asset) => {
+        assetMetas.push(assetToMeta(asset));
+      });
+      return assetMetas;
+    };
+
+    const [
+      entries,
+      blocks,
+      tags,
+      studySessions,
+      settings,
+      assets,
+      recordDrafts,
+      recordReviews,
+      recordReviewLogs,
+      recordReviewDayStats,
+    ] = await Promise.all([
+      db.entries.toArray(),
+      db.blocks.toArray(),
+      db.tags.toArray(),
+      db.studySessions.toArray(),
+      this.getSettings(),
+      collectAssetMetas(),
+      db.recordDrafts.toArray(),
+      db.recordReviews.toArray(),
+      db.recordReviewLogs.toArray(),
+      db.recordReviewDayStats.toArray(),
+    ]);
+    const cleanedBlocks: Block[] = blocks.map((block) =>
+      block.type === "record" ? { ...block, mistakeRefs: [] as string[] } : block,
+    );
+
+    return {
+      payload: {
+        manifest: {
+          format: "study-journal",
+          version: 4,
+          exportedAt: nowISO(),
+          appVersion: "0.1.0",
+          counts: {
+            entries: entries.length,
+            blocks: cleanedBlocks.length,
+            mistakes: 0,
+            assets: assets.length,
+            tags: tags.length,
+            reviews: 0,
+            studySessions: studySessions.length,
+            recordReviews: recordReviews.length,
+            recordReviewLogs: recordReviewLogs.length,
+            recordReviewDayStats: recordReviewDayStats.length,
+          },
+        },
+        entries,
+        blocks: cleanedBlocks,
+        recordDrafts,
+        mistakes: [],
+        tags,
+        reviews: [],
+        recordReviews,
+        recordReviewLogs,
+        recordReviewDayStats,
+        studySessions,
+        settings: ensureSettingsSubjects({ ...settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+      },
+      assets,
+      recordDrafts,
+    };
+  }
+
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
     await db.transaction(
       "rw",
@@ -942,6 +1031,74 @@ export class DexieStorageAdapter implements StorageAdapter {
         ]);
       },
     );
+  }
+
+  async restoreStreamableSnapshot(
+    snapshot: StreamableBackupSnapshot,
+    readAsset: StreamedAssetReader,
+    options: StreamingImportOptions = {},
+  ): Promise<void> {
+    const restoredBlocks = migrateBlocksToRecords(snapshot.payload.blocks);
+    const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
+
+    await db.transaction(
+      "rw",
+      [
+        db.entries,
+        db.blocks,
+        db.recordDrafts,
+        db.recordReviews,
+        db.recordReviewLogs,
+        db.recordReviewDayStats,
+        db.mistakes,
+        db.tags,
+        db.reviews,
+        db.studySessions,
+        db.settings,
+        db.assets,
+      ],
+      async () => {
+        await Promise.all([
+          db.entries.clear(),
+          db.blocks.clear(),
+          db.recordDrafts.clear(),
+          db.recordReviews.clear(),
+          db.recordReviewLogs.clear(),
+          db.recordReviewDayStats.clear(),
+          db.mistakes.clear(),
+          db.tags.clear(),
+          db.reviews.clear(),
+          db.studySessions.clear(),
+          db.settings.clear(),
+          db.assets.clear(),
+        ]);
+        await Promise.all([
+          db.entries.bulkPut(snapshot.payload.entries),
+          db.blocks.bulkPut(restoredBlocks),
+          db.recordDrafts.bulkPut(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
+          db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
+          db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),
+          db.recordReviewDayStats.bulkPut(snapshot.payload.recordReviewDayStats ?? []),
+          db.tags.bulkPut(snapshot.payload.tags),
+          db.studySessions.bulkPut(snapshot.payload.studySessions),
+          db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
+        ]);
+      },
+    );
+
+    const total = snapshot.assets.length;
+    for (const [index, meta] of snapshot.assets.entries()) {
+      options.onProgress?.({
+        stage: "assets",
+        message: `正在恢复资源 ${index + 1}/${total}。`,
+        current: index + 1,
+        total,
+      });
+      const asset = await readAsset(meta, index, total);
+      if (asset) {
+        await db.assets.put(asset);
+      }
+    }
   }
 
   async clearAll(): Promise<void> {

@@ -35,6 +35,7 @@ import type { RecordBlock, Subject } from "./types";
 import { buildDayLogAiContext } from "./services/dayLogAiContextService";
 import { createAiSessionForDate } from "./services/aiSessionService";
 import { getFavoriteRecords } from "./lib/journalSelectors";
+import { todayISO } from "./lib/date";
 import {
   createInitialTabMemory,
   getRecordState,
@@ -171,7 +172,7 @@ export const App = () => {
   );
 
   const openRecordInTab = useCallback(
-    (record: RecordBlock, tab: TabKey, assetId?: string) => {
+    (record: RecordBlock, tab: TabKey, assetId?: string, editing = false) => {
       clearBackHint();
       setTabMemory((current) => ({
         ...current,
@@ -179,7 +180,7 @@ export const App = () => {
           ...current[tab],
           recordId: record.id,
           highlightAssetId: assetId,
-          recordEditing: false,
+          recordEditing: editing,
         },
       }));
       setActiveTab(tab);
@@ -227,7 +228,7 @@ export const App = () => {
       return;
     }
     const key = "study-journal-review-toast-date";
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
     if (localStorage.getItem(key) === today) {
       return;
     }
@@ -616,13 +617,20 @@ export const App = () => {
           />
         );
       case "review":
-        return (
+        return currentRecord ? (
+          renderRecordPage(currentRecord, tabMemory.review.highlightAssetId)
+        ) : (
           <ReviewPage
             records={app.blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt)}
             dueReviews={app.dueRecordReviews}
+            reviewStates={app.recordReviews}
             stats={app.recordReviewStats}
+            mode={tabMemory.review.mode}
             queueIds={tabMemory.review.queueIds}
             currentRecordId={tabMemory.review.currentRecordId}
+            onModeChange={(mode) =>
+              setTabMemory((current) => ({ ...current, review: { ...current.review, mode } }))
+            }
             onQueueChange={(queueIds) =>
               setTabMemory((current) => ({ ...current, review: { ...current.review, queueIds } }))
             }
@@ -634,6 +642,17 @@ export const App = () => {
               await app.rateRecordReview(recordId, rating);
             }}
             onRefresh={app.refresh}
+            onOpenRecord={(record) => openRecordInTab(record, "review")}
+            onEditRecord={(record) => openRecordInTab(record, "review", undefined, true)}
+            onAddToReview={async (recordId) => {
+              await app.addRecordToReview(recordId);
+            }}
+            onRemoveReview={async (recordId) => {
+              await app.removeRecordFromReview(recordId);
+            }}
+            onResetReview={async (recordId) => {
+              await app.resetRecordReview(recordId);
+            }}
           />
         );
       case "more":
@@ -651,7 +670,7 @@ export const App = () => {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.categories.managing ? "manage" : tabMemory.categories.activeSubject ?? "all"}`;
     }
     if (activeTab === "review") {
-      return `${activeTab}-${depth}-${tabMemory.review.currentRecordId ?? "root"}-${tabMemory.review.queueIds.join(".")}`;
+      return `${activeTab}-${depth}-${recordPart}-${tabMemory.review.mode}-${tabMemory.review.currentRecordId ?? "root"}-${tabMemory.review.queueIds.join(".")}`;
     }
     if (activeTab === "more") {
       return `${activeTab}-${depth}-${recordPart}-${tabMemory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;

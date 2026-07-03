@@ -6,8 +6,8 @@ import { storage } from "../services/storageAdapter";
 import { fileSystemFolderSyncAdapter, manualZipSyncAdapter } from "../services/syncAdapters";
 import { nativeBackupAdapter } from "../services/nativeBackupAdapter";
 import { isNativePlatform } from "../lib/platform";
-import { exportFullBackup } from "../services/knowledgeExportService";
-import { flushAutoBackupNow } from "../services/autoBackupService";
+import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
+import { importAndRestoreSnapshot } from "../services/importRestoreService";
 import { AutoBackupPanel } from "../components/AutoBackupPanel";
 
 interface SettingsPageProps {
@@ -18,12 +18,23 @@ interface SettingsPageProps {
 
 export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsPageProps) => {
   const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState<"export" | "import" | "folder" | null>(null);
   const native = isNativePlatform();
   const folderAvailable = fileSystemFolderSyncAdapter.isAvailable();
 
   const exportZip = async () => {
-    const result = await exportFullBackup(await storage.createSnapshot());
-    setMessage(`${result} 这是可导入恢复的完整备份。`);
+    setBusy("export");
+    setMessage("");
+    try {
+      const result = await exportFullBackupFromStorage(storage, {
+        onProgress: (progress) => setMessage(progress.message),
+      });
+      setMessage(`${result} 这是可导入恢复的完整备份。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出失败。");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const importZip = async () => {
@@ -32,20 +43,42 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
       setMessage("已取消导入。");
       return;
     }
+
+    setBusy("import");
     const adapter = native ? nativeBackupAdapter : manualZipSyncAdapter;
-    const snapshot = await adapter.importSnapshot?.();
-    if (!snapshot) {
-      return;
+    setMessage("正在导入备份...");
+    try {
+      const summary = await importAndRestoreSnapshot({
+        adapter,
+        onRestored,
+        onProgress: (progress) => setMessage(progress.message),
+        onAutoBackupError: (detail) => setMessage(`已恢复数据，但后台自动备份更新失败：${detail}`),
+      });
+      if (!summary) {
+        setMessage("已取消导入。");
+        return;
+      }
+      setMessage(`已从备份恢复，${summary.records} 条日志，${summary.assets} 个资源。自动备份会在后台更新。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导入失败。");
+    } finally {
+      setBusy(null);
     }
-    await storage.restoreSnapshot(snapshot);
-    await onRestored();
-    await flushAutoBackupNow("restore");
-    setMessage("已从备份恢复。");
   };
 
   const exportFolderSnapshot = async () => {
-    await fileSystemFolderSyncAdapter.exportSnapshot(await storage.createSnapshot());
-    setMessage("已写入同步文件夹快照。");
+    setBusy("folder");
+    setMessage("");
+    try {
+      await fileSystemFolderSyncAdapter.exportSnapshot(await storage.createSnapshot(), {
+        onProgress: (progress) => setMessage(progress.message),
+      });
+      setMessage("已写入同步文件夹快照。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "写入同步文件夹失败。");
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (
@@ -101,16 +134,21 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
       </section>
       <AutoBackupPanel settings={settings} onChanged={onRestored} />
       <section className="backup-panel">
-        <button type="button" className="primary-button" onClick={exportZip}>
+        <button type="button" className="primary-button" onClick={exportZip} disabled={busy !== null}>
           <Download size={18} />
           {native ? "导出并分享备份" : "导出完整备份"}
         </button>
-        <button type="button" className="secondary-button" onClick={importZip}>
+        <button type="button" className="secondary-button" onClick={importZip} disabled={busy !== null}>
           <Upload size={18} />
           {native ? "从文件导入" : "导入恢复"}
         </button>
         {!native && (
-          <button type="button" className="secondary-button" onClick={exportFolderSnapshot} disabled={!folderAvailable}>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={exportFolderSnapshot}
+            disabled={!folderAvailable || busy !== null}
+          >
             <FolderSync size={18} />
             写入同步文件夹
           </button>

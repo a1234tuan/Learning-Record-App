@@ -1,21 +1,25 @@
 import JSZip from "jszip";
-import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import { saveAs } from "file-saver";
 
 import type {
   Asset,
   ExportKind,
+  ExportOptions,
   KnowledgeExportPayload,
   KnowledgeRecord,
   RecordBlock,
+  StorageAdapter,
   StorageSnapshot,
 } from "../types";
 import { getAllVisibleSubjects } from "../lib/subjects";
-import { blobToBase64, snapshotToZip } from "./backup";
+import { snapshotToZip } from "./backup";
 import { isNativePlatform } from "../lib/platform";
 import { sanitizeFileName } from "./assetDownloadService";
 import { parseLinearRecordContent, recordToPlainText } from "../lib/recordContent";
+import { normalizeNativeShareError, writeBlobToNativeShareCache } from "./nativeFileWriter";
+import { canUseNativeZipArchive } from "./nativeZipArchive";
+import { exportNativeStreamableBackupForShare } from "./streamingBackupService";
 
 const assetLabel = (asset: Asset | undefined, fallbackTitle: string): string => {
   if (!asset) {
@@ -126,66 +130,90 @@ export const createPlainText = (snapshot: StorageSnapshot): string => {
   ].join("\n\n---\n\n");
 };
 
-const writeOrDownload = async (blob: Blob, fileName: string, title: string): Promise<string> => {
+const writeOrDownload = async (
+  blob: Blob,
+  fileName: string,
+  title: string,
+  options: ExportOptions = {},
+): Promise<string> => {
   const safeName = sanitizeFileName(fileName);
   if (!isNativePlatform()) {
     saveAs(blob, safeName);
     return "已开始下载。";
   }
 
-  const base64 = await blobToBase64(blob);
-  const writeResult = await Filesystem.writeFile({
-    path: safeName,
-    data: base64,
-    directory: Directory.Documents,
-    recursive: true,
+  const writeResult = await writeBlobToNativeShareCache({
+    blob,
+    fileName: safeName,
+    mimeType: blob.type || "application/octet-stream",
+    onProgress: options.onProgress,
   });
 
-  await Share.share({
-    title,
-    text: title,
-    files: [writeResult.uri],
-    dialogTitle: "保存或分享导出文件",
-  });
+  options.onProgress?.({ stage: "sharing", message: "正在打开系统保存/分享面板。" });
+  try {
+    await Share.share({
+      title,
+      text: title,
+      files: [writeResult.uri],
+      dialogTitle: "保存或分享导出文件",
+    });
+  } catch (error) {
+    throw normalizeNativeShareError(error);
+  }
+  options.onProgress?.({ stage: "done", message: "导出文件已交给系统分享面板。" });
 
   return "已打开系统保存/分享面板。";
 };
 
-export const exportFullBackup = async (snapshot: StorageSnapshot): Promise<string> => {
+export const exportFullBackup = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<string> => {
   const date = snapshot.payload.manifest.exportedAt.slice(0, 10);
-  const zip = await snapshotToZip(snapshot);
-  return writeOrDownload(zip, `study-journal-${date}.zip`, "学习日志完整备份");
+  const zip = await snapshotToZip(snapshot, options);
+  return writeOrDownload(zip, `study-journal-${date}.zip`, "学习日志完整备份", options);
 };
 
-export const exportSubjectMarkdown = async (snapshot: StorageSnapshot): Promise<string> => {
+export const exportFullBackupFromStorage = async (
+  store: StorageAdapter,
+  options: ExportOptions = {},
+): Promise<string> => {
+  if (canUseNativeZipArchive()) {
+    return exportNativeStreamableBackupForShare(store, options);
+  }
+  return exportFullBackup(await store.createSnapshot(), options);
+};
+
+export const exportSubjectMarkdown = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<string> => {
   const date = snapshot.payload.manifest.exportedAt.slice(0, 10);
   const zip = await createSubjectMarkdownZip(snapshot);
-  return writeOrDownload(zip, `study-journal-subjects-${date}.zip`, "学习日志学科 Markdown");
+  return writeOrDownload(zip, `study-journal-subjects-${date}.zip`, "学习日志学科 Markdown", options);
 };
 
-export const exportKnowledgeJson = async (snapshot: StorageSnapshot): Promise<string> => {
+export const exportKnowledgeJson = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<string> => {
   const date = snapshot.payload.manifest.exportedAt.slice(0, 10);
   const blob = new Blob([JSON.stringify(createKnowledgeJsonPayload(snapshot), null, 2)], {
     type: "application/json;charset=utf-8",
   });
-  return writeOrDownload(blob, `study-journal-knowledge-${date}.json`, "学习日志知识库 JSON");
+  return writeOrDownload(blob, `study-journal-knowledge-${date}.json`, "学习日志知识库 JSON", options);
 };
 
-export const exportPlainText = async (snapshot: StorageSnapshot): Promise<string> => {
+export const exportPlainText = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<string> => {
   const date = snapshot.payload.manifest.exportedAt.slice(0, 10);
   const blob = new Blob([createPlainText(snapshot)], { type: "text/plain;charset=utf-8" });
-  return writeOrDownload(blob, `study-journal-knowledge-${date}.txt`, "学习日志纯文本");
+  return writeOrDownload(blob, `study-journal-knowledge-${date}.txt`, "学习日志纯文本", options);
 };
 
-export const exportKnowledge = async (kind: ExportKind, snapshot: StorageSnapshot): Promise<string> => {
+export const exportKnowledge = async (
+  kind: ExportKind,
+  snapshot: StorageSnapshot,
+  options: ExportOptions = {},
+): Promise<string> => {
   switch (kind) {
     case "full-backup":
-      return exportFullBackup(snapshot);
+      return exportFullBackup(snapshot, options);
     case "subject-markdown":
-      return exportSubjectMarkdown(snapshot);
+      return exportSubjectMarkdown(snapshot, options);
     case "knowledge-json":
-      return exportKnowledgeJson(snapshot);
+      return exportKnowledgeJson(snapshot, options);
     case "plain-text":
-      return exportPlainText(snapshot);
+      return exportPlainText(snapshot, options);
   }
 };

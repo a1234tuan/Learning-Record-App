@@ -2,6 +2,7 @@ import type { EntityId, Subject } from "../types";
 
 export type TabKey = "today" | "journal" | "categories" | "review" | "more";
 export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | "backup" | "aiTools" | "recordings" | null;
+export type ReviewMode = "queue" | "manage";
 
 export type RecordTabState = {
   recordId?: string;
@@ -22,7 +23,8 @@ export type TabMemory = {
     activeSubject: Subject | null;
     managing: boolean;
   };
-  review: {
+  review: RecordTabState & {
+    mode: ReviewMode;
     queueIds: EntityId[];
     currentRecordId?: EntityId;
   };
@@ -49,6 +51,7 @@ export const createInitialTabMemory = (): TabMemory => ({
     managing: false,
   },
   review: {
+    mode: "queue",
     queueIds: [],
   },
   more: {
@@ -69,7 +72,7 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
     case "categories":
       return memory.categories.recordId ? 2 : memory.categories.activeSubject || memory.categories.managing ? 1 : 0;
     case "review":
-      return 0;
+      return memory.review.recordId ? 1 : 0;
     case "more":
       return memory.more.recordId ? 2 : memory.more.subRoute ? 1 : 0;
   }
@@ -84,7 +87,7 @@ export const getRecordState = (tab: TabKey, memory: TabMemory): RecordTabState =
     case "categories":
       return memory.categories;
     case "review":
-      return {};
+      return memory.review;
     case "more":
       return memory.more;
   }
@@ -134,7 +137,7 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
     case "review":
       return {
         ...memory,
-        review: { ...memory.review },
+        review: { ...memory.review, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
       };
     case "more":
       if (memory.more.recordId) {

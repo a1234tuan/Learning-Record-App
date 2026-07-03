@@ -9,6 +9,16 @@ export type ReviewResult = "remembered" | "forgot";
 export type RecordReviewRating = "remembered" | "fuzzy" | "forgot";
 export type RecordReviewStatus = "active" | "mastered" | "removed";
 export type ExportKind = "full-backup" | "subject-markdown" | "knowledge-json" | "plain-text";
+export type ImportProgressStage =
+  | "choosing"
+  | "reading"
+  | "loading"
+  | "indexing"
+  | "parsing"
+  | "assets"
+  | "restoring"
+  | "done";
+export type ExportProgressStage = "preparing" | "zipping" | "asset" | "writing" | "sharing" | "done";
 
 export interface BaseEntity {
   id: EntityId;
@@ -464,6 +474,20 @@ export interface StorageSnapshot {
   recordDrafts?: RecordDraft[];
 }
 
+export type BackupAssetMeta = Omit<Asset, "data">;
+
+export interface StreamableBackupSnapshot {
+  payload: BackupPayload;
+  assets: BackupAssetMeta[];
+  recordDrafts?: RecordDraft[];
+}
+
+export type StreamedAssetReader = (
+  asset: BackupAssetMeta,
+  index: number,
+  total: number,
+) => Promise<Asset | undefined>;
+
 export interface ImportSummary {
   records: number;
   days: number;
@@ -475,6 +499,32 @@ export interface ImportSummary {
   version: BackupManifest["version"];
   missingAssets: number;
 }
+
+export interface ImportProgress {
+  stage: ImportProgressStage;
+  message: string;
+  current?: number;
+  total?: number;
+}
+
+export interface ImportOptions {
+  onProgress?: (progress: ImportProgress) => void;
+}
+
+export interface ExportProgress {
+  stage: ExportProgressStage;
+  message: string;
+  current?: number;
+  total?: number;
+}
+
+export interface ExportOptions {
+  onProgress?: (progress: ExportProgress) => void;
+}
+
+export interface StreamingExportOptions extends ExportOptions {}
+
+export interface StreamingImportOptions extends ImportOptions {}
 
 export interface KnowledgeRecord {
   id: EntityId;
@@ -544,7 +594,13 @@ export interface StorageAdapter {
   listAssets(): Promise<Asset[]>;
   getAsset(id: EntityId): Promise<Asset | undefined>;
   createSnapshot(): Promise<StorageSnapshot>;
+  createStreamableSnapshot(): Promise<StreamableBackupSnapshot>;
   restoreSnapshot(snapshot: StorageSnapshot): Promise<void>;
+  restoreStreamableSnapshot(
+    snapshot: StreamableBackupSnapshot,
+    readAsset: StreamedAssetReader,
+    options?: StreamingImportOptions,
+  ): Promise<void>;
   clearAll(): Promise<void>;
   listAiSessions?(): Promise<AiChatSession[]>;
   getAiSession?(id: EntityId): Promise<AiChatSession | undefined>;
@@ -565,6 +621,10 @@ export interface StorageAdapter {
 export interface SyncAdapter {
   readonly kind: "manual-zip" | "file-system-folder";
   isAvailable(): boolean;
-  exportSnapshot(snapshot: StorageSnapshot): Promise<void>;
-  importSnapshot?(): Promise<StorageSnapshot | undefined>;
+  exportSnapshot(snapshot: StorageSnapshot, options?: ExportOptions): Promise<void>;
+  importSnapshot?(options?: ImportOptions): Promise<StorageSnapshot | undefined>;
+  importAndRestoreSnapshot?(
+    store: StorageAdapter,
+    options?: StreamingImportOptions,
+  ): Promise<ImportSummary | undefined>;
 }
