@@ -2,7 +2,7 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { Fragment } from "@tiptap/pm/model";
 import { ChevronDown, ChevronRight, Copy, GitBranch, Plus, Trash2, ArrowDown, ArrowUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   createBlankStructureNode,
@@ -333,9 +333,83 @@ const StructureDiagramNodeView = (props: NodeViewProps) => {
 };
 
 const ComparisonTableNodeView = (props: NodeViewProps) => {
-  const data = parseComparisonTableData(nodeData(props.node));
+  const rawData = nodeData(props.node);
+  const data = parseComparisonTableData(rawData);
   const editable = props.editor.isEditable;
+  const fixedCellRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const scrollRowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const [rowHeights, setRowHeights] = useState<number[]>([]);
   const update = (next: ComparisonTableData) => commitData(props.updateAttributes, next);
+  const firstColumn = data.columns[0];
+  const scrollColumns = data.columns.slice(1);
+  const scrollColumnCount = Math.max(scrollColumns.length, 1);
+
+  const setFixedCellRef = useCallback((index: number, node: HTMLDivElement | null) => {
+    fixedCellRefs.current[index] = node;
+  }, []);
+
+  const setScrollRowRef = useCallback((index: number, node: HTMLDivElement | null) => {
+    scrollRowRefs.current[index] = node;
+  }, []);
+
+  const measureRowHeights = useCallback(() => {
+    const next: number[] = [];
+    const rowCount = data.rows.length + 1;
+    for (let index = 0; index < rowCount; index += 1) {
+      const fixedCell = fixedCellRefs.current[index];
+      const scrollRow = scrollRowRefs.current[index];
+      const fixedHeight = fixedCell ? Math.max(fixedCell.scrollHeight, fixedCell.getBoundingClientRect().height) : 0;
+      const scrollHeight = scrollRow ? Math.max(scrollRow.scrollHeight, scrollRow.getBoundingClientRect().height) : 0;
+      next[index] = Math.ceil(Math.max(fixedHeight, scrollHeight));
+    }
+
+    setRowHeights((current) => {
+      if (current.length === next.length && current.every((height, index) => Math.abs(height - next[index]) < 1)) {
+        return current;
+      }
+      return next;
+    });
+  }, [data.rows.length]);
+
+  useLayoutEffect(() => {
+    if (editable) {
+      return undefined;
+    }
+
+    let frame = 0;
+    const scheduleMeasure = () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(measureRowHeights);
+    };
+
+    scheduleMeasure();
+
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleMeasure);
+    if (observer) {
+      for (const node of [...fixedCellRefs.current, ...scrollRowRefs.current]) {
+        if (node) {
+          observer.observe(node);
+        }
+      }
+    }
+    window.addEventListener("resize", scheduleMeasure);
+
+    return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [editable, measureRowHeights, rawData]);
+
+  const rowStyle = (index: number): React.CSSProperties | undefined => {
+    const minHeight = rowHeights[index];
+    return minHeight ? { minHeight } : undefined;
+  };
+
   const addColumn = () => {
     const column = createComparisonColumn();
     update({
@@ -425,31 +499,74 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
         <>
           <h3>{data.title}</h3>
           <div className="comparison-table-scroll">
-            <table className="comparison-table-view">
-              <thead>
-                <tr>
-                  {data.columns.map((column, columnIndex) => (
-                    <th key={column.id} className={columnIndex === 0 ? "sticky-column" : undefined}>
-                      {column.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map((row) => (
-                  <tr key={row.id}>
-                    {data.columns.map((column, columnIndex) => {
-                      const value = row.cells[column.id]?.trim();
-                      return (
-                        <td key={column.id} className={columnIndex === 0 ? "sticky-column" : undefined}>
-                          {value || <span className="empty-cell">—</span>}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div
+              className={`comparison-table-view comparison-panel-view${scrollColumns.length === 0 ? " single-column" : ""}`}
+              role="table"
+              style={{ "--comparison-scroll-column-count": scrollColumnCount } as React.CSSProperties}
+            >
+              <div className="comparison-fixed-panel" role="presentation">
+                <div
+                  className="comparison-grid-cell comparison-grid-head sticky-column"
+                  role="columnheader"
+                  ref={(node) => setFixedCellRef(0, node)}
+                  style={rowStyle(0)}
+                >
+                  {firstColumn?.label ?? "概念"}
+                </div>
+                {data.rows.map((row, rowIndex) => {
+                  const firstValue = firstColumn ? row.cells[firstColumn.id]?.trim() : "";
+                  return (
+                    <div
+                      key={row.id}
+                      className="comparison-grid-cell sticky-column"
+                      role="cell"
+                      ref={(node) => setFixedCellRef(rowIndex + 1, node)}
+                      style={rowStyle(rowIndex + 1)}
+                    >
+                      {firstValue || <span className="empty-cell">—</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              {scrollColumns.length > 0 && (
+                <div className="comparison-scroll-panel" role="presentation">
+                  <div className="comparison-table-right-scroll" role="presentation">
+                    <div className="comparison-scroll-grid">
+                      <div
+                        className="comparison-scroll-grid-row comparison-grid-head-row"
+                        role="row"
+                        ref={(node) => setScrollRowRef(0, node)}
+                        style={rowStyle(0)}
+                      >
+                        {scrollColumns.map((column) => (
+                          <div key={column.id} className="comparison-grid-cell comparison-grid-head" role="columnheader">
+                            {column.label}
+                          </div>
+                        ))}
+                      </div>
+                      {data.rows.map((row, rowIndex) => (
+                        <div
+                          key={row.id}
+                          className="comparison-scroll-grid-row"
+                          role="row"
+                          ref={(node) => setScrollRowRef(rowIndex + 1, node)}
+                          style={rowStyle(rowIndex + 1)}
+                        >
+                          {scrollColumns.map((column) => {
+                            const value = row.cells[column.id]?.trim();
+                            return (
+                              <div key={column.id} className="comparison-grid-cell" role="cell">
+                                {value || <span className="empty-cell">—</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}

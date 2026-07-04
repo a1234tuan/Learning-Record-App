@@ -3798,6 +3798,8 @@ button:disabled {
 }
 
 .comparison-table-scroll {
+  position: relative;
+  isolation: isolate;
   min-width: 0;
   max-width: 100%;
   min-inline-size: 0;
@@ -3806,7 +3808,7 @@ button:disabled {
   display: block;
   width: 100%;
   margin-top: 12px;
-  overflow-x: auto;
+  overflow-x: visible;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x pan-y;
@@ -3816,53 +3818,108 @@ button:disabled {
 }
 
 .comparison-table-view {
-  width: max-content;
+  width: 100%;
   min-width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
 }
 
-.comparison-table-view th,
-.comparison-table-view td {
-  min-width: 150px;
-  max-width: 260px;
+.comparison-panel-view {
+  display: grid;
+  grid-template-columns: minmax(150px, 38%) minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.comparison-panel-view.single-column {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.comparison-fixed-panel {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  align-content: start;
+  background: var(--surface);
+  z-index: 2;
+}
+
+.comparison-scroll-panel {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.comparison-table-right-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+  scrollbar-width: thin;
+}
+
+.comparison-table-right-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.comparison-table-right-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 36%, transparent);
+}
+
+.comparison-scroll-grid {
+  display: grid;
+  min-width: 100%;
+}
+
+.comparison-scroll-grid-row {
+  display: grid;
+  grid-template-columns: repeat(var(--comparison-scroll-column-count), minmax(150px, 260px));
+  min-width: 100%;
+  width: max-content;
+  align-items: stretch;
+}
+
+.comparison-grid-cell {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
   padding: 10px 12px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  background: var(--surface);
   overflow-wrap: anywhere;
   text-align: left;
 }
 
-.comparison-table-view th {
-  position: sticky;
-  top: 0;
+.comparison-grid-head {
   z-index: 2;
   background: color-mix(in srgb, var(--surface) 84%, var(--primary) 16%);
   color: var(--primary-strong);
   font-weight: 800;
 }
 
-.comparison-table-view .sticky-column {
-  position: sticky;
-  left: 0;
-  z-index: 3;
-  min-width: 150px;
+.comparison-grid-cell.sticky-column {
+  z-index: 10;
   background: color-mix(in srgb, var(--surface) 92%, var(--primary) 8%);
+  background-clip: padding-box;
   box-shadow: 8px 0 12px rgba(31, 41, 55, 0.08);
 }
 
-.comparison-table-view th.sticky-column {
-  z-index: 4;
+.comparison-grid-head.sticky-column {
+  z-index: 20;
   background: color-mix(in srgb, var(--surface) 76%, var(--primary) 24%);
 }
 
-.comparison-table-view tr:last-child td {
+.comparison-fixed-panel .comparison-grid-cell:last-child,
+.comparison-scroll-grid-row:last-child .comparison-grid-cell {
   border-bottom: 0;
 }
 
-.comparison-table-view th:last-child,
-.comparison-table-view td:last-child {
+.comparison-scroll-grid-row .comparison-grid-cell:last-child {
   border-right: 0;
 }
 

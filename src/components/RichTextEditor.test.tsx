@@ -169,9 +169,41 @@ describe("RichTextEditor", () => {
     await waitFor(() => expect(document.querySelector(".structure-flow-view")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".structure-flow-branch")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".comparison-table-view")).toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector(".comparison-panel-view")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".collapse-block-content")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".sticky-board-view")).toBeInTheDocument());
     expect(document.querySelector(".record-inline-node")).toBeInTheDocument();
-    expect(document.querySelector("th.sticky-column")).toHaveTextContent("Concept");
+    expect(document.querySelector(".comparison-fixed-panel")).toBeInTheDocument();
+    expect(document.querySelector(".comparison-table-right-scroll")).toBeInTheDocument();
+    expect(document.querySelector('[role="columnheader"].sticky-column')).toHaveTextContent("Concept");
+    expect(document.querySelector('[role="cell"].sticky-column')).toHaveTextContent("Logical file system");
+    expect(document.querySelectorAll(".comparison-table-right-scroll")).toHaveLength(1);
+  });
+
+  it("uses a single right-side scroller for read-only comparison table columns", async () => {
+    const comparison = createDefaultComparisonTable();
+    comparison.columns = comparison.columns.map((column, index) => ({
+      ...column,
+      label: ["Concept", "Role", "Analogy", "Pitfall"][index] ?? column.label,
+    }));
+
+    render(
+      <RichTextEditor
+        value={`<record-comparison-table data-json='${serializeStructureData(comparison)}'></record-comparison-table>`}
+        onChange={vi.fn()}
+        readOnly
+      />,
+    );
+
+    await waitFor(() => expect(document.querySelector(".comparison-table-right-scroll")).toBeInTheDocument());
+    expect(document.querySelector(".comparison-fixed-panel")).toBeInTheDocument();
+    expect(document.querySelectorAll(".comparison-table-right-scroll")).toHaveLength(1);
+    expect(document.querySelectorAll(".comparison-scroll-grid-row")).toHaveLength(comparison.rows.length + 1);
+
+    const rightScroller = document.querySelector<HTMLDivElement>(".comparison-table-right-scroll")!;
+    rightScroller.scrollLeft = 96;
+    fireEvent.scroll(rightScroller);
+
+    expect(rightScroller.scrollLeft).toBe(96);
   });
 });
