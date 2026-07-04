@@ -31,6 +31,7 @@ import { AiChatPage } from "./pages/AiChatPage";
 import { OcrSettingsPage } from "./pages/OcrSettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
+import { UsageGuidePage } from "./pages/UsageGuidePage";
 import { PageTransition } from "./components/PageTransition";
 import type { RecordBlock, Subject } from "./types";
 import { buildDayLogAiContext } from "./services/dayLogAiContextService";
@@ -482,6 +483,8 @@ export const App = () => {
         );
       case "ocrSettings":
         return <OcrSettingsPage onChanged={app.refresh} />;
+      case "guide":
+        return <UsageGuidePage />;
       case "ai":
         return (
           <AiChatPage
@@ -510,6 +513,7 @@ export const App = () => {
             onOpenSettings={() => openMoreSubRoute("settings")}
             onOpenTrash={() => openMoreSubRoute("trash")}
             onOpenRecordings={() => openMoreSubRoute("recordings")}
+            onOpenGuide={() => openMoreSubRoute("guide")}
             settings={settings}
           />
         );

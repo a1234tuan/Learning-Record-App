@@ -903,6 +903,101 @@
   color: var(--color-primary-strong);
 }
 
+.usage-guide-page {
+  display: grid;
+  gap: 16px;
+}
+
+.usage-guide-section {
+  display: grid;
+  gap: 12px;
+}
+
+.usage-guide-section h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.guide-step-list,
+.guide-faq-list {
+  display: grid;
+  gap: 10px;
+}
+
+.guide-step-card,
+.guide-prose-card,
+.guide-faq-card,
+.guide-contact-card {
+  padding: 14px;
+  border-radius: 8px;
+}
+
+.guide-step-card h3,
+.guide-faq-card h3 {
+  margin: 0 0 6px;
+  font-size: 0.98rem;
+}
+
+.guide-step-card p,
+.guide-prose-card p,
+.guide-faq-card p,
+.guide-contact-card p {
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.68;
+}
+
+.guide-prose-card {
+  display: grid;
+  gap: 12px;
+}
+
+.guide-prose-card a {
+  color: var(--color-primary-strong);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.guide-prose-card ol,
+.guide-example-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  line-height: 1.65;
+}
+
+.guide-example-list {
+  display: grid;
+  gap: 7px;
+}
+
+.guide-prose-card code,
+.guide-step-card code,
+.guide-example-list code {
+  border-radius: 6px;
+  padding: 2px 5px;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface-muted));
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.guide-note {
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface));
+}
+
+.guide-contact-card {
+  display: grid;
+  gap: 4px;
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+}
+
+.guide-contact-card strong {
+  color: var(--color-primary-strong);
+}
+
 .ai-export-panel {
   margin-bottom: var(--space-section);
   padding: 14px;

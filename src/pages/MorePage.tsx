@@ -1,4 +1,4 @@
-import { BarChart3, BrainCircuit, Download, FileText, Mic2, Settings, Trash2 } from "lucide-react";
+import { BarChart3, BookOpen, BrainCircuit, Download, FileText, Mic2, Settings, Trash2 } from "lucide-react";
 
 import type { AppSettings } from "../types";
 import { createDefaultAiPresets } from "../db/defaults";
@@ -15,6 +15,7 @@ interface MorePageProps {
   onOpenSettings: () => void;
   onOpenTrash: () => void;
   onOpenRecordings?: () => void;
+  onOpenGuide: () => void;
   settings: AppSettings;
 }
 
@@ -56,6 +57,7 @@ export const MorePage = ({
   onOpenSettings,
   onOpenTrash,
   onOpenRecordings = () => undefined,
+  onOpenGuide,
   settings,
 }: MorePageProps) => (
   <main className="page more-page">
@@ -69,6 +71,14 @@ export const MorePage = ({
     <section className="more-section more-hub-section">
       <h2>工具</h2>
       <div className="more-list">
+        <ListRow
+          className="more-summary-row"
+          icon={<BookOpen size={19} />}
+          title="使用教程"
+          description="从记录、复习、AI 问答到备份恢复的基本指南"
+          meta="Guide"
+          onClick={onOpenGuide}
+        />
         <ListRow
           className="more-summary-row"
           icon={<Download size={19} />}

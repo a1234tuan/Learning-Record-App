@@ -11,6 +11,7 @@ export type MoreSubRoute =
   | "aiTools"
   | "ocrSettings"
   | "recordings"
+  | "guide"
   | null;
 export type ReviewMode = "queue" | "manage";
 
