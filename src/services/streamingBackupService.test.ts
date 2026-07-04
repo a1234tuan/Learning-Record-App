@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { StreamableBackupSnapshot } from "../types";
+import type { StorageAdapter, StreamableBackupSnapshot } from "../types";
 import { NativeZipArchive } from "./nativeZipArchive";
-import { writeNativeStreamableBackupSnapshot } from "./streamingBackupService";
+import { importNativeStreamableBackupAndRestore, writeNativeStreamableBackupSnapshot } from "./streamingBackupService";
 
 vi.mock("./nativeZipArchive", () => ({
   canUseNativeZipArchive: () => true,
@@ -13,10 +13,16 @@ vi.mock("./nativeZipArchive", () => ({
     finishEntry: vi.fn(),
     finishExport: vi.fn(async () => ({ uri: "file:///backup.zip", size: 1 })),
     cancelExport: vi.fn(),
+    beginImport: vi.fn(async () => ({ sessionId: "import-1", entries: ["data.json"] })),
+    readEntry: vi.fn(),
+    readEntryChunk: vi.fn(),
+    finishImport: vi.fn(),
+    cancelImport: vi.fn(),
   },
 }));
 
 const decodeTextEntry = (data: string): string => decodeURIComponent(escape(atob(data)));
+const encodeTextEntry = (text: string): string => btoa(unescape(encodeURIComponent(text)));
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -115,5 +121,34 @@ describe("streaming backup", () => {
     expect(markdown).toContain("| 高亮块 | 写入 Markdown |");
     expect(markdown).toContain("> 浅黄色高亮");
     expect(markdown).toContain("> 黄色重点");
+  });
+
+  it("creates subject configs for unknown subjects during Android streamable import", async () => {
+    const importedPayload = {
+      ...snapshot.payload,
+      blocks: [
+        {
+          ...snapshot.payload.blocks[0],
+          subject: "物理",
+          title: "物理记录",
+        },
+      ],
+      settings: {
+        ...snapshot.payload.settings,
+        subjects: [],
+      },
+      assets: [],
+    };
+    vi.mocked(NativeZipArchive.readEntry).mockResolvedValue({
+      data: encodeTextEntry(JSON.stringify(importedPayload)),
+    });
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await importNativeStreamableBackupAndRestore("content://backup.zip", store);
+
+    const restoredSnapshot = vi.mocked(store.restoreStreamableSnapshot).mock.calls[0][0];
+    expect(restoredSnapshot.payload.settings.subjects?.map((subject) => subject.name)).toContain("物理");
   });
 });

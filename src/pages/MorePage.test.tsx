@@ -9,6 +9,7 @@ const renderMorePage = (settings = DEFAULT_SETTINGS) => {
   const props = {
     onOpenBackup: vi.fn(),
     onOpenAiTools: vi.fn(),
+    onOpenOcrSettings: vi.fn(),
     onOpenStats: vi.fn(),
     onOpenSettings: vi.fn(),
     onOpenTrash: vi.fn(),
@@ -25,6 +26,7 @@ describe("MorePage", () => {
 
     expect(screen.getByText("备份与恢复")).toBeInTheDocument();
     expect(screen.getByText("AI 工具")).toBeInTheDocument();
+    expect(screen.getByText("OCR 设置")).toBeInTheDocument();
     expect(screen.getByText("回收站")).toBeInTheDocument();
     expect(screen.getByText("统计")).toBeInTheDocument();
     expect(screen.getByText("设置")).toBeInTheDocument();
@@ -36,14 +38,16 @@ describe("MorePage", () => {
     expect(screen.queryByText("AI 聊天记录")).not.toBeInTheDocument();
   });
 
-  it("opens backup and AI tool subpages from the root entries", () => {
+  it("opens backup, AI tool and OCR settings subpages from the root entries", () => {
     const props = renderMorePage();
 
     fireEvent.click(screen.getByRole("button", { name: /备份与恢复/ }));
     fireEvent.click(screen.getByRole("button", { name: /AI 工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /OCR 设置/ }));
 
     expect(props.onOpenBackup).toHaveBeenCalledTimes(1);
     expect(props.onOpenAiTools).toHaveBeenCalledTimes(1);
+    expect(props.onOpenOcrSettings).toHaveBeenCalledTimes(1);
   });
 
   it("places a long AI model summary below the AI tools title", () => {

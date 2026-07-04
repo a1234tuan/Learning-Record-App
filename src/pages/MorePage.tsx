@@ -1,4 +1,4 @@
-import { BarChart3, BrainCircuit, Download, Mic2, Settings, Trash2 } from "lucide-react";
+import { BarChart3, BrainCircuit, Download, FileText, Mic2, Settings, Trash2 } from "lucide-react";
 
 import type { AppSettings } from "../types";
 import { createDefaultAiPresets } from "../db/defaults";
@@ -10,6 +10,7 @@ import { ListRow, PageHeader } from "../components/ui";
 interface MorePageProps {
   onOpenBackup: () => void;
   onOpenAiTools: () => void;
+  onOpenOcrSettings: () => void;
   onOpenStats: () => void;
   onOpenSettings: () => void;
   onOpenTrash: () => void;
@@ -50,6 +51,7 @@ const buildAiMeta = (settings: AppSettings): string => {
 export const MorePage = ({
   onOpenBackup,
   onOpenAiTools,
+  onOpenOcrSettings,
   onOpenStats,
   onOpenSettings,
   onOpenTrash,
@@ -82,6 +84,14 @@ export const MorePage = ({
           description="AI 设置、聊天记录和材料导出"
           meta={buildAiMeta(settings)}
           onClick={onOpenAiTools}
+        />
+        <ListRow
+          className="more-summary-row"
+          icon={<FileText size={19} />}
+          title="OCR 设置"
+          description="配置 PaddleOCR，用于图片全文检索和 AI 图片问答"
+          meta="PaddleOCR"
+          onClick={onOpenOcrSettings}
         />
       </div>
     </section>

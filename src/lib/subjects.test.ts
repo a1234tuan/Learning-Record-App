@@ -44,7 +44,23 @@ describe("dynamic subjects", () => {
     const migrated = ensureSettingsSubjects({ ...settings([]), subjects: undefined, schemaVersion: 2 }, []);
 
     expect(migrated.schemaVersion).toBe(3);
-    expect(migrated.subjects?.map((subject) => subject.name)).toContain("数据结构");
+    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["读书笔记", "数学", "英语", "其他"]);
+  });
+
+  it("keeps other as a first-class default subject", () => {
+    const migrated = ensureSettingsSubjects(settings(), [record("其他")]);
+
+    expect(migrated.subjects?.map((subject) => subject.name)).toContain("其他");
+    expect(migrated.subjects?.map((subject) => subject.name)).not.toContain("数据结构");
+  });
+
+  it("replaces the old exam-biased default subject set while keeping referenced legacy subjects", () => {
+    const legacySubjects = ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"].map((name, order) =>
+      createSubjectConfig(name, order),
+    );
+    const migrated = ensureSettingsSubjects(settings(legacySubjects), [record("OS")]);
+
+    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["读书笔记", "数学", "英语", "其他", "OS"]);
   });
 
   it("adds unknown record subjects during migration", () => {

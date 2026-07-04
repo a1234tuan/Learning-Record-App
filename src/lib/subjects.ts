@@ -2,15 +2,16 @@ import type { AppSettings, RecordBlock, Subject, SubjectConfig } from "../types"
 import { nowISO } from "./date";
 import { newId } from "./entity";
 
-export const DEFAULT_SUBJECT_NAMES: Subject[] = ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"];
-export const DEFAULT_SUBJECT = "数据结构";
+export const DEFAULT_SUBJECT_NAMES: Subject[] = ["读书笔记", "数学", "英语", "其他"];
+export const DEFAULT_SUBJECT = "读书笔记";
+const LEGACY_DEFAULT_SUBJECT_NAMES: Subject[] = ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"];
 
 export const normalizeSubjectName = (subject?: string): Subject => {
   const trimmed = subject?.trim();
   if (!trimmed) {
     return DEFAULT_SUBJECT;
   }
-  if (trimmed === "408" || trimmed === "其他") {
+  if (trimmed === "408") {
     return DEFAULT_SUBJECT;
   }
   if (trimmed === "操作系统") {
@@ -40,6 +41,12 @@ export const createSubjectConfig = (name: Subject, order: number, archivedAt?: s
 export const createDefaultSubjects = (): SubjectConfig[] =>
   DEFAULT_SUBJECT_NAMES.map((name, index) => createSubjectConfig(name, index));
 
+const isLegacyDefaultSubjectSet = (subjects: SubjectConfig[]): boolean => {
+  const names = subjects.map((subject) => normalizeSubjectName(subject.name));
+  return names.length === LEGACY_DEFAULT_SUBJECT_NAMES.length &&
+    LEGACY_DEFAULT_SUBJECT_NAMES.every((name, index) => names[index] === name);
+};
+
 const uniqueByName = (subjects: SubjectConfig[]): SubjectConfig[] => {
   const seen = new Set<string>();
   return subjects
@@ -59,7 +66,9 @@ export const deriveSubjectsFromRecords = (
   settingsSubjects: SubjectConfig[] | undefined,
   records: RecordBlock[],
 ): SubjectConfig[] => {
-  const base = settingsSubjects && settingsSubjects.length > 0 ? settingsSubjects : createDefaultSubjects();
+  const base = settingsSubjects && settingsSubjects.length > 0 && !isLegacyDefaultSubjectSet(settingsSubjects)
+    ? settingsSubjects
+    : createDefaultSubjects();
   const subjects = uniqueByName(base);
   const known = new Set(subjects.map((subject) => subject.name));
   for (const record of records) {

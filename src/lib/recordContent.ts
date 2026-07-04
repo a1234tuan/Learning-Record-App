@@ -8,6 +8,10 @@ export type LinearNode =
   | { kind: "highlight"; text: string; markdown: string }
   | { kind: "structure"; text: string; markdown: string };
 
+type RecordContentSyncOptions = {
+  preserveLegacyRefs?: boolean;
+};
+
 const escapeHtml = (value: string): string =>
   value
     .replace(/&/g, "&amp;")
@@ -47,12 +51,16 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
   /<record-(asset|formula|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
 
-export const normalizeRecordContent = (record: RecordBlock): string => {
+export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
     return record.contentHtml || "<p></p>";
   }
 
   const baseContent = record.contentHtml?.trim() || "<p></p>";
+  if (options.preserveLegacyRefs === false) {
+    return baseContent;
+  }
+
   const appended = [
     ...record.assets.map(serializeAssetNode),
     ...record.formulas.map(serializeFormulaNode),
@@ -82,8 +90,8 @@ export const extractRecordRefsFromContent = (
   return { assets, formulas };
 };
 
-export const syncRecordRefsFromContent = (record: RecordBlock): RecordBlock => {
-  const contentHtml = normalizeRecordContent(record);
+export const syncRecordRefsFromContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): RecordBlock => {
+  const contentHtml = normalizeRecordContent(record, options);
   const refs = extractRecordRefsFromContent(contentHtml);
   return {
     ...record,

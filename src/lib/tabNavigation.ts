@@ -1,7 +1,17 @@
 import type { EntityId, Subject } from "../types";
 
 export type TabKey = "today" | "journal" | "categories" | "review" | "more";
-export type MoreSubRoute = "stats" | "settings" | "ai" | "favorites" | "trash" | "backup" | "aiTools" | "recordings" | null;
+export type MoreSubRoute =
+  | "stats"
+  | "settings"
+  | "ai"
+  | "favorites"
+  | "trash"
+  | "backup"
+  | "aiTools"
+  | "ocrSettings"
+  | "recordings"
+  | null;
 export type ReviewMode = "queue" | "manage";
 
 export type RecordTabState = {

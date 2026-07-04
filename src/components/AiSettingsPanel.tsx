@@ -38,7 +38,7 @@ const imageInputModeOptions: Array<{
   {
     value: "local-ocr",
     label: "本地 OCR 后转文字",
-    description: "适合不支持看图的文本模型，发送图片前先用 PaddleOCR 识别，再把 Markdown 文本发给 AI。",
+    description: "适合不支持看图的文本模型，发送图片前先识别图片文字，再把 Markdown 文本发给 AI。",
   },
   {
     value: "vision",
@@ -276,7 +276,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
             <header className="inline-section-header">
               <div>
                 <h3>图片问答方式</h3>
-                <p>由你判断当前模型是否支持图片；不支持时建议使用本地 OCR。</p>
+                <p>由你判断当前模型是否支持图片；选择本地 OCR 时，会使用“更多 / OCR 设置”中的 PaddleOCR 配置。</p>
               </div>
             </header>
             <div className="ai-image-mode-options">

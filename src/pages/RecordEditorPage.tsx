@@ -52,6 +52,9 @@ interface RecordEditorPageProps {
 const cloneRecord = (record: RecordBlock): RecordBlock =>
   syncRecordRefsFromContent({ ...record, mistakeRefs: [] });
 
+const syncEditableRecord = (record: RecordBlock): RecordBlock =>
+  syncRecordRefsFromContent({ ...record, mistakeRefs: [] }, { preserveLegacyRefs: false });
+
 const escapeAttribute = (value: string): string =>
   value
     .replace(/&/g, "&amp;")
@@ -222,7 +225,7 @@ export const RecordEditorPage = ({
 
   const setCurrentDraft = useCallback(
     (nextDraft: RecordBlock, options: { autosave?: boolean } = {}) => {
-      const cleanDraft = cloneRecord(nextDraft);
+      const cleanDraft = syncEditableRecord(nextDraft);
       draftRef.current = cleanDraft;
       setDraft(cleanDraft);
       if (options.autosave !== false) {
@@ -405,7 +408,7 @@ export const RecordEditorPage = ({
       await waitForDraftSaves();
 
       const editor = editorRef.current;
-      draftToSave = cloneRecord({
+      draftToSave = syncEditableRecord({
         ...draftRef.current,
         contentHtml: editor && !editor.isDestroyed ? editor.getHTML() : draftRef.current.contentHtml,
       });

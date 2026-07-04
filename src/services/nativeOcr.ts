@@ -8,6 +8,7 @@ interface NativeOcrPlugin {
     data: string;
     fileName: string;
     mimeType: string;
+    token: string;
   }): Promise<{
     jobId?: string;
     text: string;
@@ -19,11 +20,12 @@ const NativeOcr = registerPlugin<NativeOcrPlugin>("NativeOcr");
 export const canUseNativeOcr = (): boolean =>
   Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
 
-export const runNativeOcr = async (asset: Asset): Promise<{ jobId?: string; text: string }> => {
+export const runNativeOcr = async (asset: Asset, token: string): Promise<{ jobId?: string; text: string }> => {
   const data = await blobToBase64(asset.data);
   return NativeOcr.recognize({
     data,
     fileName: asset.fileName,
     mimeType: asset.mimeType || "application/octet-stream",
+    token,
   });
 };

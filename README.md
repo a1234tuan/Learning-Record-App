@@ -1,6 +1,6 @@
-# 408 Study Journal
+# 学习日志
 
-本地优先的学习日志、复盘和间隔复习应用。它面向 408 备考和长期自学场景，把每天的学习记录、图片、录音、附件、公式、OCR 文本、AI 问答和复习卡片沉淀成一个可搜索、可导出、可备份的个人知识库。
+本地优先的学习日志、复盘和间隔复习应用。它面向长期自学和备考场景，把每天的学习记录、图片、录音、附件、公式、OCR 文本、AI 问答和复习卡片沉淀成一个可搜索、可导出、可备份的个人知识库。
 
 应用支持 Web/PWA 和 Android APK。默认没有账号系统，核心数据保存在本机 IndexedDB / Android WebView 存储中。
 
@@ -66,6 +66,19 @@ adb install -r android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
 也可以把 APK 发送到手机后手动安装。首次安装通常需要允许“安装未知来源应用”。
+
+构建 release APK 前，需要先在 `android\keystore.properties` 配置本机 release 签名证书。该文件和 keystore 已被 `.gitignore` 排除，不要提交到仓库。构建正式 APK：
+
+```powershell
+cd D:\NoteProject
+npm run android:build:release
+```
+
+输出路径：
+
+```text
+dev-dist\release\学习日志.apk
+```
 
 ## 页面导航
 
@@ -141,6 +154,16 @@ AI 问答会使用当前日志或记录相关内容作为上下文，包括：
 - **纯文本 TXT**：适合直接喂给不支持 Markdown 的工具。
 - **完整备份 zip**：用于恢复应用数据，不只是给 AI 阅读。
 
+## OCR 设置
+
+OCR 是全局图片文字识别能力，不只用于 AI 图片问答，也用于把图片中的文字写入资源元数据，进入本地全文检索、导出和备份。
+
+- 入口：**更多 → OCR 设置**。
+- 在该页面填写你自己的 PaddleOCR / AI Studio Token。
+- Token 只保存在本机，不会内置到 APK，也不会进入完整备份。
+- 未配置 Token 时，新图片 OCR 会提示先配置；已识别出的历史 OCR 文本仍可继续搜索。
+- AI 工具中的“本地 OCR 后转文字”会复用这里的 OCR 配置，不再单独保存 OCR Token。
+
 ## 备份与恢复
 
 完整备份 zip 包含：
@@ -206,6 +229,9 @@ npm run android:open
 
 # 构建 Android debug APK
 npm run android:build:debug
+
+# 构建 Android release APK
+npm run android:build:release
 ```
 
 ## 技术栈
@@ -243,7 +269,7 @@ docs/           项目文档和记录
 
 - 暂无实时云同步；跨设备依赖完整备份 zip 或自动备份文件。
 - 导入恢复是覆盖式恢复，不做多端冲突合并。
-- 当前 APK 是 debug 构建，适合个人安装测试，不是应用商店发布版。
+- release APK 使用本机 release keystore 签名；请妥善保存 keystore 和密码，否则后续无法升级同一应用。
 - AI 看图能力取决于所选模型和中转接口是否真正支持视觉输入。
 - OCR、AI 和 Android 后台录音等能力受设备权限、系统版本和供应商接口影响。
 

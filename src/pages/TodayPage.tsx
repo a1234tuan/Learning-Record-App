@@ -7,6 +7,7 @@ import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
 import { fallbackSubjectName } from "../lib/subjects";
 import { PageHeader, SurfaceCard } from "../components/ui";
+import { getDailyMotto } from "../lib/dailyMotto";
 
 interface TodayPageProps {
   entry: DayEntry | null;
@@ -48,17 +49,18 @@ export const TodayPage = ({
     fallbackSubjectName({ id: "settings", examDate, theme: "system", accentColor: "", backupReminderDays: 7, fontScale: 1, lineHeight: 1.7, subjects }),
   );
   const countdown = daysUntil(examDate);
+  const today = todayISO();
   const records = blocks.filter((block): block is RecordBlock => block.type === "record");
-  const todayDue = dueReviewStates.filter((review) => review.nextReviewDate === todayISO());
-  const overdue = dueReviewStates.filter((review) => review.nextReviewDate && review.nextReviewDate < todayISO());
+  const todayDue = dueReviewStates.filter((review) => review.nextReviewDate === today);
+  const overdue = dueReviewStates.filter((review) => review.nextReviewDate && review.nextReviewDate < today);
   const previewDue = dueReviewStates.slice(0, 3).map((review) => reviewTitlesByRecord[review.recordId]).filter(Boolean);
 
   return (
     <main className="page today-page">
       <PageHeader
-        eyebrow={formatChineseDate(todayISO())}
+        eyebrow={formatChineseDate(today)}
         title="今天"
-        subtitle="把正在发生的学习留下来。文字、截图、公式和录音，都可以自然地放进同一个记录块。"
+        subtitle={getDailyMotto(today)}
         density="compact"
         actions={(
           <>
@@ -80,12 +82,13 @@ export const TodayPage = ({
             <p className="eyebrow">New Record</p>
             <h2>新建学习记录</h2>
             <p>先选择学科，再进入像笔记页一样的线性编辑器。</p>
+            <p className="helper-text">更多学科可到“分类 / 学科管理”中新建。</p>
           </div>
           <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} />
           <button
             type="button"
             className="primary-button"
-            onClick={async () => onOpenRecord(await onCreateRecord(todayISO(), subject))}
+            onClick={async () => onOpenRecord(await onCreateRecord(today, subject))}
           >
             <Plus size={18} />
             新建 {subject} 记录

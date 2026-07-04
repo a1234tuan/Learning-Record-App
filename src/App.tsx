@@ -28,6 +28,7 @@ import { MorePage } from "./pages/MorePage";
 import { BackupPage } from "./pages/BackupPage";
 import { AiToolsPage } from "./pages/AiToolsPage";
 import { AiChatPage } from "./pages/AiChatPage";
+import { OcrSettingsPage } from "./pages/OcrSettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { PageTransition } from "./components/PageTransition";
@@ -479,6 +480,8 @@ export const App = () => {
             onOpenAi={() => openMoreSubRoute("ai")}
           />
         );
+      case "ocrSettings":
+        return <OcrSettingsPage onChanged={app.refresh} />;
       case "ai":
         return (
           <AiChatPage
@@ -502,6 +505,7 @@ export const App = () => {
           <MorePage
             onOpenBackup={() => openMoreSubRoute("backup")}
             onOpenAiTools={() => openMoreSubRoute("aiTools")}
+            onOpenOcrSettings={() => openMoreSubRoute("ocrSettings")}
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenSettings={() => openMoreSubRoute("settings")}
             onOpenTrash={() => openMoreSubRoute("trash")}

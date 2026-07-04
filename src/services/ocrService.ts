@@ -1,8 +1,8 @@
 import type { Asset } from "../types";
 import { canUseNativeOcr, runNativeOcr } from "./nativeOcr";
+import { getPaddleOcrToken } from "./ocrSettings";
 
 const JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs";
-const TOKEN = "b0018c1b9dab00f633b3fabd9749729bc2bdc48a";
 const MODEL = "PaddleOCR-VL-1.6";
 const POLL_INTERVAL_MS = 5000;
 const MAX_WAIT_MS = 5 * 60 * 1000;
@@ -17,9 +17,16 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 
 export const OCR_CONFIG = {
   JOB_URL,
-  TOKEN,
   MODEL,
   optionalPayload,
+};
+
+const requirePaddleOcrToken = async (): Promise<string> => {
+  const token = await getPaddleOcrToken();
+  if (!token) {
+    throw new Error("请先在 OCR 设置中配置 PaddleOCR Token。");
+  }
+  return token;
 };
 
 const normalizeTextChunks = (chunks: string[]): string =>
@@ -97,9 +104,10 @@ export const runPaddleOcr = async (
   }
 
   await onProgress?.({ ocrStatus: "queued", ocrError: undefined });
+  const token = await requirePaddleOcrToken();
   if (canUseNativeOcr()) {
     await onProgress?.({ ocrStatus: "running" });
-    const result = await runNativeOcr(asset);
+    const result = await runNativeOcr(asset, token);
     if (result.jobId) {
       await onProgress?.({ ocrJobId: result.jobId });
     }
@@ -121,6 +129,7 @@ export const runPaddleOcrViaBrowserFetch = async (
   }
 
   await onProgress?.({ ocrStatus: "queued", ocrError: undefined });
+  const token = await requirePaddleOcrToken();
   const formData = new FormData();
   formData.append("model", MODEL);
   formData.append("optionalPayload", JSON.stringify(optionalPayload));
@@ -129,7 +138,7 @@ export const runPaddleOcrViaBrowserFetch = async (
   const jobResponse = await fetch(JOB_URL, {
     method: "POST",
     headers: {
-      Authorization: `bearer ${TOKEN}`,
+      Authorization: `bearer ${token}`,
     },
     body: formData,
   });
@@ -150,7 +159,7 @@ export const runPaddleOcrViaBrowserFetch = async (
     await sleep(POLL_INTERVAL_MS);
     const resultResponse = await fetch(`${JOB_URL}/${jobId}`, {
       headers: {
-        Authorization: `bearer ${TOKEN}`,
+        Authorization: `bearer ${token}`,
       },
     });
     if (!resultResponse.ok) {
@@ -182,7 +191,7 @@ export const runPaddleOcrViaBrowserFetch = async (
     }
     const text = extractOcrTextFromJsonl(await jsonlResponse.text());
     if (!text) {
-    throw new Error("上游返回空 OCR 文本。");
+      throw new Error("上游返回空 OCR 文本。");
     }
     return text;
   }

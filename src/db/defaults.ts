@@ -1,7 +1,7 @@
 import type { AiPromptPreset, AppSettings, Block, DayEntry } from "../types";
 import { createBaseEntity, newId } from "../lib/entity";
 import { nowISO, todayISO } from "../lib/date";
-import { createDefaultSubjects } from "../lib/subjects";
+import { createDefaultSubjects, DEFAULT_SUBJECT, nextRecordTitle } from "../lib/subjects";
 import { createDefaultAiProviders } from "../lib/aiProviders";
 
 export const DEFAULT_EXAM_DATE = "2026-12-27";
@@ -212,8 +212,8 @@ export const createTemplateBlocks = (date: string, existingCount = 0): Block[] =
       type: "record",
       date,
       order: existingCount,
-      subject: "数据结构",
-      title: `数据结构记录块${existingCount + 1}`,
+      subject: DEFAULT_SUBJECT,
+      title: nextRecordTitle(DEFAULT_SUBJECT, existingCount),
       contentHtml:
         "<h2>今日学了什么</h2><p></p><h2>卡点疑问</h2><p></p><h2>明日计划</h2><p></p>",
       assets: [],

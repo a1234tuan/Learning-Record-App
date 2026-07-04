@@ -248,6 +248,30 @@ describe("RecordEditorPage", () => {
     expect(screen.getByRole("heading", { name: "Math note 1" })).toBeInTheDocument();
   });
 
+  it("saves deletion of the final asset node without restoring it from refs", async () => {
+    const recordWithSingleAsset: RecordBlock = {
+      ...record,
+      contentHtml: '<record-asset data-asset-id="asset-1" data-kind="image" data-title="diagram.png"></record-asset><p></p>',
+      assets: [{ id: "asset-1", kind: "image", title: "diagram.png" }],
+    };
+    const onSave = vi.fn().mockResolvedValue(recordWithSingleAsset);
+    const { onGetDraft, saveButton } = renderEditor({ record: recordWithSingleAsset, onSave });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    act(() => {
+      richEditorMock.html = "<p></p>";
+      richEditorMock.props.onChange(richEditorMock.html);
+    });
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].contentHtml).toBe("<p></p>");
+    expect(onSave.mock.calls[0][0].contentHtml).not.toContain("record-asset");
+    expect(onSave.mock.calls[0][0].assets).toEqual([]);
+  });
+
   it("keeps editing and preserves a draft when the formal save fails", async () => {
     const onSave = vi.fn().mockRejectedValue(new Error("disk full"));
     const onSaveDraft = vi.fn(async (draft: RecordDraft) => draft);

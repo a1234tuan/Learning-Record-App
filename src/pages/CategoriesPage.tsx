@@ -1,4 +1,4 @@
-import { Archive, ArrowDown, ArrowLeft, ArrowUp, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeft, ArrowUp, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { Block, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
@@ -111,6 +111,22 @@ export const CategoriesPage = ({
     );
   };
 
+  const deleteSubject = async (subject: SubjectConfig) => {
+    const count = subjectCounts.find((item) => item.subject === subject.name)?.count ?? 0;
+    if (count > 0) {
+      setMessage("该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。");
+      return;
+    }
+    await updateSubjects(subjects.filter((item) => item.id !== subject.id));
+    if (activeSubject === subject.name) {
+      onActiveSubjectChange(null);
+    }
+    if (editingSubject === subject.name) {
+      setEditingSubject(null);
+    }
+    setMessage("");
+  };
+
   const categoryList = subjectCounts.filter((item) => !item.config?.archivedAt || item.count > 0);
 
   return (
@@ -199,6 +215,15 @@ export const CategoriesPage = ({
                   )}
                   <button type="button" className="icon-button" onClick={() => void toggleArchive(subject)}>
                     {subject.archivedAt ? <RotateCcw size={16} /> : <Archive size={16} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    onClick={() => void deleteSubject(subject)}
+                    aria-label={`删除学科 ${subject.name}`}
+                    title="删除学科"
+                  >
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </article>

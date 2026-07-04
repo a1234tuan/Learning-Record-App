@@ -43,7 +43,7 @@ describe("record migration", () => {
     const migrated = migrateBlocksToRecords(blocks);
 
     expect(migrated.every((block) => block.type === "record")).toBe(true);
-    expect(migrated[0]).toMatchObject({ type: "record", subject: "数据结构" });
+    expect(migrated[0]).toMatchObject({ type: "record", subject: "读书笔记" });
     expect(migrated[1]).toMatchObject({
       type: "record",
       assets: [{ id: "a1", title: "学习截图", kind: "image" }],

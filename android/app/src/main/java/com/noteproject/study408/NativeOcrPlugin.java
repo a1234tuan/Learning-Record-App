@@ -22,7 +22,6 @@ import org.json.JSONObject;
 @CapacitorPlugin(name = "NativeOcr")
 public class NativeOcrPlugin extends Plugin {
     private static final String JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs";
-    private static final String TOKEN = "b0018c1b9dab00f633b3fabd9749729bc2bdc48a";
     private static final String MODEL = "PaddleOCR-VL-1.6";
     private static final int POLL_INTERVAL_MS = 5000;
     private static final int MAX_WAIT_MS = 5 * 60 * 1000;
@@ -32,16 +31,21 @@ public class NativeOcrPlugin extends Plugin {
         String base64Data = call.getString("data");
         String fileName = call.getString("fileName", "image.png");
         String mimeType = call.getString("mimeType", "application/octet-stream");
+        String token = call.getString("token", "").trim();
         if (base64Data == null || base64Data.isEmpty()) {
             call.reject("OCR 图片数据为空。");
+            return;
+        }
+        if (token.isEmpty()) {
+            call.reject("请先在 OCR 设置中配置 PaddleOCR Token。");
             return;
         }
 
         execute(() -> {
             try {
                 byte[] imageBytes = Base64.decode(base64Data, Base64.DEFAULT);
-                String jobId = submitJob(imageBytes, fileName, mimeType);
-                String jsonUrl = pollJob(jobId);
+                String jobId = submitJob(imageBytes, fileName, mimeType, token);
+                String jsonUrl = pollJob(jobId, token);
                 String text = extractText(readUrl(jsonUrl));
                 if (text.trim().isEmpty()) {
                     call.reject("上游返回空 OCR 文本。");
@@ -57,10 +61,10 @@ public class NativeOcrPlugin extends Plugin {
         });
     }
 
-    private String submitJob(byte[] imageBytes, String fileName, String mimeType) throws Exception {
-        String boundary = "----Study408Boundary" + UUID.randomUUID();
+    private String submitJob(byte[] imageBytes, String fileName, String mimeType, String token) throws Exception {
+        String boundary = "----StudyJournalBoundary" + UUID.randomUUID();
         HttpURLConnection connection = openConnection(JOB_URL, "POST");
-        connection.setRequestProperty("Authorization", "bearer " + TOKEN);
+        connection.setRequestProperty("Authorization", "bearer " + token);
         connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
         connection.setDoOutput(true);
 
@@ -88,12 +92,12 @@ public class NativeOcrPlugin extends Plugin {
         return jobId;
     }
 
-    private String pollJob(String jobId) throws Exception {
+    private String pollJob(String jobId, String token) throws Exception {
         long startedAt = System.currentTimeMillis();
         while (System.currentTimeMillis() - startedAt < MAX_WAIT_MS) {
             Thread.sleep(POLL_INTERVAL_MS);
             HttpURLConnection connection = openConnection(JOB_URL + "/" + jobId, "GET");
-            connection.setRequestProperty("Authorization", "bearer " + TOKEN);
+            connection.setRequestProperty("Authorization", "bearer " + token);
             String body = readResponse(connection);
             if (connection.getResponseCode() != 200) {
                 throw new Exception("OCR 查询失败：" + connection.getResponseCode() + " " + body);

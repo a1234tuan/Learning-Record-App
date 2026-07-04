@@ -58,6 +58,21 @@ describe("recordContent", () => {
     expect(html).toContain('data-latex="T(n)=O(n)"');
   });
 
+  it("can sync editor content without restoring deleted legacy refs", () => {
+    const synced = syncRecordRefsFromContent(
+      {
+        ...record,
+        contentHtml: "<p></p>",
+      },
+      { preserveLegacyRefs: false },
+    );
+
+    expect(synced.contentHtml).toBe("<p></p>");
+    expect(synced.contentHtml).not.toContain("record-asset");
+    expect(synced.assets).toEqual([]);
+    expect(synced.formulas).toEqual([]);
+  });
+
   it("extracts record refs from content", () => {
     const refs = extractRecordRefsFromContent(normalizeRecordContent(record));
 

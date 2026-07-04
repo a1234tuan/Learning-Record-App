@@ -16,6 +16,9 @@ describe("AiToolsPage", () => {
     const settingsToggle = screen.getByRole("button", { name: /AI 设置/ });
     expect(settingsToggle).toHaveClass("ai-settings-toggle");
     expect(settingsToggle).not.toHaveClass("more-link-card");
+
+    fireEvent.click(settingsToggle);
+    expect(screen.queryByLabelText("PaddleOCR Token")).not.toBeInTheDocument();
   });
 
   it("keeps AI export collapsed until the user expands it", () => {

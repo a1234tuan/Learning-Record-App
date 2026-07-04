@@ -165,7 +165,7 @@ describe("tabNavigation", () => {
     expect(next.more.subRoute).toBeNull();
   });
 
-  it("treats More backup and AI tools as subpages", () => {
+  it("treats More backup, AI tools and OCR settings as subpages", () => {
     const backupMemory = {
       ...createInitialTabMemory(),
       more: { ...createInitialTabMemory().more, subRoute: "backup" as const },
@@ -174,10 +174,16 @@ describe("tabNavigation", () => {
       ...createInitialTabMemory(),
       more: { ...createInitialTabMemory().more, subRoute: "aiTools" as const },
     };
+    const ocrSettingsMemory = {
+      ...createInitialTabMemory(),
+      more: { ...createInitialTabMemory().more, subRoute: "ocrSettings" as const },
+    };
 
     expect(getTabDepth("more", backupMemory)).toBe(1);
     expect(getTabDepth("more", aiToolsMemory)).toBe(1);
+    expect(getTabDepth("more", ocrSettingsMemory)).toBe(1);
     expect(popTabDepth(backupMemory, "more").more.subRoute).toBeNull();
     expect(popTabDepth(aiToolsMemory, "more").more.subRoute).toBeNull();
+    expect(popTabDepth(ocrSettingsMemory, "more").more.subRoute).toBeNull();
   });
 });
