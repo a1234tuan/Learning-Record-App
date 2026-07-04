@@ -4,10 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createDefaultComparisonTable,
+  createDefaultStickyBoard,
   createDefaultStructureDiagram,
   serializeStructureData,
 } from "../lib/recordStructureBlocks";
 import { RichTextEditor } from "./RichTextEditor";
+
+vi.mock("./AssetPreview", () => ({
+  AssetPreview: () => <article className="asset-card asset-card-view compact-image-card" data-testid="asset-preview" />,
+}));
 
 const setSelectionInsideText = (editor: Editor, text: string) => {
   let targetPos: number | undefined;
@@ -128,7 +133,7 @@ describe("RichTextEditor", () => {
     });
   });
 
-  it("renders structure diagrams as flow views and comparison blocks as tables in read-only mode", async () => {
+  it("renders mixed media, collapse and structure blocks inside bounded editor nodes in read-only mode", async () => {
     const diagram = createDefaultStructureDiagram();
     diagram.title = "Layers";
     diagram.chain[0] = {
@@ -142,13 +147,19 @@ describe("RichTextEditor", () => {
       label: ["Concept", "Role", "Analogy", "Pitfall"][index] ?? column.label,
     }));
     comparison.rows[0].cells[comparison.columns[0].id] = "Logical file system";
+    const sticky = createDefaultStickyBoard();
+    sticky.notes[0].text = "A long local-search note should wrap inside the sticky card instead of widening the record page.";
 
     render(
       <RichTextEditor
         value={[
+          '<record-asset data-asset-id="asset-1" data-kind="image" data-title="diagram.png"></record-asset>',
+          '<record-collapse data-title="折叠块" data-summary="包含宽内容" data-default-open="true">',
           `<record-structure-diagram data-json='${serializeStructureData(diagram)}'></record-structure-diagram>`,
           "<p></p>",
           `<record-comparison-table data-json='${serializeStructureData(comparison)}'></record-comparison-table>`,
+          `<record-sticky-board data-json='${serializeStructureData(sticky)}'></record-sticky-board>`,
+          "</record-collapse>",
         ].join("")}
         onChange={vi.fn()}
         readOnly
@@ -158,6 +169,9 @@ describe("RichTextEditor", () => {
     await waitFor(() => expect(document.querySelector(".structure-flow-view")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".structure-flow-branch")).toBeInTheDocument());
     await waitFor(() => expect(document.querySelector(".comparison-table-view")).toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector(".collapse-block-content")).toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector(".sticky-board-view")).toBeInTheDocument());
+    expect(document.querySelector(".record-inline-node")).toBeInTheDocument();
     expect(document.querySelector("th.sticky-column")).toHaveTextContent("Concept");
   });
 });

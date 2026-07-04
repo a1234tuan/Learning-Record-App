@@ -52,16 +52,32 @@ const renderPage = (blocks: Block[] = [], onSaveSubjects: SaveSubjectsMock = cre
 );
 
 describe("CategoriesPage", () => {
-  it("deletes a subject config when no records reference it", async () => {
+  it("requires inline confirmation before deleting a subject config with no records", async () => {
     const onSaveSubjects = createSaveSubjectsMock();
     renderPage([], onSaveSubjects);
 
     fireEvent.click(screen.getByRole("button", { name: "删除学科 读书笔记" }));
 
+    expect(onSaveSubjects).not.toHaveBeenCalled();
+    expect(screen.getByText("确认删除“读书笔记”？这只会删除学科配置，不会删除记录。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
     await waitFor(() => expect(onSaveSubjects).toHaveBeenCalledTimes(1));
     const savedSubjects = onSaveSubjects.mock.calls[0]?.[0];
     expect(savedSubjects?.map((subject: SubjectConfig) => subject.name)).toEqual(["数学"]);
     expect(savedSubjects?.[0]?.order).toBe(0);
+  });
+
+  it("cancels an inline subject deletion confirmation", () => {
+    const onSaveSubjects = createSaveSubjectsMock();
+    renderPage([], onSaveSubjects);
+
+    fireEvent.click(screen.getByRole("button", { name: "删除学科 读书笔记" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(onSaveSubjects).not.toHaveBeenCalled();
+    expect(screen.queryByText("确认删除“读书笔记”？这只会删除学科配置，不会删除记录。")).not.toBeInTheDocument();
   });
 
   it("blocks deleting a subject that still has records", async () => {
@@ -71,6 +87,7 @@ describe("CategoriesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除学科 数学" }));
 
     expect(onSaveSubjects).not.toHaveBeenCalled();
-    expect(screen.getByText("该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。")).toBeInTheDocument();
+    const mathRow = screen.getByText("数学").closest(".subject-manager-row");
+    expect(mathRow).toHaveTextContent("该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。");
   });
 });

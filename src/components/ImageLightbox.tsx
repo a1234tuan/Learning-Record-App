@@ -38,12 +38,38 @@ const midpoint = (first: Point, second: Point): Point => ({
 
 const hasMeasuredSize = (size: Size): boolean => size.width > 0 && size.height > 0;
 
+export const getLightboxViewportSize = (visualViewport?: Pick<VisualViewport, "width" | "height"> | null): Size => ({
+  width: Math.max(0, visualViewport?.width ?? window.innerWidth),
+  height: Math.max(0, visualViewport?.height ?? window.innerHeight),
+});
+
+export const constrainLightboxViewport = (rect: Size, visualViewport?: Pick<VisualViewport, "width" | "height"> | null): Size => {
+  const viewport = getLightboxViewportSize(visualViewport);
+  return {
+    width: Math.max(0, Math.min(rect.width, viewport.width)),
+    height: Math.max(0, Math.min(rect.height, viewport.height)),
+  };
+};
+
+export const getLightboxStageViewport = (
+  visualViewport: Pick<VisualViewport, "width" | "height"> | null | undefined,
+  toolbarHeight: number,
+): Size => {
+  const fullViewport = getLightboxViewportSize(visualViewport);
+  return {
+    width: fullViewport.width,
+    height: Math.max(0, fullViewport.height - Math.max(0, toolbarHeight)),
+  };
+};
+
 export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLightboxProps) => {
   const [transform, setTransform] = useState<ImageTransform>(initialTransform);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
   const [naturalSize, setNaturalSize] = useState<Size>({ width: 0, height: 0 });
   const [interacting, setInteracting] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const scrollPositionRef = useRef({ x: 0, y: 0 });
   const transformRef = useRef<ImageTransform>(initialTransform);
   const pointersRef = useRef(new Map<number, Point>());
   const gestureRef = useRef<{
@@ -89,13 +115,25 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
   }, []);
 
   useEffect(() => {
+    scrollPositionRef.current = { x: window.scrollX, y: window.scrollY };
+  }, []);
+
+  const closePreservingScroll = useCallback(() => {
+    const { x, y } = scrollPositionRef.current;
+    onClose();
+    window.requestAnimationFrame(() => {
+      window.scrollTo(x, y);
+    });
+  }, [onClose]);
+
+  useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return undefined;
     }
     let remove: (() => Promise<void>) | undefined;
     let cancelled = false;
     void CapacitorApp.addListener("backButton", () => {
-      onClose();
+      closePreservingScroll();
     }).then((handle) => {
       remove = handle.remove;
       if (cancelled) {
@@ -108,7 +146,7 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
         void remove();
       }
     };
-  }, [onClose]);
+  }, [closePreservingScroll]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -116,17 +154,28 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
       return undefined;
     }
     const updateViewport = () => {
-      const rect = stage.getBoundingClientRect();
-      setViewport({ width: rect.width, height: rect.height });
+      const toolbarHeight = toolbarRef.current?.getBoundingClientRect().height ?? 0;
+      setViewport(getLightboxStageViewport(window.visualViewport, toolbarHeight));
     };
     updateViewport();
     if (typeof ResizeObserver === "undefined") {
       window.addEventListener("resize", updateViewport);
-      return () => window.removeEventListener("resize", updateViewport);
+      window.visualViewport?.addEventListener("resize", updateViewport);
+      return () => {
+        window.removeEventListener("resize", updateViewport);
+        window.visualViewport?.removeEventListener("resize", updateViewport);
+      };
     }
     const observer = new ResizeObserver(updateViewport);
     observer.observe(stage);
-    return () => observer.disconnect();
+    if (toolbarRef.current) {
+      observer.observe(toolbarRef.current);
+    }
+    window.visualViewport?.addEventListener("resize", updateViewport);
+    return () => {
+      observer.disconnect();
+      window.visualViewport?.removeEventListener("resize", updateViewport);
+    };
   }, []);
 
   useEffect(() => {
@@ -261,7 +310,7 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
 
   const lightbox = (
     <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="image-lightbox-toolbar">
+      <div ref={toolbarRef} className="image-lightbox-toolbar">
         <strong>{title}</strong>
         <div>
           <button
@@ -278,7 +327,7 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
           >
             <Download size={18} />
           </button>
-          <button type="button" className="icon-button" title="关闭" onClick={onClose}>
+          <button type="button" className="icon-button" title="关闭" aria-label="关闭" onClick={closePreservingScroll}>
             <X size={18} />
           </button>
         </div>

@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarCheck, Edit3, FilePlus, ImagePlus, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
@@ -125,6 +125,7 @@ export const RecordEditorPage = ({
   const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const recordIdRef = useRef(record.id);
   const draftRef = useRef<RecordBlock>(cloneRecord(record));
   const initialEditingRef = useRef(initialEditing);
@@ -149,6 +150,7 @@ export const RecordEditorPage = ({
         ignoreEditorChangesRef.current = false;
         setSaveError(null);
       }
+      setMoreActionsOpen(false);
       setEditingState(nextEditing);
       onEditingChange?.(nextEditing);
     },
@@ -473,6 +475,8 @@ export const RecordEditorPage = ({
     await onAddToReview?.(record.id);
   };
 
+  const closeMoreActions = () => setMoreActionsOpen(false);
+
   return (
     <main className="page record-editor-page">
       <section className="record-editor-topbar">
@@ -483,7 +487,7 @@ export const RecordEditorPage = ({
         {editing ? (
           <div className="record-action-row">
             {draftRestored && (
-              <button type="button" className="secondary-button" onClick={() => void discardDraft()} disabled={saving}>
+              <button type="button" className="secondary-button collapsible-action" onClick={() => void discardDraft()} disabled={saving}>
                 <RotateCcw size={17} />
                 丢弃草稿
               </button>
@@ -491,7 +495,7 @@ export const RecordEditorPage = ({
             {onAddToReview && (
               <button
                 type="button"
-                className={`secondary-button review-inline-button ${reviewState?.status === "active" ? "active" : ""}`}
+                className={`secondary-button review-inline-button collapsible-action ${reviewState?.status === "active" ? "active" : ""}`}
                 onClick={() => {
                   if (reviewState?.status !== "active") {
                     void addReview();
@@ -505,16 +509,60 @@ export const RecordEditorPage = ({
             )}
             <button
               type="button"
-              className={`icon-button ${record.favorite ? "active" : ""}`}
+              className={`icon-button collapsible-action ${record.favorite ? "active" : ""}`}
               onClick={() => void toggleFavorite()}
               disabled={saving}
               aria-label={record.favorite ? "取消收藏" : "收藏记录"}
             >
               <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
             </button>
-            <button type="button" className="icon-button danger" onClick={() => void remove()} disabled={saving} aria-label="删除记录">
+            <button type="button" className="icon-button danger collapsible-action" onClick={() => void remove()} disabled={saving} aria-label="删除记录">
               <Trash2 size={18} />
             </button>
+            <div className="record-more-actions">
+              <button
+                type="button"
+                className={`icon-button ${moreActionsOpen ? "active" : ""}`}
+                aria-label={moreActionsOpen ? "收起更多操作" : "更多操作"}
+                aria-expanded={moreActionsOpen}
+                onClick={() => setMoreActionsOpen((open) => !open)}
+                disabled={saving}
+              >
+                <MoreHorizontal size={18} />
+              </button>
+              {moreActionsOpen && (
+                <div className="record-more-menu">
+                  {draftRestored && (
+                    <button type="button" onClick={() => void discardDraft().finally(closeMoreActions)} disabled={saving}>
+                      <RotateCcw size={16} />
+                      丢弃草稿
+                    </button>
+                  )}
+                  {onAddToReview && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (reviewState?.status !== "active") {
+                          void addReview().finally(closeMoreActions);
+                        }
+                      }}
+                      disabled={saving || reviewState?.status === "active"}
+                    >
+                      <CalendarCheck size={16} />
+                      {reviewButtonText}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving}>
+                    <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
+                    {record.favorite ? "取消收藏" : "收藏记录"}
+                  </button>
+                  <button type="button" className="danger" onClick={() => void remove().finally(closeMoreActions)} disabled={saving}>
+                    <Trash2 size={16} />
+                    删除记录
+                  </button>
+                </div>
+              )}
+            </div>
             <button type="button" className="primary-button" onClick={() => void save()} disabled={saving}>
               <Save size={17} />
               {saving ? "保存中" : "保存"}
@@ -525,7 +573,7 @@ export const RecordEditorPage = ({
             {onAddToReview && (
               <button
                 type="button"
-                className={`secondary-button review-inline-button ${reviewState?.status === "active" ? "active" : ""}`}
+                className={`secondary-button review-inline-button collapsible-action ${reviewState?.status === "active" ? "active" : ""}`}
                 onClick={() => {
                   if (reviewState?.status !== "active") {
                     void addReview();
@@ -538,12 +586,45 @@ export const RecordEditorPage = ({
             )}
             <button
               type="button"
-              className={`icon-button ${record.favorite ? "active" : ""}`}
+              className={`icon-button collapsible-action ${record.favorite ? "active" : ""}`}
               onClick={() => void toggleFavorite()}
               aria-label={record.favorite ? "取消收藏" : "收藏记录"}
             >
               <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
             </button>
+            <div className="record-more-actions">
+              <button
+                type="button"
+                className={`icon-button ${moreActionsOpen ? "active" : ""}`}
+                aria-label={moreActionsOpen ? "收起更多操作" : "更多操作"}
+                aria-expanded={moreActionsOpen}
+                onClick={() => setMoreActionsOpen((open) => !open)}
+              >
+                <MoreHorizontal size={18} />
+              </button>
+              {moreActionsOpen && (
+                <div className="record-more-menu">
+                  {onAddToReview && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (reviewState?.status !== "active") {
+                          void addReview().finally(closeMoreActions);
+                        }
+                      }}
+                      disabled={reviewState?.status === "active"}
+                    >
+                      <CalendarCheck size={16} />
+                      {reviewButtonText}
+                    </button>
+                  )}
+                  <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)}>
+                    <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
+                    {record.favorite ? "取消收藏" : "收藏记录"}
+                  </button>
+                </div>
+              )}
+            </div>
             <button type="button" className="primary-button" onClick={() => setEditing(true)}>
               <Edit3 size={17} />
               编辑

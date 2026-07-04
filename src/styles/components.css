@@ -17,7 +17,7 @@
 .empty-state {
   border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 96%, var(--color-bg));
   box-shadow: var(--shadow-soft);
 }
 
@@ -52,8 +52,8 @@
 .more-link-card:hover,
 .category-entry-card:hover {
   --press-y: -1px;
-  border-color: color-mix(in srgb, var(--color-primary) 36%, var(--color-border));
-  box-shadow: var(--shadow-floating);
+  border-color: color-mix(in srgb, var(--color-primary) 30%, var(--color-border));
+  box-shadow: 0 1px 2px rgba(40, 37, 31, 0.05), 0 10px 24px rgba(40, 37, 31, 0.08);
 }
 
 .record-card-main {
@@ -90,16 +90,27 @@
 
 .action-button-primary,
 .primary-button {
-  border-color: var(--color-primary);
-  background: linear-gradient(145deg, var(--color-primary), var(--color-primary-strong));
-  color: #fffaf2;
-  box-shadow: 0 10px 24px rgba(45, 107, 90, 0.18);
+  border-color: var(--color-primary-strong);
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .action-button-secondary,
 .secondary-button {
   background: var(--color-surface);
   color: var(--color-text);
+}
+
+.action-button-primary:hover:not(:disabled),
+.primary-button:hover:not(:disabled) {
+  background: var(--color-primary-strong);
+}
+
+.action-button-secondary:hover:not(:disabled),
+.secondary-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface));
 }
 
 .action-button-ghost,
@@ -115,17 +126,27 @@
 }
 
 .icon-button {
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   transition:
     transform var(--motion-fast) ease,
     background var(--motion-fast) ease,
     color var(--motion-fast) ease;
 }
 
-button,
-[role="button"],
-a,
-label,
+.action-button,
+.primary-button,
+.secondary-button,
+.subtle-button,
+.icon-button,
+.player-play-button,
+.play-mode-button,
+.bottom-nav button,
+.sidebar nav button,
+.subject-picker button,
+.editor-toolbar button,
+.quick-insert button,
+.quick-insert label,
+.editor-file-button,
 .surface-card-interactive,
 .record-card,
 .day-log-card,
@@ -242,9 +263,14 @@ label,
   border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
   border-radius: var(--radius-card);
   padding: 13px 14px;
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  background: var(--color-surface);
   color: var(--color-text);
   text-align: left;
+}
+
+.list-row:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 4%, var(--color-surface));
 }
 
 .list-row-icon {
@@ -252,7 +278,7 @@ label,
   height: 38px;
   display: grid;
   place-items: center;
-  border-radius: 14px;
+  border-radius: var(--radius-control);
   background: var(--color-primary-soft);
   color: var(--color-primary-strong);
 }
@@ -315,7 +341,7 @@ label,
 }
 
 .bottom-nav button {
-  border-radius: 18px;
+  border-radius: var(--radius-pill);
   transition:
     transform var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -325,6 +351,7 @@ label,
 .bottom-nav button.active {
   background: var(--color-primary-soft);
   color: var(--color-primary-strong);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent);
 }
 
 .bottom-nav button.active svg {
@@ -396,16 +423,82 @@ label,
   }
 }
 
-input,
-select,
-textarea {
+.plain-input,
+.code-input,
+.formula-input,
+.quote-input,
+.mistake-form input,
+.mistake-form textarea,
+.mistake-form select,
+.settings-panel input,
+.settings-panel select,
+.search-box input,
+.study-session-form input,
+.study-session-form select,
+.subject-add-row input,
+.subject-manager-row input,
+.entry-meta-panel input,
+.record-editor-head > input,
+.record-asset-card input,
+.asset-card input,
+.formula-editor-card input,
+.formula-editor-card textarea,
+.compact-asset-actions select,
+.recording-rename-control input,
+.secret-input input,
+.preset-editor-card textarea,
+.review-search-box input,
+.review-manager-toolbar select,
+.structure-block-head input,
+.structure-block-head select,
+.collapse-block-head input,
+.structure-node-fields input,
+.structure-node-fields textarea,
+.comparison-column-editor input,
+.comparison-row-card textarea,
+.sticky-note textarea,
+.sticky-note select,
+.ai-input-bar textarea {
   border-color: var(--color-border);
   border-radius: var(--radius-control);
 }
 
-input:focus,
-select:focus,
-textarea:focus {
-  outline: 2px solid color-mix(in srgb, var(--color-primary) 24%, transparent);
+.plain-input:focus,
+.code-input:focus,
+.formula-input:focus,
+.quote-input:focus,
+.mistake-form input:focus,
+.mistake-form textarea:focus,
+.mistake-form select:focus,
+.settings-panel input:focus,
+.settings-panel select:focus,
+.search-box input:focus,
+.study-session-form input:focus,
+.study-session-form select:focus,
+.subject-add-row input:focus,
+.subject-manager-row input:focus,
+.entry-meta-panel input:focus,
+.record-editor-head > input:focus,
+.record-asset-card input:focus,
+.asset-card input:focus,
+.formula-editor-card input:focus,
+.formula-editor-card textarea:focus,
+.compact-asset-actions select:focus,
+.recording-rename-control input:focus,
+.secret-input input:focus,
+.preset-editor-card textarea:focus,
+.review-search-box input:focus,
+.review-manager-toolbar select:focus,
+.structure-block-head input:focus,
+.structure-block-head select:focus,
+.collapse-block-head input:focus,
+.structure-node-fields input:focus,
+.structure-node-fields textarea:focus,
+.comparison-column-editor input:focus,
+.comparison-row-card textarea:focus,
+.sticky-note textarea:focus,
+.sticky-note select:focus,
+.ai-input-bar textarea:focus {
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }

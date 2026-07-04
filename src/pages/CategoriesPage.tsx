@@ -47,6 +47,8 @@ export const CategoriesPage = ({
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [editingName, setEditingName] = useState("");
   const [message, setMessage] = useState("");
+  const [pendingDeleteSubjectId, setPendingDeleteSubjectId] = useState<string | null>(null);
+  const [subjectRowMessage, setSubjectRowMessage] = useState<{ subjectId: string; message: string } | null>(null);
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const subjectCounts = useMemo(() => getSubjectCounts(records, subjects), [records, subjects]);
   const activeRecords = useMemo(
@@ -62,6 +64,8 @@ export const CategoriesPage = ({
     try {
       await onAddSubject(name);
       setNewSubject("");
+      setPendingDeleteSubjectId(null);
+      setSubjectRowMessage(null);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "添加学科失败。");
@@ -80,6 +84,8 @@ export const CategoriesPage = ({
         onActiveSubjectChange(name);
       }
       setEditingSubject(null);
+      setPendingDeleteSubjectId(null);
+      setSubjectRowMessage(null);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "重命名失败。");
@@ -98,10 +104,14 @@ export const CategoriesPage = ({
     const next = [...subjects];
     const [item] = next.splice(index, 1);
     next.splice(nextIndex, 0, item);
+    setPendingDeleteSubjectId(null);
+    setSubjectRowMessage(null);
     await updateSubjects(next);
   };
 
   const toggleArchive = async (subject: SubjectConfig) => {
+    setPendingDeleteSubjectId(null);
+    setSubjectRowMessage(null);
     await updateSubjects(
       subjects.map((item) =>
         item.id === subject.id
@@ -114,7 +124,21 @@ export const CategoriesPage = ({
   const deleteSubject = async (subject: SubjectConfig) => {
     const count = subjectCounts.find((item) => item.subject === subject.name)?.count ?? 0;
     if (count > 0) {
-      setMessage("该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。");
+      setPendingDeleteSubjectId(null);
+      setSubjectRowMessage({
+        subjectId: subject.id,
+        message: "该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。",
+      });
+      setMessage("");
+      return;
+    }
+    if (pendingDeleteSubjectId !== subject.id) {
+      setPendingDeleteSubjectId(subject.id);
+      setSubjectRowMessage({
+        subjectId: subject.id,
+        message: `确认删除“${subject.name}”？这只会删除学科配置，不会删除记录。`,
+      });
+      setMessage("");
       return;
     }
     await updateSubjects(subjects.filter((item) => item.id !== subject.id));
@@ -124,7 +148,14 @@ export const CategoriesPage = ({
     if (editingSubject === subject.name) {
       setEditingSubject(null);
     }
+    setPendingDeleteSubjectId(null);
+    setSubjectRowMessage(null);
     setMessage("");
+  };
+
+  const cancelDeleteSubject = () => {
+    setPendingDeleteSubjectId(null);
+    setSubjectRowMessage(null);
   };
 
   const categoryList = subjectCounts.filter((item) => !item.config?.archivedAt || item.count > 0);
@@ -206,6 +237,8 @@ export const CategoriesPage = ({
                       type="button"
                       className="icon-button"
                       onClick={() => {
+                        setPendingDeleteSubjectId(null);
+                        setSubjectRowMessage(null);
                         setEditingSubject(subject.name);
                         setEditingName(subject.name);
                       }}
@@ -218,14 +251,29 @@ export const CategoriesPage = ({
                   </button>
                   <button
                     type="button"
-                    className="icon-button danger"
+                    className={`icon-button danger${pendingDeleteSubjectId === subject.id ? " active" : ""}`}
                     onClick={() => void deleteSubject(subject)}
                     aria-label={`删除学科 ${subject.name}`}
-                    title="删除学科"
+                    title={pendingDeleteSubjectId === subject.id ? "确认删除学科" : "删除学科"}
                   >
                     <Trash2 size={16} />
                   </button>
                 </div>
+                {subjectRowMessage?.subjectId === subject.id && (
+                  <div className="subject-manager-row-message" role="status">
+                    <span>{subjectRowMessage.message}</span>
+                    {pendingDeleteSubjectId === subject.id && (
+                      <span className="subject-delete-confirm-actions">
+                        <button type="button" className="danger" onClick={() => void deleteSubject(subject)}>
+                          确认删除
+                        </button>
+                        <button type="button" onClick={cancelDeleteSubject}>
+                          取消
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                )}
               </article>
             ))}
           </div>

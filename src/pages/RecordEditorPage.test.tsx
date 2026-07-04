@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Asset, RecordBlock, RecordDraft, SubjectConfig } from "../types";
+import type { Asset, RecordBlock, RecordDraft, RecordReviewState, SubjectConfig } from "../types";
 
 const richEditorMock = vi.hoisted(() => {
   const state: {
@@ -112,6 +112,20 @@ const asset: Asset = {
   mimeType: "image/png",
   size: 4,
   data: new File(["data"], "diagram.png", { type: "image/png" }),
+};
+
+const reviewState: RecordReviewState = {
+  id: "review-1",
+  createdAt: stamp,
+  updatedAt: stamp,
+  recordId: record.id,
+  status: "active",
+  easeFactor: 2.5,
+  repetition: 1,
+  intervalDays: 1,
+  nextReviewDate: "2026-06-22",
+  consecutiveRemembered: 1,
+  totalReviews: 1,
 };
 
 const deferred = <T,>() => {
@@ -270,6 +284,61 @@ describe("RecordEditorPage", () => {
     expect(onSave.mock.calls[0][0].contentHtml).toBe("<p></p>");
     expect(onSave.mock.calls[0][0].contentHtml).not.toContain("record-asset");
     expect(onSave.mock.calls[0][0].assets).toEqual([]);
+  });
+
+  it("keeps primary topbar actions visible and secondary actions in the more menu for a restored draft", async () => {
+    const draft: RecordDraft = {
+      id: record.id,
+      recordId: record.id,
+      baseUpdatedAt: record.updatedAt,
+      draft: {
+        ...record,
+        title: "Restored draft",
+        contentHtml: "<p>draft body</p>",
+      },
+      updatedAt: "2026-06-21T00:01:00.000Z",
+    };
+    const onGetDraft = vi.fn().mockResolvedValue(draft);
+
+    renderEditor({
+      onGetDraft,
+      onAddToReview: vi.fn(),
+      reviewState,
+    });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /保存/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更多操作" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /编辑/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+
+    expect(screen.getAllByRole("button", { name: /丢弃草稿/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /连续记住 1\/5/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "收藏记录" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "删除记录" })).toHaveLength(2);
+  });
+
+  it("keeps edit visible in preview and exposes secondary preview actions from the more menu", async () => {
+    const onAddToReview = vi.fn();
+    const { onGetDraft } = renderEditor({
+      initialEditing: false,
+      onAddToReview,
+    });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /编辑/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更多操作" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getAllByRole("button", { name: "收藏记录" })).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole("button", { name: /加入复习/ }).at(-1)!);
+
+    await waitFor(() => expect(onAddToReview).toHaveBeenCalledWith(record.id));
   });
 
   it("keeps editing and preserves a draft when the formal save fails", async () => {
