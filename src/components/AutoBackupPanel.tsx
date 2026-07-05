@@ -18,6 +18,14 @@ interface AutoBackupPanelProps {
 const formatDateTime = (value?: string): string =>
   value ? new Date(value).toLocaleString() : "尚未备份";
 
+const formatBackupFileName = (settings: AppSettings): string => {
+  const autoBackup = getAutoBackupSettings(settings);
+  if (!autoBackup?.lastBackupAt) {
+    return "-";
+  }
+  return autoBackup.lastBackupFileName ?? "study-journal-latest.zip";
+};
+
 const backupSuccessMessage = (settings: AppSettings, message: string): string => {
   const lastError = getAutoBackupSettings(settings)?.lastError;
   if (lastError) {
@@ -67,6 +75,10 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
         <div>
           <span>最近备份</span>
           <strong>{formatDateTime(autoBackup?.lastBackupAt)}</strong>
+        </div>
+        <div>
+          <span>备份文件</span>
+          <strong>{formatBackupFileName(settings)}</strong>
         </div>
         <div>
           <span>备份大小</span>
@@ -119,6 +131,7 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
         </button>
       </div>
       {autoBackup?.lastError && <p className="status-message">{autoBackup.lastError}</p>}
+      {autoBackup?.lastBackupWarning && <p className="status-message">{autoBackup.lastBackupWarning}</p>}
       {message && (
         <p className="status-message">
           <CheckCircle2 size={15} />

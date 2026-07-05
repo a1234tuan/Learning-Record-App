@@ -14,12 +14,17 @@ vi.mock("../services/autoBackupService", () => ({
     folderName: settings.autoBackup?.folderName,
     lastBackupAt: settings.autoBackup?.lastBackupAt,
     lastBackupSize: settings.autoBackup?.lastBackupSize,
+    lastBackupFileName: settings.autoBackup?.lastBackupFileName,
+    lastBackupWarning: settings.autoBackup?.lastBackupWarning,
     lastError: settings.autoBackup?.lastError,
   }),
   setAutoBackupEnabled: vi.fn(),
 }));
 
-const settings = (lastError?: string): AppSettings => ({
+const settings = (
+  lastError?: string,
+  autoBackup: Partial<NonNullable<AppSettings["autoBackup"]>> = {},
+): AppSettings => ({
   id: "settings",
   examDate: "2026-12-27",
   theme: "system",
@@ -33,6 +38,7 @@ const settings = (lastError?: string): AppSettings => ({
     folderName: "backup",
     debounceMs: 45_000,
     lastError,
+    ...autoBackup,
   },
   schemaVersion: 4,
 });
@@ -49,5 +55,22 @@ describe("AutoBackupPanel", () => {
       expect(screen.getByText("自动备份写入结果为空。")).toBeInTheDocument();
     });
     expect(screen.queryByText("已立即同步到 study-journal-latest.zip。")).not.toBeInTheDocument();
+  });
+
+  it("shows the verified backup file name from the latest successful sync", () => {
+    render(
+      <AutoBackupPanel
+        settings={settings(undefined, {
+          lastBackupAt: "2026-06-21T01:00:00.000Z",
+          lastBackupSize: 1234,
+          lastBackupFileName: "study-journal-latest (1).zip",
+          lastBackupWarning: "请在备份文件夹中查找：study-journal-latest (1).zip",
+        })}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("study-journal-latest (1).zip")).toBeInTheDocument();
+    expect(screen.getByText("请在备份文件夹中查找：study-journal-latest (1).zip")).toBeInTheDocument();
   });
 });

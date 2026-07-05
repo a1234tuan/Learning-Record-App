@@ -11,7 +11,7 @@ const usageSteps = [
   },
   {
     title: "3. 加入复习",
-    body: "重要记录可以点“加入复习”。复习页会按间隔重复安排今日待复习内容，你只需要处理当天出现的记录，并根据掌握情况完成复习。",
+    body: "重要记录可以点“加入复习”，默认会作为“轻回看”进入队列，适合长日志、复盘、总结和材料型笔记。复习页每天默认建议处理前 20 条，到期总数仍会完整显示，完成建议量后可以手动继续处理剩余内容。",
   },
   {
     title: "4. 查看和检索日志",
@@ -29,6 +29,21 @@ const aiExamples = [
   "请用苏格拉底式追问我这个知识点，直到发现我没讲清楚的地方。",
   "请从这篇日志里找 3 个容易误以为懂了的盲区。",
   "我对这个概念的理解是：……请指出哪里不准确。",
+];
+
+const reviewStrategyItems = [
+  {
+    title: "轻回看",
+    body: "默认策略，适合非原子化日志。它的间隔更宽松：忘记了会回到明天，模糊会尽早但不过度频繁地回来，良好和轻松会逐步拉长间隔；系统不会再因为连续几次良好就自动标记已掌握。",
+  },
+  {
+    title: "记忆卡",
+    body: "适合定义、公式、易错点、问答型知识。你可以在记录详情的复习进度里切换为“记忆卡”，它使用接近 Anki 的 FSRS 四按钮调度，但仍保持按天复习，不会几分钟后再次弹出。",
+  },
+  {
+    title: "四个评分",
+    body: "复习页统一使用“忘记了、模糊、良好、轻松”四个按钮，并显示预计下次出现时间。同一天重复评分会被视为纠正今天的评分，只保留最后一次结果，不会重复增加复习次数。",
+  },
 ];
 
 const faqItems = [
@@ -60,6 +75,10 @@ const faqItems = [
     question: "录音找不到怎么办？",
     answer: "进入“更多 -> 录音库”按学科查看，也可以回到对应日志，在资源卡片里播放或重命名录音。",
   },
+  {
+    question: "轻回看和记忆卡怎么选？",
+    answer: "长日志、复盘、资料整理默认用轻回看；真正需要背下来的小知识点再手动切成记忆卡。切换类型会把下次复习重置到明天，但不会删除历史复习日志。",
+  },
 ];
 
 export const UsageGuidePage = () => (
@@ -78,6 +97,18 @@ export const UsageGuidePage = () => (
           <SurfaceCard key={step.title} className="guide-step-card" variant="raised">
             <h3>{step.title}</h3>
             <p>{step.body}</p>
+          </SurfaceCard>
+        ))}
+      </div>
+    </section>
+
+    <section className="usage-guide-section">
+      <h2>复习策略</h2>
+      <div className="guide-step-list">
+        {reviewStrategyItems.map((item) => (
+          <SurfaceCard key={item.title} className="guide-step-card" variant="raised">
+            <h3>{item.title}</h3>
+            <p>{item.body}</p>
           </SurfaceCard>
         ))}
       </div>

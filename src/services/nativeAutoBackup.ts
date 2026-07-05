@@ -3,6 +3,22 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import type { ExportOptions } from "../types";
 import { blobToBase64Chunks } from "./nativeFileWriter";
 
+export interface NativeAutoBackupWriteResult {
+  folderName?: string;
+  size: number;
+  uri?: string;
+  displayName?: string;
+  verifiedAt?: number;
+  lastModified?: number;
+  warning?: string;
+}
+
+export interface NativeAutoBackupFolderFile {
+  displayName?: string;
+  size?: number;
+  lastModified?: number;
+}
+
 interface NativeAutoBackupPlugin {
   bindFolder(): Promise<{ folderName: string }>;
   isBound(): Promise<{ bound: boolean; folderName?: string }>;
@@ -21,7 +37,7 @@ interface NativeAutoBackupPlugin {
   }): Promise<{ size: number }>;
   finishWriteLatest(options: {
     sessionId: string;
-  }): Promise<{ folderName?: string; size: number; uri?: string }>;
+  }): Promise<NativeAutoBackupWriteResult>;
   cancelWriteLatest(options: {
     sessionId: string;
   }): Promise<void>;
@@ -42,10 +58,13 @@ interface NativeAutoBackupPlugin {
   }): Promise<void>;
   finishZipLatest(options: {
     sessionId: string;
-  }): Promise<{ folderName?: string; size: number; uri?: string }>;
+  }): Promise<NativeAutoBackupWriteResult>;
   cancelZipLatest(options: {
     sessionId: string;
   }): Promise<void>;
+  diagnoseFolder(options: {
+    limit: number;
+  }): Promise<{ folderName?: string; files: NativeAutoBackupFolderFile[] }>;
 }
 
 const NativeAutoBackup = registerPlugin<NativeAutoBackupPlugin>("NativeAutoBackup");
@@ -62,7 +81,7 @@ export const getNativeAutoBackupStatus = async (): Promise<{ bound: boolean; fol
 export const writeNativeLatestBackup = async (
   blob: Blob,
   options: ExportOptions = {},
-): Promise<{ folderName?: string; size: number; uri?: string }> => {
+): Promise<NativeAutoBackupWriteResult> => {
   const session = await NativeAutoBackup.beginWriteLatest({
     fileName: "study-journal-latest.zip",
     mimeType: "application/zip",
@@ -108,8 +127,13 @@ export const finishNativeAutoBackupZipEntry = async (sessionId: string): Promise
 
 export const finishNativeAutoBackupZip = async (
   sessionId: string,
-): Promise<{ folderName?: string; size: number; uri?: string }> =>
+): Promise<NativeAutoBackupWriteResult> =>
   NativeAutoBackup.finishZipLatest({ sessionId });
 
 export const cancelNativeAutoBackupZip = async (sessionId: string): Promise<void> =>
   NativeAutoBackup.cancelZipLatest({ sessionId });
+
+export const diagnoseNativeAutoBackupFolder = async (
+  limit = 20,
+): Promise<{ folderName?: string; files: NativeAutoBackupFolderFile[] }> =>
+  NativeAutoBackup.diagnoseFolder({ limit });

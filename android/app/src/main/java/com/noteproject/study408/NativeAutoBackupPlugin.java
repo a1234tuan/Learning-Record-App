@@ -7,6 +7,7 @@ import android.net.Uri;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -30,6 +31,22 @@ public class NativeAutoBackupPlugin extends Plugin {
     private static final String LATEST_FILE_NAME = "study-journal-latest.zip";
     private final Map<String, WriteSession> writeSessions = new ConcurrentHashMap<>();
     private final Map<String, ZipWriteSession> zipWriteSessions = new ConcurrentHashMap<>();
+
+    private static class VerifiedFile {
+        final Uri uri;
+        final String displayName;
+        final long size;
+        final long lastModified;
+        final boolean exactName;
+
+        VerifiedFile(Uri uri, String displayName, long size, long lastModified, boolean exactName) {
+            this.uri = uri;
+            this.displayName = displayName;
+            this.size = size;
+            this.lastModified = lastModified;
+            this.exactName = exactName;
+        }
+    }
 
     private static class WriteSession {
         final Uri uri;
@@ -132,6 +149,28 @@ public class NativeAutoBackupPlugin extends Plugin {
         response.put("bound", treeUri != null);
         response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
         call.resolve(response);
+    }
+
+    @PluginMethod
+    public void diagnoseFolder(PluginCall call) {
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        int limit = call.getInt("limit", 20);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri documentUri = documentUriForTree(Uri.parse(treeUriText));
+                JSObject response = new JSObject();
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("files", folderDiagnostics(documentUri, limit));
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "读取自动备份文件夹诊断信息失败。", error);
+            }
+        });
     }
 
     @PluginMethod
@@ -423,11 +462,23 @@ public class NativeAutoBackupPlugin extends Plugin {
                 if (session.output.size <= 0) {
                     throw new IllegalStateException("自动备份写入结果为空。");
                 }
+                String treeUriText = prefs().getString(KEY_TREE_URI, null);
+                if (treeUriText == null) {
+                    throw new IllegalStateException("尚未绑定自动备份文件夹。");
+                }
+                Uri documentUri = documentUriForTree(Uri.parse(treeUriText));
+                VerifiedFile verified = verifyLatestFile(documentUri, session.uri);
 
                 JSObject response = new JSObject();
                 response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
-                response.put("size", session.output.size);
-                response.put("uri", session.uri.toString());
+                response.put("size", verified.size);
+                response.put("uri", verified.uri.toString());
+                response.put("displayName", verified.displayName);
+                response.put("lastModified", verified.lastModified);
+                response.put("verifiedAt", System.currentTimeMillis());
+                if (!verified.exactName) {
+                    response.put("warning", "系统文件提供器返回的实际文件名不是 " + LATEST_FILE_NAME + "，请在备份文件夹中查找：" + verified.displayName);
+                }
                 call.resolve(response);
             } catch (Exception error) {
                 closeQuietly(session.zip);
@@ -465,15 +516,26 @@ public class NativeAutoBackupPlugin extends Plugin {
         return session;
     }
 
+    private Uri documentUriForTree(Uri treeUri) {
+        return DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            DocumentsContract.getTreeDocumentId(treeUri)
+        );
+    }
+
+    private Uri childrenUriForDocument(Uri documentUri) {
+        return DocumentsContract.buildChildDocumentsUriUsingTree(
+            documentUri,
+            DocumentsContract.getDocumentId(documentUri)
+        );
+    }
+
     private Uri findOrCreateFile(Uri documentUri, String mimeType) throws Exception {
         return findOrCreateFile(documentUri, mimeType, LATEST_FILE_NAME);
     }
 
     private Uri findOrCreateFile(Uri documentUri, String mimeType, String fileName) throws Exception {
-        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            documentUri,
-            DocumentsContract.getDocumentId(documentUri)
-        );
+        Uri childrenUri = childrenUriForDocument(documentUri);
         try (android.database.Cursor cursor = getContext().getContentResolver().query(
             childrenUri,
             new String[] {
@@ -504,6 +566,106 @@ public class NativeAutoBackupPlugin extends Plugin {
             throw new IllegalStateException("无法创建自动备份文件。");
         }
         return created;
+    }
+
+    private VerifiedFile verifyLatestFile(Uri documentUri, Uri writtenUri) throws Exception {
+        Uri childrenUri = childrenUriForDocument(documentUri);
+        String writtenDocumentId = DocumentsContract.getDocumentId(writtenUri);
+        VerifiedFile matchingWrittenUri = null;
+        JSArray diagnostics = new JSArray();
+
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(
+            childrenUri,
+            new String[] {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            },
+            null,
+            null,
+            null
+        )) {
+            if (cursor != null) {
+                int inspected = 0;
+                while (cursor.moveToNext()) {
+                    String documentId = cursor.getString(0);
+                    String name = cursor.getString(1);
+                    long size = cursor.isNull(2) ? -1 : cursor.getLong(2);
+                    long lastModified = cursor.isNull(3) ? 0 : cursor.getLong(3);
+                    Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(documentUri, documentId);
+
+                    if (inspected < 20) {
+                        diagnostics.put(fileDiagnostic(name, size, lastModified));
+                        inspected += 1;
+                    }
+
+                    if (LATEST_FILE_NAME.equals(name)) {
+                        return requireVisibleBackupFile(new VerifiedFile(fileUri, name, size, lastModified, true), diagnostics);
+                    }
+                    if (writtenDocumentId.equals(documentId)) {
+                        matchingWrittenUri = new VerifiedFile(fileUri, name, size, lastModified, false);
+                    }
+                }
+            }
+        }
+
+        if (matchingWrittenUri != null) {
+            return requireVisibleBackupFile(matchingWrittenUri, diagnostics);
+        }
+
+        throw new IllegalStateException(
+            "自动备份写入流已完成，但未在备份文件夹中验证到 " + LATEST_FILE_NAME + "。目录诊断：" + diagnostics.toString()
+        );
+    }
+
+    private VerifiedFile requireVisibleBackupFile(VerifiedFile file, JSArray diagnostics) {
+        if (file.displayName == null || file.displayName.isEmpty()) {
+            throw new IllegalStateException("自动备份写入流已完成，但系统未返回备份文件名。目录诊断：" + diagnostics.toString());
+        }
+        if (file.size <= 0) {
+            throw new IllegalStateException(
+                "自动备份写入流已完成，但验证到的备份文件为空或大小未知：" + file.displayName + "。目录诊断：" + diagnostics.toString()
+            );
+        }
+        return file;
+    }
+
+    private JSArray folderDiagnostics(Uri documentUri, int limit) throws Exception {
+        JSArray files = new JSArray();
+        Uri childrenUri = childrenUriForDocument(documentUri);
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(
+            childrenUri,
+            new String[] {
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            },
+            null,
+            null,
+            null
+        )) {
+            if (cursor != null) {
+                int count = 0;
+                int cappedLimit = Math.max(1, Math.min(limit, 50));
+                while (cursor.moveToNext() && count < cappedLimit) {
+                    String name = cursor.getString(0);
+                    long size = cursor.isNull(1) ? -1 : cursor.getLong(1);
+                    long lastModified = cursor.isNull(2) ? 0 : cursor.getLong(2);
+                    files.put(fileDiagnostic(name, size, lastModified));
+                    count += 1;
+                }
+            }
+        }
+        return files;
+    }
+
+    private JSObject fileDiagnostic(String name, long size, long lastModified) {
+        JSObject file = new JSObject();
+        file.put("displayName", name);
+        file.put("size", size);
+        file.put("lastModified", lastModified);
+        return file;
     }
 
     private void closeQuietly(OutputStream output) {

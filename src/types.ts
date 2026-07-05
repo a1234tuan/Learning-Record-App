@@ -270,6 +270,11 @@ export interface AutoBackupSettings {
   folderName?: string;
   lastBackupAt?: ISODateTime;
   lastBackupSize?: number;
+  lastBackupFileName?: string;
+  lastBackupUri?: string;
+  lastBackupVerifiedAt?: ISODateTime;
+  lastBackupFileModifiedAt?: ISODateTime;
+  lastBackupWarning?: string;
   lastError?: string;
   debounceMs: number;
 }

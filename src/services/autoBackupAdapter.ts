@@ -17,6 +17,11 @@ let webDirectoryHandle: FileSystemDirectoryHandle | undefined;
 export interface AutoBackupWriteResult {
   folderName?: string;
   size: number;
+  uri?: string;
+  displayName?: string;
+  verifiedAt?: number;
+  lastModified?: number;
+  warning?: string;
 }
 
 export interface AutoBackupAdapter {
@@ -56,7 +61,7 @@ export const autoBackupAdapter: AutoBackupAdapter = {
   async writeLatest(store: StorageAdapter): Promise<AutoBackupWriteResult> {
     if (canUseNativeAutoBackup()) {
       const result = await writeNativeAutoBackupStream(store);
-      return { folderName: result.folderName, size: result.size };
+      return result;
     }
     if (!webDirectoryHandle) {
       throw new Error("尚未绑定自动备份文件夹。");
@@ -66,6 +71,13 @@ export const autoBackupAdapter: AutoBackupAdapter = {
     const writable = await fileHandle.createWritable();
     await writable.write(zip);
     await writable.close();
-    return { folderName: webDirectoryHandle.name, size: zip.size };
+    const file = await fileHandle.getFile();
+    return {
+      folderName: webDirectoryHandle.name,
+      size: file.size,
+      displayName: file.name,
+      lastModified: file.lastModified,
+      verifiedAt: Date.now(),
+    };
   },
 };

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSettings, StorageAdapter, StorageSnapshot } from "../types";
-import type { AutoBackupAdapter } from "./autoBackupAdapter";
+import type { AutoBackupAdapter, AutoBackupWriteResult } from "./autoBackupAdapter";
 import {
   bindAutoBackupFolder,
   flushAutoBackupNow,
@@ -88,7 +88,7 @@ const makeStore = (initial = settings()): StorageAdapter => {
 
 const makeAdapter = (
   bound = true,
-  writeResult: Awaited<ReturnType<AutoBackupAdapter["writeLatest"]>> = { folderName: "backup", size: 1234 },
+  writeResult: AutoBackupWriteResult = { folderName: "backup", size: 1234 },
 ): AutoBackupAdapter => ({
   isAvailable: vi.fn(() => true),
   bindFolder: vi.fn(async () => ({ folderName: "backup" })),
@@ -114,15 +114,42 @@ describe("autoBackupService", () => {
 
   it("manual flush writes immediately", async () => {
     const store = makeStore();
-    const adapter = makeAdapter();
+    const adapter = makeAdapter(true, {
+      folderName: "backup",
+      size: 1234,
+      displayName: "study-journal-latest.zip",
+      uri: "content://backup/latest",
+      verifiedAt: new Date("2026-06-21T01:00:00.000Z").getTime(),
+      lastModified: new Date("2026-06-21T00:59:00.000Z").getTime(),
+    });
 
     const nextSettings = await flushAutoBackupNow("manual", adapter, store);
 
     expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
     expect(nextSettings.autoBackup?.lastBackupSize).toBe(1234);
+    expect(nextSettings.autoBackup?.lastBackupFileName).toBe("study-journal-latest.zip");
+    expect(nextSettings.autoBackup?.lastBackupUri).toBe("content://backup/latest");
+    expect(nextSettings.autoBackup?.lastBackupVerifiedAt).toBe("2026-06-21T01:00:00.000Z");
+    expect(nextSettings.autoBackup?.lastBackupFileModifiedAt).toBe("2026-06-21T00:59:00.000Z");
     expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       autoBackup: expect.objectContaining({ lastBackupSize: 1234 }),
     }));
+  });
+
+  it("records the provider's actual file name and warning when native verification reports a renamed file", async () => {
+    const store = makeStore();
+    const adapter = makeAdapter(true, {
+      folderName: "backup",
+      size: 1234,
+      displayName: "study-journal-latest (1).zip",
+      warning: "系统文件提供器返回的实际文件名不是 study-journal-latest.zip，请在备份文件夹中查找：study-journal-latest (1).zip",
+    });
+
+    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+
+    expect(nextSettings.autoBackup?.lastBackupFileName).toBe("study-journal-latest (1).zip");
+    expect(nextSettings.autoBackup?.lastBackupWarning).toContain("study-journal-latest (1).zip");
+    expect(nextSettings.autoBackup?.lastError).toBeUndefined();
   });
 
   it("does not advance last backup time when the write result is empty", async () => {
@@ -138,8 +165,8 @@ describe("autoBackupService", () => {
   });
 
   it("waits for an in-flight flush instead of returning stale settings", async () => {
-    let resolveWrite: (value: { folderName: string; size: number }) => void = () => undefined;
-    const writePromise = new Promise<{ folderName: string; size: number }>((resolve) => {
+    let resolveWrite: (value: AutoBackupWriteResult) => void = () => undefined;
+    const writePromise = new Promise<AutoBackupWriteResult>((resolve) => {
       resolveWrite = resolve;
     });
     const store = makeStore();

@@ -17,6 +17,11 @@ const withAutoBackupDefaults = (settings: AppSettings): AppSettings => ({
     folderName: settings.autoBackup?.folderName,
     lastBackupAt: settings.autoBackup?.lastBackupAt,
     lastBackupSize: settings.autoBackup?.lastBackupSize,
+    lastBackupFileName: settings.autoBackup?.lastBackupFileName,
+    lastBackupUri: settings.autoBackup?.lastBackupUri,
+    lastBackupVerifiedAt: settings.autoBackup?.lastBackupVerifiedAt,
+    lastBackupFileModifiedAt: settings.autoBackup?.lastBackupFileModifiedAt,
+    lastBackupWarning: settings.autoBackup?.lastBackupWarning,
     lastError: settings.autoBackup?.lastError,
   },
 });
@@ -30,6 +35,13 @@ const ensureValidWriteResult = (result: { size: number }) => {
   if (!Number.isFinite(result.size) || result.size <= 0) {
     throw new Error("自动备份写入结果为空。");
   }
+};
+
+const timestampToISO = (value: number | undefined): string | undefined => {
+  if (!value || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return new Date(value).toISOString();
 };
 
 export const setAutoBackupEnabled = async (
@@ -120,6 +132,11 @@ export const flushAutoBackupNow = async (
           folderName: result.folderName ?? bound.folderName ?? settings.autoBackup.folderName,
           lastBackupAt: nowISO(),
           lastBackupSize: result.size,
+          lastBackupFileName: result.displayName ?? "study-journal-latest.zip",
+          lastBackupUri: result.uri,
+          lastBackupVerifiedAt: timestampToISO(result.verifiedAt) ?? nowISO(),
+          lastBackupFileModifiedAt: timestampToISO(result.lastModified),
+          lastBackupWarning: result.warning,
           lastError: undefined,
         },
       };
