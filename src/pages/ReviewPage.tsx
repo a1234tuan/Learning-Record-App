@@ -76,6 +76,15 @@ const reviewDueLabel = (review: RecordReviewState | undefined) => {
 
 const intervalLabel = (days: number) => days <= 1 ? "明天" : `${days}天后`;
 
+const sameIds = (left: string[], right: string[]) =>
+  left.length === right.length && left.every((id, index) => id === right[index]);
+
+const suggestedDailyLimitIds = (reviews: RecordReviewState[], today: string) =>
+  reviews
+    .filter((review) => isReviewDueOn(review, today))
+    .slice(0, REVIEW_DAILY_SUGGESTED_LIMIT)
+    .map((review) => review.recordId);
+
 const matchesFilter = (review: RecordReviewState | undefined, filter: ReviewCardFilter, today: string) => {
   switch (filter) {
     case "all":
@@ -130,8 +139,8 @@ export const ReviewPage = ({
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [ratingError, setRatingError] = useState("");
   const [showAllDue, setShowAllDue] = useState(false);
-  const [dailyLimitIds, setDailyLimitIds] = useState<string[]>([]);
   const today = todayISO();
+  const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
   const reviewMap = useMemo(() => new Map(reviewStates.map((review) => [review.recordId, review])), [reviewStates]);
   const availableDueReviews = useMemo(
     () => dueReviews.filter((review) => !ratedRecordIds.has(review.recordId) && isReviewDueOn(review, today)),
@@ -154,6 +163,7 @@ export const ReviewPage = ({
   const overdueCount = availableDueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
   const todayCount = availableDueReviews.filter((review) => review.nextReviewDate === today).length;
   const hiddenDueCount = showAllDue ? 0 : availableDueReviews.filter((review) => !dailyLimitIds.includes(review.recordId)).length;
+  const queueReady = showAllDue || availableDueReviews.length === 0 || dailyLimitIds.length > 0;
   const ratingPreviews = useMemo(
     () => currentReview ? new Map(previewReviewRatings(currentReview, today).map((preview) => [preview.rating, preview])) : new Map(),
     [currentReview, today],
@@ -192,18 +202,19 @@ export const ReviewPage = ({
   }, [today]);
 
   useEffect(() => {
-    if (showAllDue || dailyLimitIds.length > 0 || dueReviews.length === 0) {
+    if (showAllDue) {
       return;
     }
-    setDailyLimitIds(
-      dueReviews
-        .filter((review) => isReviewDueOn(review, today))
-        .slice(0, REVIEW_DAILY_SUGGESTED_LIMIT)
-        .map((review) => review.recordId),
-    );
-  }, [dailyLimitIds.length, dueReviews, showAllDue, today]);
+    const nextDailyLimitIds = suggestedDailyLimitIds(dueReviews, today);
+    if (!sameIds(dailyLimitIds, nextDailyLimitIds)) {
+      setDailyLimitIds(nextDailyLimitIds);
+    }
+  }, [dailyLimitIds, dueReviews, showAllDue, today]);
 
   useEffect(() => {
+    if (!queueReady) {
+      return;
+    }
     const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : queuedDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
     if (nextQueue.join("|") !== queueIds.join("|")) {
       onQueueChange(nextQueue);
@@ -214,7 +225,7 @@ export const ReviewPage = ({
     if (nextQueue.length === 0 && currentRecordId) {
       onCurrentRecordChange(undefined);
     }
-  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, queuedDueReviews, recordMap]);
+  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, queueReady, queuedDueReviews, recordMap]);
 
   useEffect(() => {
     setRatedRecordIds(new Set());

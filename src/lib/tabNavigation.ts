@@ -104,6 +104,24 @@ export const getRecordState = (tab: TabKey, memory: TabMemory): RecordTabState =
   }
 };
 
+export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionId: string | null = null): string => {
+  const depth = getTabDepth(tab, memory);
+  const recordPart = getRecordState(tab, memory).recordId ?? "root";
+  if (tab === "journal") {
+    return `${tab}-${depth}-${recordPart}-${memory.journal.searchOpen ? "search" : "browse"}`;
+  }
+  if (tab === "categories") {
+    return `${tab}-${depth}-${recordPart}-${memory.categories.managing ? "manage" : memory.categories.activeSubject ?? "all"}`;
+  }
+  if (tab === "review") {
+    return `${tab}-${depth}-${recordPart}-${memory.review.mode}`;
+  }
+  if (tab === "more") {
+    return `${tab}-${depth}-${recordPart}-${memory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
+  }
+  return `${tab}-${depth}-${recordPart}`;
+};
+
 export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
   switch (tab) {
     case "today":

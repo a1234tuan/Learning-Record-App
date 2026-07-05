@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createInitialTabMemory, getTabDepth, popTabDepth } from "./tabNavigation";
+import { buildTabPageKey, createInitialTabMemory, getTabDepth, popTabDepth } from "./tabNavigation";
 
 describe("tabNavigation", () => {
   it("keeps each tab state independent", () => {
@@ -112,6 +112,34 @@ describe("tabNavigation", () => {
 
     expect(next.review.queueIds).toEqual(["record-1"]);
     expect(next.review.currentRecordId).toBe("record-1");
+  });
+
+  it("keeps review root page key stable when only the review queue changes", () => {
+    const base = {
+      ...createInitialTabMemory(),
+      review: { ...createInitialTabMemory().review, queueIds: ["record-1"], currentRecordId: "record-1" },
+    };
+    const changedQueue = {
+      ...base,
+      review: { ...base.review, queueIds: ["record-2", "record-3"], currentRecordId: "record-2" },
+    };
+
+    expect(buildTabPageKey("review", changedQueue)).toBe(buildTabPageKey("review", base));
+  });
+
+  it("changes review page key for mode changes and record detail depth", () => {
+    const base = createInitialTabMemory();
+    const manage = {
+      ...base,
+      review: { ...base.review, mode: "manage" as const },
+    };
+    const recordDetail = {
+      ...base,
+      review: { ...base.review, recordId: "record-1" },
+    };
+
+    expect(buildTabPageKey("review", manage)).not.toBe(buildTabPageKey("review", base));
+    expect(buildTabPageKey("review", recordDetail)).not.toBe(buildTabPageKey("review", base));
   });
 
   it("opens and pops record depth inside review tab", () => {

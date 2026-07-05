@@ -39,6 +39,7 @@ import { createAiSessionForDate } from "./services/aiSessionService";
 import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
 import {
+  buildTabPageKey,
   createInitialTabMemory,
   getRecordState,
   getTabDepth,
@@ -47,6 +48,9 @@ import {
   type TabKey,
   type TabMemory,
 } from "./lib/tabNavigation";
+
+const sameIds = (left: string[], right: string[]) =>
+  left.length === right.length && left.every((id, index) => id === right[index]);
 
 const isEditableElement = (target: EventTarget | Element | null) => {
   if (!(target instanceof Element)) {
@@ -640,13 +644,21 @@ export const App = () => {
             queueIds={tabMemory.review.queueIds}
             currentRecordId={tabMemory.review.currentRecordId}
             onModeChange={(mode) =>
-              setTabMemory((current) => ({ ...current, review: { ...current.review, mode } }))
+              setTabMemory((current) =>
+                current.review.mode === mode ? current : { ...current, review: { ...current.review, mode } },
+              )
             }
             onQueueChange={(queueIds) =>
-              setTabMemory((current) => ({ ...current, review: { ...current.review, queueIds } }))
+              setTabMemory((current) =>
+                sameIds(current.review.queueIds, queueIds) ? current : { ...current, review: { ...current.review, queueIds } },
+              )
             }
             onCurrentRecordChange={(currentRecordId) =>
-              setTabMemory((current) => ({ ...current, review: { ...current.review, currentRecordId } }))
+              setTabMemory((current) =>
+                current.review.currentRecordId === currentRecordId
+                  ? current
+                  : { ...current, review: { ...current.review, currentRecordId } },
+              )
             }
             onEnsureDay={app.ensureRecordReviewDay}
             onRate={async (recordId, rating) => {
@@ -671,23 +683,7 @@ export const App = () => {
     }
   };
 
-  const pageKey = (() => {
-    const depth = getTabDepth(activeTab, tabMemory);
-    const recordPart = currentRecordState.recordId ?? "root";
-    if (activeTab === "journal") {
-      return `${activeTab}-${depth}-${recordPart}-${tabMemory.journal.searchOpen ? "search" : "browse"}`;
-    }
-    if (activeTab === "categories") {
-      return `${activeTab}-${depth}-${recordPart}-${tabMemory.categories.managing ? "manage" : tabMemory.categories.activeSubject ?? "all"}`;
-    }
-    if (activeTab === "review") {
-      return `${activeTab}-${depth}-${recordPart}-${tabMemory.review.mode}-${tabMemory.review.currentRecordId ?? "root"}-${tabMemory.review.queueIds.join(".")}`;
-    }
-    if (activeTab === "more") {
-      return `${activeTab}-${depth}-${recordPart}-${tabMemory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
-    }
-    return `${activeTab}-${depth}-${recordPart}`;
-  })();
+  const pageKey = buildTabPageKey(activeTab, tabMemory, activeAiSessionId);
 
   const shellClassName = [
     "app-shell",

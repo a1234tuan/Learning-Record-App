@@ -144,6 +144,48 @@ describe("ReviewPage", () => {
     expect(handlers.onAddToReview).toHaveBeenCalledWith("new");
   });
 
+  it("does not clear an existing queue while the daily suggestion queue initializes", async () => {
+    const onQueueChange = vi.fn();
+    const onCurrentRecordChange = vi.fn();
+
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      queueIds: ["active"],
+      currentRecordId: "active",
+      onQueueChange,
+      onCurrentRecordChange,
+    });
+
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
+    expect(onQueueChange).not.toHaveBeenCalledWith([]);
+    expect(onCurrentRecordChange).not.toHaveBeenCalledWith(undefined);
+  });
+
+  it("initializes the suggested queue with at most twenty due cards", async () => {
+    const manyRecords = Array.from({ length: 25 }, (_, index) => record(`due-${index + 1}`, `复习卡 ${index + 1}`, "数据结构"));
+    const manyReviews = manyRecords.map((item) => review(item.id));
+    const onQueueChange = vi.fn();
+    const onCurrentRecordChange = vi.fn();
+
+    renderReviewPage({
+      records: manyRecords,
+      dueReviews: manyReviews,
+      reviewStates: manyReviews,
+      mode: "queue",
+      queueIds: [],
+      currentRecordId: undefined,
+      onQueueChange,
+      onCurrentRecordChange,
+    });
+
+    const expectedIds = manyRecords.slice(0, 20).map((item) => item.id);
+    await waitFor(() => expect(onQueueChange).toHaveBeenCalledWith(expectedIds));
+    expect(onCurrentRecordChange).toHaveBeenCalledWith("due-1");
+  });
+
   it("filters card manager by deck and state", () => {
     renderReviewPage();
 
