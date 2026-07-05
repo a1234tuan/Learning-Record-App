@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AiChatAttachment, AiChatMessage, AiContextPack } from "../types";
 import {
@@ -7,6 +7,7 @@ import {
   buildSessionMemorySummary,
   normalizeAiChatCompletionsUrl,
   selectRecentChatContext,
+  testAiProviderConnection,
 } from "./aiClientService";
 
 const stamp = "2026-06-22T00:00:00.000Z";
@@ -60,6 +61,10 @@ const imageAttachment = (patch: Partial<AiChatAttachment> = {}): AiChatAttachmen
   ocrStatus: "done",
   ocrText: "手写作答内容",
   ...patch,
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("buildAiMessages", () => {
@@ -161,6 +166,58 @@ describe("buildAiMessages", () => {
       "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     );
     expect(normalizeAiChatCompletionsUrl("https://api.vectorengine.ai")).toBe("https://api.vectorengine.ai/chat/completions");
+  });
+
+  it("tests provider connections with a minimal prompt and no log context", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testAiProviderConnection({
+      provider: {
+        id: "custom",
+        providerName: "中转 API",
+        baseUrl: "https://relay.example/v1",
+        model: "gpt-test",
+        temperature: 0.7,
+        maxTokens: 4096,
+      },
+      apiKey: "sk-test",
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(result.requestUrl).toBe("https://relay.example/v1/chat/completions");
+    expect(body).toMatchObject({
+      model: "gpt-test",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "请只回复 OK。" }],
+    });
+    expect(JSON.stringify(body)).not.toContain("学习日志上下文");
+  });
+
+  it("reports HTML responses as likely Base URL path errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("<!doctype html><html><body>portal</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    ));
+
+    await expect(testAiProviderConnection({
+      provider: {
+        id: "custom",
+        providerName: "中转 API",
+        baseUrl: "https://relay.example",
+        model: "gpt-test",
+        temperature: 0.7,
+        maxTokens: 4096,
+      },
+      apiKey: "sk-test",
+    })).rejects.toThrow(/不是 OpenAI 兼容 JSON.*Base URL 路径错误/);
   });
 
   it("builds OpenAI multimodal content for direct image mode", async () => {

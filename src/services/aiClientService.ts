@@ -12,6 +12,11 @@ export type AiChatPayloadMessage = {
   content: string | AiChatPayloadContentPart[];
 };
 
+export interface AiConnectionTestResult {
+  requestUrl: string;
+  content: string;
+}
+
 const SYSTEM_PROMPT = [
   "你是一个严格、耐心的学习教练，回答必须优先基于用户提供的本地学习日志。",
   "日志中没有的信息请明确说“不确定”或“日志里没有”，不要编造。",
@@ -29,6 +34,29 @@ export const normalizeAiChatCompletionsUrl = (baseUrl: string): string => {
     throw new Error("请先填写 AI 接口 Base URL。");
   }
   return trimmed.endsWith("/chat/completions") ? trimmed : `${trimmed}/chat/completions`;
+};
+
+const responseSnippet = (text: string, maxLength = 180): string => {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+};
+
+const isLikelyHtmlResponse = (text: string, contentType: string): boolean =>
+  contentType.toLowerCase().includes("text/html") || /^\s*<!doctype\b/i.test(text) || /^\s*<html\b/i.test(text);
+
+const formatResponseMeta = (status: number, contentType: string, requestUrl: string): string =>
+  [
+    `HTTP ${status}`,
+    contentType ? `Content-Type：${contentType}` : "",
+    `请求地址：${requestUrl}`,
+  ].filter(Boolean).join("，");
+
+const tryParseJson = (text: string): { ok: true; value: unknown } | { ok: false } => {
+  try {
+    return { ok: true, value: text ? JSON.parse(text) : {} };
+  } catch {
+    return { ok: false };
+  }
 };
 
 const MEMORY_SUMMARY_TURNS = 12;
@@ -164,6 +192,74 @@ const extractErrorMessage = (body: unknown, fallback: string): string => {
   return typeof errorMessage === "string" && errorMessage.trim() ? errorMessage : fallback;
 };
 
+const requestOpenAiChatCompletion = async (options: {
+  provider: AiProviderProfile;
+  apiKey: string;
+  messages: AiChatPayloadMessage[];
+  maxTokens?: number;
+}): Promise<string> => {
+  const { provider, apiKey, messages } = options;
+  const maxTokens = options.maxTokens ?? provider.maxTokens;
+
+  if (canUseNativeAi()) {
+    return runNativeAiChat({
+      baseUrl: provider.baseUrl,
+      apiKey,
+      model: provider.model,
+      temperature: provider.temperature,
+      maxTokens,
+      messages,
+    });
+  }
+
+  const requestUrl = normalizeAiChatCompletionsUrl(provider.baseUrl);
+  try {
+    const response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages,
+        temperature: provider.temperature,
+        max_tokens: maxTokens,
+      }),
+    });
+    const text = await response.text();
+    const contentType = response.headers.get("content-type") ?? "";
+    const parsed = tryParseJson(text);
+    const fallbackDetail = responseSnippet(text) || "响应体为空。";
+
+    if (!response.ok) {
+      const detail = parsed.ok
+        ? extractErrorMessage(parsed.value, fallbackDetail)
+        : [
+          isLikelyHtmlResponse(text, contentType) ? "接口返回的是 HTML 页面，Base URL 可能缺少 /v1 或填成了网页入口。" : "接口返回的不是 JSON。",
+          fallbackDetail ? `响应片段：${fallbackDetail}` : "",
+        ].filter(Boolean).join(" ");
+      throw new Error(`${provider.providerName} AI 接口请求失败：${formatResponseMeta(response.status, contentType, requestUrl)}，${detail}`);
+    }
+
+    if (!parsed.ok) {
+      const hint = isLikelyHtmlResponse(text, contentType)
+        ? "接口返回的是 HTML 页面，Base URL 可能缺少 /v1 或填成了网页入口。"
+        : "接口返回的不是 JSON。";
+      throw new Error(
+        `${provider.providerName} AI 接口返回的不是 OpenAI 兼容 JSON，可能 Base URL 路径错误。${formatResponseMeta(response.status, contentType, requestUrl)}，${hint}响应片段：${fallbackDetail}`,
+      );
+    }
+
+    return parseOpenAiContent(parsed.value);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("Web 端请求失败，可能被第三方接口 CORS 限制。请在 Android 端使用，或配置允许跨域的代理 Base URL。");
+    }
+    throw error;
+  }
+};
+
 const imageAttachmentToContentPart = async (attachment: AiChatAttachment): Promise<AiChatPayloadContentPart> => {
   const base64 = await blobToBase64(attachment.data);
   return {
@@ -255,46 +351,34 @@ export const sendChatCompletion = async (options: {
     memorySummary,
     userContent,
   );
-  if (canUseNativeAi()) {
-    return runNativeAiChat({
-      baseUrl: provider.baseUrl,
-      apiKey,
-      model: provider.model,
-      temperature: provider.temperature,
-      maxTokens: provider.maxTokens,
-      messages,
-    });
+  return requestOpenAiChatCompletion({
+    provider,
+    apiKey: apiKey.trim(),
+    messages,
+  });
+};
+
+export const testAiProviderConnection = async (options: {
+  provider: AiProviderProfile | undefined;
+  apiKey: string | undefined;
+}): Promise<AiConnectionTestResult> => {
+  const { provider, apiKey } = options;
+  if (!provider) {
+    throw new Error("请先配置 AI 供应商。");
+  }
+  if (!apiKey?.trim()) {
+    throw new Error(`请先填写 ${provider.providerName || "当前供应商"} 的 API Key。`);
+  }
+  if (!provider.providerName.trim() || !provider.baseUrl.trim() || !provider.model.trim()) {
+    throw new Error("请先补齐供应商名称、Base URL 和模型名称。");
   }
 
-  try {
-    const response = await fetch(normalizeAiChatCompletionsUrl(provider.baseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: provider.model,
-        messages,
-        temperature: provider.temperature,
-        max_tokens: provider.maxTokens,
-      }),
-    });
-    const text = await response.text();
-    let json: unknown;
-    try {
-      json = text ? JSON.parse(text) : {};
-    } catch {
-      json = {};
-    }
-    if (!response.ok) {
-      throw new Error(`${provider.providerName} AI 接口请求失败：${response.status} ${extractErrorMessage(json, text)}`.trim());
-    }
-    return parseOpenAiContent(json);
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error("Web 端请求失败，可能被第三方接口 CORS 限制。请在 Android 端使用，或配置允许跨域的代理 Base URL。");
-    }
-    throw error;
-  }
+  const requestUrl = normalizeAiChatCompletionsUrl(provider.baseUrl);
+  const content = await requestOpenAiChatCompletion({
+    provider,
+    apiKey: apiKey.trim(),
+    maxTokens: 16,
+    messages: [{ role: "user", content: "请只回复 OK。" }],
+  });
+  return { requestUrl, content };
 };

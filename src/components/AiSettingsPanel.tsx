@@ -1,4 +1,4 @@
-import { ChevronDown, Eye, EyeOff, Plus, Save, Trash2 } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { AiProviderConfig, AiProviderProfile, AiPromptPreset, AppSettings } from "../types";
@@ -10,6 +10,7 @@ import {
   normalizeAiConfig,
   normalizeAiProvider,
 } from "../lib/aiProviders";
+import { normalizeAiChatCompletionsUrl, testAiProviderConnection } from "../services/aiClientService";
 import { storage } from "../services/storageAdapter";
 
 interface AiSettingsPanelProps {
@@ -22,6 +23,19 @@ const withAiDefaults = (settings: AppSettings): AiProviderConfig =>
 
 const sortedPresets = (presets: AiPromptPreset[]) =>
   [...presets].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt));
+
+const previewChatCompletionsUrl = (baseUrl: string): string => {
+  try {
+    return normalizeAiChatCompletionsUrl(baseUrl);
+  } catch {
+    return "请先填写 Base URL";
+  }
+};
+
+const shouldShowCustomProxyV1Hint = (provider: AiProviderProfile): boolean => {
+  const trimmed = provider.baseUrl.trim().replace(/\/+$/, "");
+  return provider.builtIn === "custom-proxy" && /^https?:\/\/[^/]+$/i.test(trimmed);
+};
 
 const providerTemplates: Array<{ builtIn: NonNullable<AiProviderProfile["builtIn"]>; label: string }> = [
   { builtIn: "deepseek", label: "DeepSeek" },
@@ -58,6 +72,8 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
   const [showKey, setShowKey] = useState(false);
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(false);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, string>>({});
   const presets = useMemo(() => sortedPresets(config.presets), [config.presets]);
   const currentProvider = getCurrentAiProvider(config);
 
@@ -75,7 +91,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
     setConfig((current) => ({
       ...current,
       providers: current.providers.map((provider) =>
-        provider.id === id ? normalizeAiProvider({ ...provider, ...patch, id: provider.id }) : provider,
+        provider.id === id ? { ...provider, ...patch, id: provider.id } : provider,
       ),
     }));
   };
@@ -116,6 +132,12 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
       setMessage("请至少保留一个 AI 供应商。");
       return;
     }
+    const incompleteProvider = providers.find((provider) =>
+      !provider.providerName.trim() || !provider.baseUrl.trim() || !provider.model.trim());
+    if (incompleteProvider) {
+      setMessage(`请补齐 ${incompleteProvider.providerName || "未命名供应商"} 的供应商名称、Base URL 和模型名称后再保存。`);
+      return;
+    }
     const nextConfig: AiProviderConfig = {
       ...config,
       currentProviderId,
@@ -131,6 +153,33 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
     );
     await onChanged();
     setMessage("AI 设置已保存。API Key 只保存在本机，不进入备份。");
+  };
+
+  const testProvider = async (provider: AiProviderProfile) => {
+    const normalizedProvider = normalizeAiProvider(provider);
+    const requestUrl = previewChatCompletionsUrl(normalizedProvider.baseUrl);
+    setMessage("");
+    setTestResults((current) => ({ ...current, [provider.id]: "正在测试连接..." }));
+    setTestingProviderId(provider.id);
+    try {
+      const result = await testAiProviderConnection({
+        provider: normalizedProvider,
+        apiKey: apiKeys[provider.id],
+      });
+      const content = result.content ? `返回：${result.content.slice(0, 80)}` : "接口已返回有效响应。";
+      setTestResults((current) => ({
+        ...current,
+        [provider.id]: `连接成功。请求地址：${result.requestUrl}。${content}`,
+      }));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "测试失败。";
+      setTestResults((current) => ({
+        ...current,
+        [provider.id]: `测试失败。请求地址：${requestUrl}。${detail}`,
+      }));
+    } finally {
+      setTestingProviderId(null);
+    }
   };
 
   const updatePreset = (id: string, patch: Partial<AiPromptPreset>) => {
@@ -196,6 +245,15 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
                     >
                       {active ? "当前使用" : "设为当前"}
                     </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void testProvider(provider)}
+                      disabled={testingProviderId === provider.id}
+                    >
+                      <RefreshCw size={16} />
+                      {testingProviderId === provider.id ? "测试中" : "测试连接"}
+                    </button>
                     <button type="button" className="icon-button danger" onClick={() => removeProvider(provider.id)} disabled={active}>
                       <Trash2 size={16} />
                     </button>
@@ -216,6 +274,10 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
                         onChange={(event) => updateProvider(provider.id, { baseUrl: event.target.value })}
                         placeholder={DEFAULT_SETTINGS.ai?.providers[0]?.baseUrl ?? "https://api.deepseek.com"}
                       />
+                      <small>实际请求地址：{previewChatCompletionsUrl(provider.baseUrl)}</small>
+                      {shouldShowCustomProxyV1Hint(provider) && (
+                        <small>多数中转站需要在 Base URL 末尾加 /v1，例如 https://chatapi.onechats.top/v1。</small>
+                      )}
                     </label>
                     <label>
                       模型
@@ -265,6 +327,7 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
                       <input value={`最近 ${provider.memoryTurns ?? 12} 轮问答`} readOnly />
                     </label>
                   </div>
+                  {testResults[provider.id] && <p className="helper-text">{testResults[provider.id]}</p>}
                 </article>
               );
             })}

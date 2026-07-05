@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createAiProviderTemplate, normalizeAiConfig } from "./aiProviders";
+import { createAiProviderTemplate, normalizeAiConfig, normalizeAiProvider } from "./aiProviders";
 import { createDefaultAiPresets } from "../db/defaults";
 
 describe("aiProviders", () => {
@@ -45,5 +45,24 @@ describe("aiProviders", () => {
       memoryTurns: 8,
     });
     expect(migrated.presets).toBe(presets);
+  });
+
+  it("keeps user-cleared provider fields instead of restoring DeepSeek defaults", () => {
+    const provider = normalizeAiProvider({
+      id: "custom",
+      providerName: "",
+      baseUrl: "",
+      model: "",
+      temperature: 0.7,
+      maxTokens: 4096,
+    });
+
+    expect(provider).toMatchObject({
+      id: "custom",
+      providerName: "",
+      baseUrl: "",
+      model: "",
+    });
+    expect(provider.baseUrl).not.toBe("https://api.deepseek.com");
   });
 });

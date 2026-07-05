@@ -13,6 +13,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 @CapacitorPlugin(name = "NativeAi")
@@ -40,7 +41,8 @@ public class NativeAiPlugin extends Plugin {
                 payload.put("temperature", temperature);
                 payload.put("max_tokens", maxTokens);
 
-                HttpURLConnection connection = openConnection(normalizeChatUrl(baseUrl));
+                String requestUrl = normalizeChatUrl(baseUrl);
+                HttpURLConnection connection = openConnection(requestUrl);
                 connection.setRequestProperty("Authorization", "Bearer " + apiKey);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 connection.setDoOutput(true);
@@ -51,12 +53,13 @@ public class NativeAiPlugin extends Plugin {
 
                 String body = readResponse(connection);
                 int code = connection.getResponseCode();
+                String contentType = connection.getContentType() != null ? connection.getContentType() : "";
                 if (code < 200 || code >= 300) {
-                    call.reject("AI 接口请求失败：" + code + " " + body);
+                    call.reject("AI 接口请求失败：" + code + " " + extractErrorMessage(body, contentType, requestUrl));
                     return;
                 }
 
-                JSONObject json = new JSONObject(body);
+                JSONObject json = parseJsonBody(body, contentType, code, requestUrl);
                 JSONArray choices = json.optJSONArray("choices");
                 if (choices == null || choices.length() == 0) {
                     call.reject("AI 接口返回为空，或不是 OpenAI 兼容格式。");
@@ -88,6 +91,62 @@ public class NativeAiPlugin extends Plugin {
             return trimmed;
         }
         return trimmed + "/chat/completions";
+    }
+
+    private JSONObject parseJsonBody(String body, String contentType, int code, String requestUrl) throws JSONException {
+        try {
+            return new JSONObject(body);
+        } catch (JSONException error) {
+            String hint = isLikelyHtmlResponse(body, contentType)
+                ? "接口返回的是 HTML 页面，Base URL 可能缺少 /v1 或填成了网页入口。"
+                : "接口返回的不是 JSON。";
+            throw new JSONException(
+                "AI 接口返回的不是 OpenAI 兼容 JSON，可能 Base URL 路径错误。"
+                    + formatResponseMeta(code, contentType, requestUrl)
+                    + "，" + hint
+                    + "响应片段：" + responseSnippet(body)
+            );
+        }
+    }
+
+    private String extractErrorMessage(String body, String contentType, String requestUrl) {
+        try {
+            JSONObject json = new JSONObject(body);
+            JSONObject error = json.optJSONObject("error");
+            String message = error != null ? error.optString("message", "") : json.optString("message", "");
+            if (!message.trim().isEmpty()) {
+                return message.trim();
+            }
+        } catch (JSONException ignored) {
+            // Fall through to a compact response summary below.
+        }
+
+        if (isLikelyHtmlResponse(body, contentType)) {
+            return "接口返回的是 HTML 页面，Base URL 可能缺少 /v1 或填成了网页入口。请求地址：" + requestUrl + "，响应片段：" + responseSnippet(body);
+        }
+        return responseSnippet(body);
+    }
+
+    private String formatResponseMeta(int code, String contentType, String requestUrl) {
+        String meta = "HTTP " + code;
+        if (contentType != null && !contentType.trim().isEmpty()) {
+            meta += "，Content-Type：" + contentType.trim();
+        }
+        return meta + "，请求地址：" + requestUrl;
+    }
+
+    private boolean isLikelyHtmlResponse(String body, String contentType) {
+        String lowerContentType = contentType != null ? contentType.toLowerCase() : "";
+        String trimmed = body != null ? body.trim().toLowerCase() : "";
+        return lowerContentType.contains("text/html") || trimmed.startsWith("<!doctype") || trimmed.startsWith("<html");
+    }
+
+    private String responseSnippet(String body) {
+        if (body == null || body.trim().isEmpty()) {
+            return "响应体为空。";
+        }
+        String compact = body.replaceAll("\\s+", " ").trim();
+        return compact.length() > 180 ? compact.substring(0, 180) + "..." : compact;
     }
 
     private HttpURLConnection openConnection(String url) throws Exception {
