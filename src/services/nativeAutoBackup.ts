@@ -25,6 +25,27 @@ interface NativeAutoBackupPlugin {
   cancelWriteLatest(options: {
     sessionId: string;
   }): Promise<void>;
+  beginZipLatest(options: {
+    fileName: string;
+    mimeType: string;
+  }): Promise<{ sessionId: string; folderName?: string; uri?: string }>;
+  beginZipEntry(options: {
+    sessionId: string;
+    path: string;
+  }): Promise<void>;
+  appendZipEntry(options: {
+    sessionId: string;
+    data: string;
+  }): Promise<void>;
+  finishZipEntry(options: {
+    sessionId: string;
+  }): Promise<void>;
+  finishZipLatest(options: {
+    sessionId: string;
+  }): Promise<{ folderName?: string; size: number; uri?: string }>;
+  cancelZipLatest(options: {
+    sessionId: string;
+  }): Promise<void>;
 }
 
 const NativeAutoBackup = registerPlugin<NativeAutoBackupPlugin>("NativeAutoBackup");
@@ -69,3 +90,26 @@ export const writeNativeLatestBackup = async (
     throw error;
   }
 };
+
+export const beginNativeAutoBackupZip = async (): Promise<{ sessionId: string; folderName?: string; uri?: string }> =>
+  NativeAutoBackup.beginZipLatest({
+    fileName: "study-journal-latest.zip",
+    mimeType: "application/zip",
+  });
+
+export const beginNativeAutoBackupZipEntry = async (sessionId: string, path: string): Promise<void> =>
+  NativeAutoBackup.beginZipEntry({ sessionId, path });
+
+export const appendNativeAutoBackupZipEntry = async (sessionId: string, data: string): Promise<void> =>
+  NativeAutoBackup.appendZipEntry({ sessionId, data });
+
+export const finishNativeAutoBackupZipEntry = async (sessionId: string): Promise<void> =>
+  NativeAutoBackup.finishZipEntry({ sessionId });
+
+export const finishNativeAutoBackupZip = async (
+  sessionId: string,
+): Promise<{ folderName?: string; size: number; uri?: string }> =>
+  NativeAutoBackup.finishZipLatest({ sessionId });
+
+export const cancelNativeAutoBackupZip = async (sessionId: string): Promise<void> =>
+  NativeAutoBackup.cancelZipLatest({ sessionId });

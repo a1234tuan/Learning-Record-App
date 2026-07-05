@@ -1,0 +1,53 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import type { AppSettings } from "../types";
+import { flushAutoBackupNow } from "../services/autoBackupService";
+import { AutoBackupPanel } from "./AutoBackupPanel";
+
+vi.mock("../services/autoBackupService", () => ({
+  bindAutoBackupFolder: vi.fn(),
+  flushAutoBackupNow: vi.fn(),
+  getAutoBackupSettings: (settings: AppSettings) => ({
+    enabled: settings.autoBackup?.enabled ?? false,
+    debounceMs: settings.autoBackup?.debounceMs ?? 45_000,
+    folderName: settings.autoBackup?.folderName,
+    lastBackupAt: settings.autoBackup?.lastBackupAt,
+    lastBackupSize: settings.autoBackup?.lastBackupSize,
+    lastError: settings.autoBackup?.lastError,
+  }),
+  setAutoBackupEnabled: vi.fn(),
+}));
+
+const settings = (lastError?: string): AppSettings => ({
+  id: "settings",
+  examDate: "2026-12-27",
+  theme: "system",
+  accentColor: "#2f6f5e",
+  backupReminderDays: 7,
+  fontScale: 1,
+  lineHeight: 1.7,
+  subjects: [],
+  autoBackup: {
+    enabled: true,
+    folderName: "backup",
+    debounceMs: 45_000,
+    lastError,
+  },
+  schemaVersion: 4,
+});
+
+describe("AutoBackupPanel", () => {
+  it("shows the sync error instead of a success message when flush reports a backup error", async () => {
+    vi.mocked(flushAutoBackupNow).mockResolvedValueOnce(settings("自动备份写入结果为空。"));
+
+    render(<AutoBackupPanel settings={settings()} onChanged={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("自动备份写入结果为空。")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("已立即同步到 study-journal-latest.zip。")).not.toBeInTheDocument();
+  });
+});

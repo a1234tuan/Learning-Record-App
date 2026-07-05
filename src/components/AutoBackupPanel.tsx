@@ -18,6 +18,14 @@ interface AutoBackupPanelProps {
 const formatDateTime = (value?: string): string =>
   value ? new Date(value).toLocaleString() : "尚未备份";
 
+const backupSuccessMessage = (settings: AppSettings, message: string): string => {
+  const lastError = getAutoBackupSettings(settings)?.lastError;
+  if (lastError) {
+    throw new Error(lastError);
+  }
+  return message;
+};
+
 export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) => {
   const autoBackup = getAutoBackupSettings(settings);
   const [busy, setBusy] = useState(false);
@@ -73,8 +81,8 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
           onClick={() =>
             void run(async () => {
               await bindAutoBackupFolder();
-              await flushAutoBackupNow("bind");
-              return "已绑定备份文件夹，并写入 study-journal-latest.zip。";
+              const nextSettings = await flushAutoBackupNow("bind");
+              return backupSuccessMessage(nextSettings, "已绑定备份文件夹，并写入 study-journal-latest.zip。");
             })
           }
         >
@@ -101,8 +109,8 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
           disabled={busy || !autoBackup?.enabled}
           onClick={() =>
             void run(async () => {
-              await flushAutoBackupNow("manual");
-              return "已立即同步到 study-journal-latest.zip。";
+              const nextSettings = await flushAutoBackupNow("manual");
+              return backupSuccessMessage(nextSettings, "已立即同步到 study-journal-latest.zip。");
             })
           }
         >

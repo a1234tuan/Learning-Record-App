@@ -5,7 +5,7 @@ import {
   canUseNativeAutoBackup,
   getNativeAutoBackupStatus,
 } from "./nativeAutoBackup";
-import { writeNativeStreamableBackup } from "./streamingBackupService";
+import { writeNativeAutoBackupStream } from "./nativeAutoBackupStreamService";
 
 interface DirectoryPickerWindow extends Window {
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
@@ -55,7 +55,7 @@ export const autoBackupAdapter: AutoBackupAdapter = {
 
   async writeLatest(store: StorageAdapter): Promise<AutoBackupWriteResult> {
     if (canUseNativeAutoBackup()) {
-      const result = await writeNativeStreamableBackup(store, "auto-latest");
+      const result = await writeNativeAutoBackupStream(store);
       return { folderName: result.folderName, size: result.size };
     }
     if (!webDirectoryHandle) {

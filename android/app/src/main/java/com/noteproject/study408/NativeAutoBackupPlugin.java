@@ -13,10 +13,14 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.Deflater;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @CapacitorPlugin(name = "NativeAutoBackup")
 public class NativeAutoBackupPlugin extends Plugin {
@@ -25,6 +29,7 @@ public class NativeAutoBackupPlugin extends Plugin {
     private static final String KEY_FOLDER_NAME = "folder_name";
     private static final String LATEST_FILE_NAME = "study-journal-latest.zip";
     private final Map<String, WriteSession> writeSessions = new ConcurrentHashMap<>();
+    private final Map<String, ZipWriteSession> zipWriteSessions = new ConcurrentHashMap<>();
 
     private static class WriteSession {
         final Uri uri;
@@ -35,6 +40,50 @@ public class NativeAutoBackupPlugin extends Plugin {
             this.uri = uri;
             this.output = output;
             this.size = 0;
+        }
+    }
+
+    private static class CountingOutputStream extends OutputStream {
+        final OutputStream output;
+        long size;
+
+        CountingOutputStream(OutputStream output) {
+            this.output = output;
+            this.size = 0;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            output.write(b);
+            size += 1;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            output.write(b, off, len);
+            size += len;
+        }
+
+        @Override
+        public void flush() throws IOException {
+            output.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            output.close();
+        }
+    }
+
+    private static class ZipWriteSession {
+        final Uri uri;
+        final CountingOutputStream output;
+        final ZipOutputStream zip;
+
+        ZipWriteSession(Uri uri, CountingOutputStream output, ZipOutputStream zip) {
+            this.uri = uri;
+            this.output = output;
+            this.zip = zip;
         }
     }
 
@@ -249,7 +298,178 @@ public class NativeAutoBackupPlugin extends Plugin {
         });
     }
 
+    @PluginMethod
+    public void beginZipLatest(PluginCall call) {
+        String mimeType = call.getString("mimeType", "application/zip");
+        String fileName = safeFileName(call.getString("fileName", LATEST_FILE_NAME));
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri treeUri = Uri.parse(treeUriText);
+                Uri documentUri = DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    DocumentsContract.getTreeDocumentId(treeUri)
+                );
+                Uri fileUri = findOrCreateFile(documentUri, mimeType, fileName);
+                OutputStream rawOutput = getContext().getContentResolver().openOutputStream(fileUri, "wt");
+                if (rawOutput == null) {
+                    throw new IllegalStateException("无法打开自动备份 zip 写入流。");
+                }
+                CountingOutputStream countedOutput = new CountingOutputStream(rawOutput);
+                ZipOutputStream zip = new ZipOutputStream(countedOutput);
+                zip.setLevel(Deflater.NO_COMPRESSION);
+
+                String sessionId = UUID.randomUUID().toString();
+                zipWriteSessions.put(sessionId, new ZipWriteSession(fileUri, countedOutput, zip));
+
+                JSObject response = new JSObject();
+                response.put("sessionId", sessionId);
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("uri", fileUri.toString());
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "开始自动备份 zip 写入失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void beginZipEntry(PluginCall call) {
+        ZipWriteSession session = zipWriteSession(call);
+        if (session == null) {
+            return;
+        }
+        String path = call.getString("path");
+        if (path == null || path.isEmpty()) {
+            call.reject("缺少自动备份 zip entry 路径。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                session.zip.putNextEntry(new ZipEntry(path));
+                call.resolve();
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "开始写入自动备份 zip entry 失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void appendZipEntry(PluginCall call) {
+        ZipWriteSession session = zipWriteSession(call);
+        if (session == null) {
+            return;
+        }
+        String data = call.getString("data");
+        if (data == null) {
+            call.reject("自动备份 zip entry 数据为空。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+                session.zip.write(bytes);
+                call.resolve();
+            } catch (Exception error) {
+                zipWriteSessions.remove(call.getString("sessionId"));
+                closeQuietly(session.zip);
+                call.reject(error.getMessage() != null ? error.getMessage() : "写入自动备份 zip entry 分块失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void finishZipEntry(PluginCall call) {
+        ZipWriteSession session = zipWriteSession(call);
+        if (session == null) {
+            return;
+        }
+
+        execute(() -> {
+            try {
+                session.zip.closeEntry();
+                call.resolve();
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "完成自动备份 zip entry 失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void finishZipLatest(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.reject("缺少自动备份 zip 写入会话。");
+            return;
+        }
+
+        ZipWriteSession session = zipWriteSessions.remove(sessionId);
+        if (session == null) {
+            call.reject("自动备份 zip 写入会话已失效。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                session.zip.finish();
+                session.zip.close();
+                if (session.output.size <= 0) {
+                    throw new IllegalStateException("自动备份写入结果为空。");
+                }
+
+                JSObject response = new JSObject();
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("size", session.output.size);
+                response.put("uri", session.uri.toString());
+                call.resolve(response);
+            } catch (Exception error) {
+                closeQuietly(session.zip);
+                call.reject(error.getMessage() != null ? error.getMessage() : "完成自动备份 zip 写入失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelZipLatest(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.resolve();
+            return;
+        }
+
+        ZipWriteSession session = zipWriteSessions.remove(sessionId);
+        if (session == null) {
+            call.resolve();
+            return;
+        }
+
+        execute(() -> {
+            closeQuietly(session.zip);
+            call.resolve();
+        });
+    }
+
+    private ZipWriteSession zipWriteSession(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        ZipWriteSession session = zipWriteSessions.get(sessionId);
+        if (session == null) {
+            call.reject("自动备份 zip 写入会话已失效。");
+        }
+        return session;
+    }
+
     private Uri findOrCreateFile(Uri documentUri, String mimeType) throws Exception {
+        return findOrCreateFile(documentUri, mimeType, LATEST_FILE_NAME);
+    }
+
+    private Uri findOrCreateFile(Uri documentUri, String mimeType, String fileName) throws Exception {
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
             documentUri,
             DocumentsContract.getDocumentId(documentUri)
@@ -268,7 +488,7 @@ public class NativeAutoBackupPlugin extends Plugin {
                 while (cursor.moveToNext()) {
                     String documentId = cursor.getString(0);
                     String name = cursor.getString(1);
-                    if (LATEST_FILE_NAME.equals(name)) {
+                    if (fileName.equals(name)) {
                         return DocumentsContract.buildDocumentUriUsingTree(documentUri, documentId);
                     }
                 }
@@ -278,7 +498,7 @@ public class NativeAutoBackupPlugin extends Plugin {
             getContext().getContentResolver(),
             documentUri,
             mimeType,
-            LATEST_FILE_NAME
+            fileName
         );
         if (created == null) {
             throw new IllegalStateException("无法创建自动备份文件。");
@@ -305,5 +525,12 @@ public class NativeAutoBackupPlugin extends Plugin {
         int colon = path.lastIndexOf(':');
         String name = colon >= 0 ? path.substring(colon + 1) : path;
         return name.isEmpty() ? "已绑定文件夹" : name;
+    }
+
+    private String safeFileName(String name) {
+        if (name == null || name.isEmpty()) {
+            return LATEST_FILE_NAME;
+        }
+        return name.replaceAll("[\\\\/:*?\"<>|]+", "_");
     }
 }

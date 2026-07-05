@@ -11,7 +11,10 @@ import {
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
-const settings = (enabled = true): AppSettings => ({
+const settings = (
+  enabled = true,
+  autoBackup: Partial<NonNullable<AppSettings["autoBackup"]>> = {},
+): AppSettings => ({
   id: "settings",
   examDate: "2026-12-27",
   theme: "system",
@@ -24,6 +27,7 @@ const settings = (enabled = true): AppSettings => ({
     enabled,
     folderName: "backup",
     debounceMs: 45_000,
+    ...autoBackup,
   },
   schemaVersion: 3,
 });
@@ -82,11 +86,14 @@ const makeStore = (initial = settings()): StorageAdapter => {
   } as unknown as StorageAdapter;
 };
 
-const makeAdapter = (bound = true): AutoBackupAdapter => ({
+const makeAdapter = (
+  bound = true,
+  writeResult: Awaited<ReturnType<AutoBackupAdapter["writeLatest"]>> = { folderName: "backup", size: 1234 },
+): AutoBackupAdapter => ({
   isAvailable: vi.fn(() => true),
   bindFolder: vi.fn(async () => ({ folderName: "backup" })),
   isBound: vi.fn(async () => ({ bound, folderName: bound ? "backup" : undefined })),
-  writeLatest: vi.fn(async () => ({ folderName: "backup", size: 1234 })),
+  writeLatest: vi.fn(async () => writeResult),
 });
 
 describe("autoBackupService", () => {
@@ -109,12 +116,49 @@ describe("autoBackupService", () => {
     const store = makeStore();
     const adapter = makeAdapter();
 
-    await flushAutoBackupNow("manual", adapter, store);
+    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
 
     expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
+    expect(nextSettings.autoBackup?.lastBackupSize).toBe(1234);
     expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       autoBackup: expect.objectContaining({ lastBackupSize: 1234 }),
     }));
+  });
+
+  it("does not advance last backup time when the write result is empty", async () => {
+    const previousBackupAt = "2026-06-20T00:00:00.000Z";
+    const store = makeStore(settings(true, { lastBackupAt: previousBackupAt, lastBackupSize: 999 }));
+    const adapter = makeAdapter(true, { folderName: "backup", size: 0 });
+
+    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+
+    expect(nextSettings.autoBackup?.lastBackupAt).toBe(previousBackupAt);
+    expect(nextSettings.autoBackup?.lastBackupSize).toBe(999);
+    expect(nextSettings.autoBackup?.lastError).toBe("自动备份写入结果为空。");
+  });
+
+  it("waits for an in-flight flush instead of returning stale settings", async () => {
+    let resolveWrite: (value: { folderName: string; size: number }) => void = () => undefined;
+    const writePromise = new Promise<{ folderName: string; size: number }>((resolve) => {
+      resolveWrite = resolve;
+    });
+    const store = makeStore();
+    const adapter = makeAdapter();
+    vi.mocked(adapter.writeLatest).mockImplementation(async () => writePromise);
+
+    const first = flushAutoBackupNow("manual", adapter, store);
+    const second = flushAutoBackupNow("manual", adapter, store);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
+
+    resolveWrite({ folderName: "backup", size: 2222 });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.autoBackup?.lastBackupSize).toBe(2222);
+    expect(secondResult.autoBackup?.lastBackupSize).toBe(2222);
+    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
   });
 
   it("does not write when folder is not bound and records an error", async () => {

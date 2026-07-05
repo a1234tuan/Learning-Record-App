@@ -6,7 +6,7 @@ import { storage } from "./storageAdapter";
 const DEFAULT_DEBOUNCE_MS = 45_000;
 
 let timer: number | undefined;
-let running = false;
+let runningPromise: Promise<AppSettings> | undefined;
 let dirty = false;
 
 const withAutoBackupDefaults = (settings: AppSettings): AppSettings => ({
@@ -25,6 +25,12 @@ export const getAutoBackupSettings = (settings: AppSettings) => withAutoBackupDe
 
 const currentAutoBackup = (settings: AppSettings) =>
   withAutoBackupDefaults(settings).autoBackup ?? { enabled: false, debounceMs: DEFAULT_DEBOUNCE_MS };
+
+const ensureValidWriteResult = (result: { size: number }) => {
+  if (!Number.isFinite(result.size) || result.size <= 0) {
+    throw new Error("自动备份写入结果为空。");
+  }
+};
 
 export const setAutoBackupEnabled = async (
   enabled: boolean,
@@ -79,57 +85,63 @@ export const flushAutoBackupNow = async (
     window.clearTimeout(timer);
     timer = undefined;
   }
-  if (running) {
-    return withAutoBackupDefaults(await store.getSettings());
+  if (runningPromise) {
+    return runningPromise;
   }
 
-  const settings = withAutoBackupDefaults(await store.getSettings());
-  if (!settings.autoBackup?.enabled) {
-    return settings;
-  }
+  runningPromise = (async () => {
+    const settings = withAutoBackupDefaults(await store.getSettings());
+    if (!settings.autoBackup?.enabled) {
+      return settings;
+    }
 
-  const bound = await adapter.isBound();
-  if (!bound.bound) {
-    const nextSettings: AppSettings = {
-      ...settings,
-      autoBackup: {
-        ...currentAutoBackup(settings),
-        lastError: "尚未绑定自动备份文件夹。",
-      },
-    };
-    await store.saveSettings(nextSettings);
-    return nextSettings;
-  }
+    const bound = await adapter.isBound();
+    if (!bound.bound) {
+      const nextSettings: AppSettings = {
+        ...settings,
+        autoBackup: {
+          ...currentAutoBackup(settings),
+          lastError: "尚未绑定自动备份文件夹。",
+        },
+      };
+      await store.saveSettings(nextSettings);
+      return nextSettings;
+    }
 
-  running = true;
+    try {
+      const result = await adapter.writeLatest(store);
+      ensureValidWriteResult(result);
+      dirty = false;
+      const nextSettings: AppSettings = {
+        ...settings,
+        autoBackup: {
+          ...currentAutoBackup(settings),
+          enabled: true,
+          folderName: result.folderName ?? bound.folderName ?? settings.autoBackup.folderName,
+          lastBackupAt: nowISO(),
+          lastBackupSize: result.size,
+          lastError: undefined,
+        },
+      };
+      await store.saveSettings(nextSettings);
+      return nextSettings;
+    } catch (error) {
+      const nextSettings: AppSettings = {
+        ...settings,
+        autoBackup: {
+          ...currentAutoBackup(settings),
+          lastError: error instanceof Error ? error.message : "自动备份失败。",
+        },
+      };
+      await store.saveSettings(nextSettings);
+      return nextSettings;
+    }
+  })();
+
   try {
-    const result = await adapter.writeLatest(store);
-    dirty = false;
-    const nextSettings: AppSettings = {
-      ...settings,
-      autoBackup: {
-        ...currentAutoBackup(settings),
-        enabled: true,
-        folderName: result.folderName ?? bound.folderName ?? settings.autoBackup.folderName,
-        lastBackupAt: nowISO(),
-        lastBackupSize: result.size,
-        lastError: undefined,
-      },
-    };
-    await store.saveSettings(nextSettings);
-    return nextSettings;
-  } catch (error) {
-    const nextSettings: AppSettings = {
-      ...settings,
-      autoBackup: {
-        ...currentAutoBackup(settings),
-        lastError: error instanceof Error ? error.message : "自动备份失败。",
-      },
-    };
-    await store.saveSettings(nextSettings);
-    return nextSettings;
+    return await runningPromise;
   } finally {
-    running = false;
+    runningPromise = undefined;
   }
 };
 
