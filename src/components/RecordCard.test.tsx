@@ -63,6 +63,6 @@ describe("RecordCard", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /下次 07-02/ })).not.toHaveClass("due");
+    expect(screen.getByRole("button", { name: /轻回看 07-02/ })).not.toHaveClass("due");
   });
 });

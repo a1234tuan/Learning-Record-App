@@ -3,8 +3,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const stylesCss = readFileSync(join(process.cwd(), "src", "styles.css"), "utf8");
-const pagesCss = readFileSync(join(process.cwd(), "src", "styles", "pages.css"), "utf8");
+const normalizeCss = (css: string) => css.replace(/\r\n/g, "\n");
+const stylesCss = normalizeCss(readFileSync(join(process.cwd(), "src", "styles.css"), "utf8"));
+const pagesCss = normalizeCss(readFileSync(join(process.cwd(), "src", "styles", "pages.css"), "utf8"));
 
 describe("AI markdown styles", () => {
   it("keeps AI message text selectable on mobile WebView", () => {

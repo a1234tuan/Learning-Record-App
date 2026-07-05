@@ -372,6 +372,9 @@ export const App = () => {
       onAddToReview={async (recordId) => {
         await app.addRecordToReview(recordId);
       }}
+      onSetReviewKind={async (recordId, kind) => {
+        await app.setRecordReviewKind(recordId, kind);
+      }}
       onResetReview={async (recordId) => {
         await app.resetRecordReview(recordId);
       }}

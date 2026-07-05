@@ -357,7 +357,7 @@
   position: sticky;
   bottom: calc(var(--bottom-nav-height, 72px) + 10px);
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
   padding: 10px;
@@ -369,18 +369,29 @@
 }
 
 .review-rating-bar button {
-  min-height: 44px;
+  min-height: 54px;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 3px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   background: var(--color-surface-raised);
   color: var(--color-text);
 }
 
-.review-rating-bar .remembered {
+.review-rating-bar button > span {
+  font-weight: 800;
+}
+
+.review-rating-bar button > small {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.review-rating-bar .good {
   color: var(--color-primary-strong);
 }
 
@@ -392,6 +403,10 @@
   color: var(--color-danger);
 }
 
+.review-rating-bar .easy {
+  color: var(--color-success);
+}
+
 .review-manager {
   display: grid;
   gap: 10px;
@@ -400,7 +415,7 @@
 
 .review-manager-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) minmax(120px, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) minmax(120px, auto) minmax(120px, auto);
   gap: 8px;
   align-items: center;
 }
@@ -545,8 +560,35 @@
 }
 
 .record-review-actions {
+  display: flex;
   flex-wrap: wrap;
   margin-top: 10px;
+  gap: 8px;
+  align-items: center;
+}
+
+.review-kind-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+
+.review-kind-toggle button {
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.review-kind-toggle button.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
 }
 
 .record-review-history article {

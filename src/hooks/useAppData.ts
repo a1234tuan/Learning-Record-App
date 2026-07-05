@@ -9,6 +9,7 @@ import type {
   RecordReviewBulkResult,
   RecordReviewDayStat,
   RecordReviewLog,
+  RecordReviewKind,
   RecordReviewRating,
   RecordReviewState,
   RecordReviewStats,
@@ -211,8 +212,8 @@ export const useAppData = () => {
   }, []);
 
   const addRecordToReview = useCallback(
-    async (recordId: string) => {
-      const saved = await storage.addRecordToReview(recordId);
+    async (recordId: string, kind?: RecordReviewKind) => {
+      const saved = await storage.addRecordToReview(recordId, kind);
       await refresh();
       if (saved) {
         await markAutoBackupDirty("record-review-add");
@@ -223,13 +224,25 @@ export const useAppData = () => {
   );
 
   const addRecordsToReview = useCallback(
-    async (recordIds: string[]): Promise<RecordReviewBulkResult> => {
-      const result = await storage.addRecordsToReview(recordIds);
+    async (recordIds: string[], kind?: RecordReviewKind): Promise<RecordReviewBulkResult> => {
+      const result = await storage.addRecordsToReview(recordIds, kind);
       await refresh();
       if (result.added + result.reset > 0) {
         await markAutoBackupDirty("record-review-bulk-add");
       }
       return result;
+    },
+    [refresh],
+  );
+
+  const setRecordReviewKind = useCallback(
+    async (recordId: string, kind: RecordReviewKind) => {
+      const saved = await storage.setRecordReviewKind(recordId, kind);
+      await refresh();
+      if (saved) {
+        await markAutoBackupDirty("record-review-kind");
+      }
+      return saved;
     },
     [refresh],
   );
@@ -517,6 +530,7 @@ export const useAppData = () => {
     deleteRecordDraft,
     addRecordToReview,
     addRecordsToReview,
+    setRecordReviewKind,
     rateRecordReview,
     resetRecordReview,
     removeRecordFromReview,

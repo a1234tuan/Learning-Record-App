@@ -8,16 +8,23 @@
   RotateCcw,
   Search,
   Sparkles,
+  Star,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
+import type { RecordBlock, RecordReviewKind, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
 import { todayISO } from "../lib/date";
-import { isReviewDueOn } from "../lib/reviewScheduler";
+import {
+  ACTIVE_REVIEW_RATINGS,
+  REVIEW_DAILY_SUGGESTED_LIMIT,
+  isReviewDueOn,
+  previewReviewRatings,
+  reviewKindLabel,
+} from "../lib/reviewScheduler";
 import type { ReviewMode } from "../lib/tabNavigation";
 
 interface ReviewPageProps {
@@ -42,11 +49,13 @@ interface ReviewPageProps {
 }
 
 type ReviewCardFilter = "all" | "due" | "new" | "active" | "suspended" | "mastered";
+type ReviewKindFilter = "all" | RecordReviewKind;
 
 const ratingConfig: Array<{ rating: RecordReviewRating; label: string; icon: typeof CheckCircle2; className: string }> = [
-  { rating: "remembered", label: "记住了", icon: CheckCircle2, className: "remembered" },
-  { rating: "fuzzy", label: "模糊", icon: Sparkles, className: "fuzzy" },
   { rating: "forgot", label: "忘记了", icon: XCircle, className: "forgot" },
+  { rating: "fuzzy", label: "模糊", icon: Sparkles, className: "fuzzy" },
+  { rating: "good", label: "良好", icon: CheckCircle2, className: "good" },
+  { rating: "easy", label: "轻松", icon: Star, className: "easy" },
 ];
 
 const isDueReview = (review: RecordReviewState | undefined, today: string) => isReviewDueOn(review, today);
@@ -64,6 +73,8 @@ const reviewDueLabel = (review: RecordReviewState | undefined) => {
   if (review.status === "mastered") return "无到期日";
   return review.nextReviewDate ? `到期 ${review.nextReviewDate}` : "待排期";
 };
+
+const intervalLabel = (days: number) => days <= 1 ? "明天" : `${days}天后`;
 
 const matchesFilter = (review: RecordReviewState | undefined, filter: ReviewCardFilter, today: string) => {
   switch (filter) {
@@ -112,18 +123,25 @@ export const ReviewPage = ({
   const touchStartYRef = useRef<number | null>(null);
   const [pullReady, setPullReady] = useState(false);
   const [filter, setFilter] = useState<ReviewCardFilter>("all");
+  const [kindFilter, setKindFilter] = useState<ReviewKindFilter>("all");
   const [subjectFilter, setSubjectFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [ratingError, setRatingError] = useState("");
+  const [showAllDue, setShowAllDue] = useState(false);
+  const [dailyLimitIds, setDailyLimitIds] = useState<string[]>([]);
   const today = todayISO();
   const reviewMap = useMemo(() => new Map(reviewStates.map((review) => [review.recordId, review])), [reviewStates]);
   const availableDueReviews = useMemo(
     () => dueReviews.filter((review) => !ratedRecordIds.has(review.recordId) && isReviewDueOn(review, today)),
     [dueReviews, ratedRecordIds, today],
   );
-  const dueIds = useMemo(() => new Set(availableDueReviews.map((review) => review.recordId)), [availableDueReviews]);
+  const queuedDueReviews = useMemo(
+    () => showAllDue ? availableDueReviews : availableDueReviews.filter((review) => dailyLimitIds.includes(review.recordId)),
+    [availableDueReviews, dailyLimitIds, showAllDue],
+  );
+  const dueIds = useMemo(() => new Set(queuedDueReviews.map((review) => review.recordId)), [queuedDueReviews]);
   const recordMap = useMemo(() => new Map(records.map((record) => [record.id, record])), [records]);
   const effectiveQueue = useMemo(
     () => queueIds.filter((id) => dueIds.has(id) && recordMap.has(id)),
@@ -131,10 +149,15 @@ export const ReviewPage = ({
   );
   const currentId = currentRecordId && effectiveQueue.includes(currentRecordId) ? currentRecordId : effectiveQueue[0];
   const currentRecord = currentId ? recordMap.get(currentId) : undefined;
-  const currentReview = currentId ? availableDueReviews.find((review) => review.recordId === currentId) : undefined;
+  const currentReview = currentId ? queuedDueReviews.find((review) => review.recordId === currentId) : undefined;
   const currentIndex = currentId ? effectiveQueue.indexOf(currentId) + 1 : 0;
   const overdueCount = availableDueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
   const todayCount = availableDueReviews.filter((review) => review.nextReviewDate === today).length;
+  const hiddenDueCount = showAllDue ? 0 : availableDueReviews.filter((review) => !dailyLimitIds.includes(review.recordId)).length;
+  const ratingPreviews = useMemo(
+    () => currentReview ? new Map(previewReviewRatings(currentReview, today).map((preview) => [preview.rating, preview])) : new Map(),
+    [currentReview, today],
+  );
   const subjects = useMemo(() => Array.from(new Set(records.map((record) => record.subject))).sort(), [records]);
   const newCount = records.filter((record) => {
     const review = reviewMap.get(record.id);
@@ -146,6 +169,7 @@ export const ReviewPage = ({
     return records
       .filter((record) => subjectFilter === "all" || record.subject === subjectFilter)
       .filter((record) => matchesFilter(reviewMap.get(record.id), filter, today))
+      .filter((record) => kindFilter === "all" || (reviewMap.get(record.id)?.reviewKind ?? "overview") === kindFilter)
       .filter((record) =>
         !normalizedQuery ||
         record.title.toLocaleLowerCase().includes(normalizedQuery) ||
@@ -156,14 +180,31 @@ export const ReviewPage = ({
         const score = reviewSortScore(reviewMap.get(a.id), today) - reviewSortScore(reviewMap.get(b.id), today);
         return score || (reviewMap.get(a.id)?.nextReviewDate ?? "9999").localeCompare(reviewMap.get(b.id)?.nextReviewDate ?? "9999") || b.date.localeCompare(a.date);
       });
-  }, [filter, query, records, reviewMap, subjectFilter, today]);
+  }, [filter, kindFilter, query, records, reviewMap, subjectFilter, today]);
 
   useEffect(() => {
     void onEnsureDay(today, dueReviews.length);
   }, [onEnsureDay, today, dueReviews.length]);
 
   useEffect(() => {
-    const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
+    setShowAllDue(false);
+    setDailyLimitIds([]);
+  }, [today]);
+
+  useEffect(() => {
+    if (showAllDue || dailyLimitIds.length > 0 || dueReviews.length === 0) {
+      return;
+    }
+    setDailyLimitIds(
+      dueReviews
+        .filter((review) => isReviewDueOn(review, today))
+        .slice(0, REVIEW_DAILY_SUGGESTED_LIMIT)
+        .map((review) => review.recordId),
+    );
+  }, [dailyLimitIds.length, dueReviews, showAllDue, today]);
+
+  useEffect(() => {
+    const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : queuedDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
     if (nextQueue.join("|") !== queueIds.join("|")) {
       onQueueChange(nextQueue);
     }
@@ -173,7 +214,7 @@ export const ReviewPage = ({
     if (nextQueue.length === 0 && currentRecordId) {
       onCurrentRecordChange(undefined);
     }
-  }, [availableDueReviews, currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, recordMap]);
+  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, queuedDueReviews, recordMap]);
 
   useEffect(() => {
     setRatedRecordIds(new Set());
@@ -221,6 +262,13 @@ export const ReviewPage = ({
     } finally {
       setRatingRecordId(null);
     }
+  };
+
+  const continueRemainingDue = () => {
+    const nextQueue = availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
+    setShowAllDue(true);
+    onQueueChange(nextQueue);
+    onCurrentRecordChange(nextQueue[0]);
   };
 
   const touchStart = (clientY: number) => {
@@ -292,22 +340,31 @@ export const ReviewPage = ({
       {mode === "queue" ? (
         !currentRecord ? (
           <section className="empty-state review-empty-state">
-            <h2>今天暂无待复习</h2>
-            <p>你可以从日志卡片或卡片管理里把重要笔记加入复习队列。</p>
+            <h2>{hiddenDueCount > 0 ? "今日建议已完成" : "今天暂无待复习"}</h2>
+            <p>
+              {hiddenDueCount > 0
+                ? `还有 ${hiddenDueCount} 条到期记录，已经超出今日建议量。`
+                : "你可以从日志卡片或卡片管理里把重要笔记加入复习队列。"}
+            </p>
             <small>累计复习 {stats?.totalReviews ?? 0} 次</small>
+            {hiddenDueCount > 0 && (
+              <button type="button" className="primary-button" onClick={continueRemainingDue}>
+                继续处理剩余
+              </button>
+            )}
           </section>
         ) : (
           <>
             <section className="review-progress-panel">
               <span>第 {currentIndex}/{effectiveQueue.length} 条</span>
               <strong>{currentReview?.nextReviewDate && currentReview.nextReviewDate < today ? "已过期" : "今日到期"}</strong>
-              <small>连续记住 {currentReview?.consecutiveRemembered ?? 0}/5</small>
+              <small>{reviewKindLabel(currentReview?.reviewKind)} · 累计 {currentReview?.totalReviews ?? 0} 次</small>
             </section>
             <article className="review-record-card">
               <header className="record-view-header">
                 <p className="eyebrow">{currentRecord.date}</p>
                 <h1>{currentRecord.title}</h1>
-                <span>{currentRecord.subject}</span>
+                <span>{currentRecord.subject} · {reviewKindLabel(currentReview?.reviewKind)}</span>
               </header>
               <RichTextEditor
                 value={normalizeRecordContent(currentRecord)}
@@ -328,7 +385,10 @@ export const ReviewPage = ({
                     onClick={() => void rate(item.rating)}
                   >
                     <Icon size={18} />
-                    {item.label}
+                    <span>{item.label}</span>
+                    {ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]) && (
+                      <small>{intervalLabel(ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number])!.intervalDays)}</small>
+                    )}
                   </button>
                 );
               })}
@@ -349,6 +409,11 @@ export const ReviewPage = ({
               <option value="active">复习中</option>
               <option value="suspended">已搁置</option>
               <option value="mastered">已掌握</option>
+            </select>
+            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as ReviewKindFilter)} aria-label="复习类型">
+              <option value="all">全部类型</option>
+              <option value="overview">轻回看</option>
+              <option value="memory">记忆卡</option>
             </select>
             <select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)} aria-label="所属牌组">
               <option value="all">全部牌组</option>
@@ -374,7 +439,7 @@ export const ReviewPage = ({
                     <span className="record-subject-chip">{record.subject}</span>
                     <div>
                       <strong>{record.title}</strong>
-                      <small>{record.date} · {dueLabel} · 连续记住 {review?.consecutiveRemembered ?? 0}/5</small>
+                      <small>{record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次</small>
                     </div>
                   </div>
                   <span className={`review-status-pill ${status === "新卡" || status === "已搁置" ? "new" : active ? "active" : "done"}`}>

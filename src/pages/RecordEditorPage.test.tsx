@@ -316,7 +316,7 @@ describe("RecordEditorPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
 
     expect(screen.getAllByRole("button", { name: /丢弃草稿/ })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: /连续记住 1\/5/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /轻回看 06-22/ })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "收藏记录" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "删除记录" })).toHaveLength(2);
   });

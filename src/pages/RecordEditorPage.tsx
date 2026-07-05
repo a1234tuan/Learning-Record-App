@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, RecordBlock, RecordDraft, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Asset, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
@@ -13,6 +13,7 @@ import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
 import { isNativePlatform } from "../lib/platform";
 import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
+import { ratingLabel, reviewKindLabel } from "../lib/reviewScheduler";
 import {
   createDefaultComparisonTable,
   createDefaultStickyBoard,
@@ -45,6 +46,7 @@ interface RecordEditorPageProps {
   reviewState?: RecordReviewState;
   reviewLogs?: RecordReviewLog[];
   onAddToReview?: (recordId: string) => Promise<void> | void;
+  onSetReviewKind?: (recordId: string, kind: RecordReviewKind) => Promise<void> | void;
   onResetReview?: (recordId: string) => Promise<void> | void;
   onRemoveReview?: (recordId: string) => Promise<void> | void;
 }
@@ -117,6 +119,7 @@ export const RecordEditorPage = ({
   reviewState,
   reviewLogs = [],
   onAddToReview,
+  onSetReviewKind,
   onResetReview,
   onRemoveReview,
 }: RecordEditorPageProps) => {
@@ -465,8 +468,11 @@ export const RecordEditorPage = ({
     await onToggleFavorite(record, !record.favorite);
   };
 
+  const reviewKindText = reviewKindLabel(reviewState?.reviewKind);
   const reviewButtonText = reviewState?.status === "active"
-    ? `连续记住 ${reviewState.consecutiveRemembered}/5`
+    ? reviewState.nextReviewDate
+      ? `${reviewKindText} ${reviewState.nextReviewDate.slice(5)}`
+      : reviewKindText
     : reviewState?.status === "mastered"
       ? "已掌握"
       : "加入复习";
@@ -735,11 +741,30 @@ export const RecordEditorPage = ({
                 <summary>复习进度</summary>
                 <div className="record-review-summary">
                   <span>{reviewState?.status === "mastered" ? "已掌握" : reviewState?.status === "active" ? "复习中" : "未在队列中"}</span>
-                  <strong>连续记住 {reviewState?.consecutiveRemembered ?? 0}/5</strong>
+                  <strong>{reviewKindText}</strong>
                   <small>累计复习 {reviewState?.totalReviews ?? reviewLogs.length} 次</small>
                   {reviewState?.nextReviewDate && <small>下次复习：{reviewState.nextReviewDate}</small>}
+                  {reviewLogs[0] && <small>最近评分：{ratingLabel(reviewLogs[0].rating)}</small>}
                 </div>
                 <div className="record-review-actions">
+                  {onSetReviewKind && reviewState && (
+                    <div className="review-kind-toggle" role="group" aria-label="复习类型">
+                      {(["overview", "memory"] as const).map((kind) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          className={(reviewState.reviewKind ?? "overview") === kind ? "active" : ""}
+                          onClick={() => {
+                            if ((reviewState.reviewKind ?? "overview") !== kind) {
+                              void onSetReviewKind(record.id, kind);
+                            }
+                          }}
+                        >
+                          {reviewKindLabel(kind)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {onResetReview && (
                     <button type="button" className="secondary-button" onClick={() => void onResetReview(record.id)}>
                       <RotateCcw size={16} />
@@ -756,7 +781,7 @@ export const RecordEditorPage = ({
                   <div className="record-review-history">
                     {reviewLogs.slice(0, 12).map((log) => (
                       <article key={log.id}>
-                        <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {log.rating === "remembered" ? "记住了" : log.rating === "fuzzy" ? "模糊" : "忘了"}</strong>
+                        <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
                         <small>间隔 {log.previousIntervalDays} 天 → {log.nextIntervalDays} 天</small>
                       </article>
                     ))}

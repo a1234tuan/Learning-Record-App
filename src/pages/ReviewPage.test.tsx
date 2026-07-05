@@ -155,7 +155,7 @@ describe("ReviewPage", () => {
     expect(screen.getByText("没有匹配的卡片")).toBeInTheDocument();
   });
 
-  it("removes an overdue card immediately after remembered and prevents stale due props from requeueing it", async () => {
+  it("removes an overdue card immediately after a good rating and prevents stale due props from requeueing it", async () => {
     const onRate = vi.fn().mockResolvedValue(undefined);
     const onQueueChange = vi.fn();
     const onCurrentRecordChange = vi.fn();
@@ -183,7 +183,7 @@ describe("ReviewPage", () => {
     );
 
     expect(screen.getByText("BFS 队列")).toBeInTheDocument();
-    clickRating("记住了");
+    clickRating(/良好/);
 
     expect(onQueueChange).toHaveBeenLastCalledWith([]);
     expect(onCurrentRecordChange).toHaveBeenLastCalledWith(undefined);
@@ -213,7 +213,7 @@ describe("ReviewPage", () => {
     );
 
     expect(screen.queryByText("BFS 队列")).not.toBeInTheDocument();
-    await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "remembered"));
+    await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good"));
   });
 
   it("disables rating buttons while a rating is in flight and avoids duplicate rate calls", async () => {
@@ -228,10 +228,10 @@ describe("ReviewPage", () => {
       onRate: onRate as (recordId: string, rating: RecordReviewRating) => Promise<void>,
     });
 
-    clickRating("记住了");
+    clickRating(/良好/);
     expect(screen.getByText("页表缓存")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "记住了" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "模糊" }));
+    expect(screen.getByRole("button", { name: /良好/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /模糊/ }));
     expect(onRate).toHaveBeenCalledTimes(1);
 
     pending.resolve();
@@ -253,7 +253,7 @@ describe("ReviewPage", () => {
       onCurrentRecordChange,
     });
 
-    clickRating("记住了");
+    clickRating(/良好/);
 
     await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
     expect(screen.getByText(/复习评分失败/)).toBeInTheDocument();
@@ -274,7 +274,7 @@ describe("ReviewPage", () => {
       onCurrentRecordChange,
     });
 
-    clickRating("记住了");
+    clickRating(/良好/);
 
     expect(onQueueChange).toHaveBeenLastCalledWith(["second"]);
     expect(onCurrentRecordChange).toHaveBeenLastCalledWith("second");

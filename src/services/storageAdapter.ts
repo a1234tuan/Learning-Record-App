@@ -16,6 +16,7 @@ import type {
   RecordReviewBulkResult,
   RecordReviewDayStat,
   RecordReviewLog,
+  RecordReviewKind,
   RecordReviewRating,
   RecordReviewState,
   RecordReviewStats,
@@ -45,11 +46,68 @@ import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
-import { DEFAULT_REVIEW_EASE, applySm2Review, isReviewDueOn } from "../lib/reviewScheduler";
+import {
+  DEFAULT_REVIEW_EASE,
+  DEFAULT_REVIEW_KIND,
+  FSRS_REVIEW_SCHEDULER,
+  OVERVIEW_REVIEW_SCHEDULER,
+  applyRecordReview,
+  createInitialFsrsCard,
+  isReviewDueOn,
+  normalizeLegacyRating,
+  schedulerForKind,
+} from "../lib/reviewScheduler";
 
 const assetToMeta = (asset: Asset): BackupAssetMeta => {
   const { data: _data, ...meta } = asset;
   return meta;
+};
+
+const isSuccessfulRecordReviewRating = (rating: RecordReviewRating): boolean => {
+  const normalized = normalizeLegacyRating(rating);
+  return normalized === "good" || normalized === "easy";
+};
+
+const adjustCount = (value: number | undefined, delta: number): number =>
+  Math.max(0, (value ?? 0) + delta);
+
+const updateDayStatForRatingCorrection = (
+  stat: RecordReviewDayStat,
+  previousRating: RecordReviewRating,
+  nextRating: RecordReviewRating,
+): RecordReviewDayStat => {
+  const previous = normalizeLegacyRating(previousRating);
+  const next = normalizeLegacyRating(nextRating);
+  const rememberedDelta = (isSuccessfulRecordReviewRating(next) ? 1 : 0) - (isSuccessfulRecordReviewRating(previous) ? 1 : 0);
+  return {
+    ...stat,
+    rememberedCount: adjustCount(stat.rememberedCount, rememberedDelta),
+    fuzzyCount: adjustCount(stat.fuzzyCount, (next === "fuzzy" ? 1 : 0) - (previous === "fuzzy" ? 1 : 0)),
+    forgotCount: adjustCount(stat.forgotCount, (next === "forgot" ? 1 : 0) - (previous === "forgot" ? 1 : 0)),
+    goodCount: adjustCount(stat.goodCount, (next === "good" ? 1 : 0) - (previous === "good" ? 1 : 0)),
+    easyCount: adjustCount(stat.easyCount, (next === "easy" ? 1 : 0) - (previous === "easy" ? 1 : 0)),
+    updatedAt: nowISO(),
+  };
+};
+
+const reviewStateBeforeLog = (current: RecordReviewState, log: RecordReviewLog): RecordReviewState => {
+  const previousRating = normalizeLegacyRating(log.normalizedRating ?? log.rating);
+  const previousConsecutiveRemembered = log.previousConsecutiveRemembered ??
+    (isSuccessfulRecordReviewRating(previousRating)
+      ? Math.max(0, current.consecutiveRemembered - 1)
+      : current.consecutiveRemembered);
+  return {
+    ...current,
+    easeFactor: log.previousEaseFactor,
+    repetition: log.previousRepetition,
+    intervalDays: log.previousIntervalDays,
+    nextReviewDate: log.previousNextReviewDate,
+    lastReviewDate: log.previousLastReviewDate,
+    lastReviewedAt: log.previousLastReviewedAt,
+    consecutiveRemembered: previousConsecutiveRemembered,
+    totalReviews: log.previousTotalReviews ?? Math.max(0, current.totalReviews - 1),
+    fsrsCard: log.previousFsrsCard,
+  };
 };
 
 export class DexieStorageAdapter implements StorageAdapter {
@@ -69,6 +127,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateSettingsToDynamicSubjects();
     await this.migrateAiSettings();
     await this.purgeMistakeAndReviewData();
+    await this.migrateRecordReviewsToMixedSystem();
     await this.resetStaleOcrJobs(10 * 60 * 1000);
     await this.getOrCreateEntry(todayISO());
   }
@@ -82,23 +141,90 @@ export class DexieStorageAdapter implements StorageAdapter {
     return block?.type === "record" && !block.deletedAt ? block : undefined;
   }
 
-  private reviewStateForNewCycle(recordId: string, existing?: RecordReviewState): RecordReviewState {
+  private reviewStateForNewCycle(recordId: string, existing?: RecordReviewState, kind: RecordReviewKind = DEFAULT_REVIEW_KIND): RecordReviewState {
     const now = nowISO();
+    const nextReviewDate = addDaysISO(todayISO(), 1);
     return {
       ...(existing ?? createBaseEntity()),
       id: recordId,
       recordId,
       status: "active",
+      reviewKind: kind,
+      scheduler: schedulerForKind(kind),
       easeFactor: DEFAULT_REVIEW_EASE,
       repetition: 0,
       intervalDays: 1,
-      nextReviewDate: addDaysISO(todayISO(), 1),
+      nextReviewDate,
       lastReviewDate: existing?.lastReviewDate,
       lastReviewedAt: existing?.lastReviewedAt,
       consecutiveRemembered: 0,
       totalReviews: existing?.totalReviews ?? 0,
+      fsrsCard: kind === "memory" ? createInitialFsrsCard(nextReviewDate) : undefined,
       updatedAt: now,
     };
+  }
+
+  private async migrateRecordReviewsToMixedSystem(): Promise<void> {
+    const reviews = await db.recordReviews.toArray();
+    if (reviews.length === 0) {
+      return;
+    }
+
+    const logs = await db.recordReviewLogs.toArray();
+    const latestLogByRecord = new Map<string, RecordReviewLog>();
+    for (const log of logs) {
+      const current = latestLogByRecord.get(log.recordId);
+      if (!current || current.reviewedAt < log.reviewedAt) {
+        latestLogByRecord.set(log.recordId, log);
+      }
+    }
+
+    const migrated = reviews.map((review) => {
+      const reviewKind = review.reviewKind ?? DEFAULT_REVIEW_KIND;
+      const scheduler = review.scheduler ?? schedulerForKind(reviewKind);
+      const latestLog = latestLogByRecord.get(review.recordId);
+      const lastReviewDate = review.lastReviewDate ?? (latestLog ? isoDateTimeToLocalDate(latestLog.reviewedAt) : undefined);
+      const fuzzyRepairDate = lastReviewDate ? addDaysISO(lastReviewDate, 21) : undefined;
+      const shouldRepairFuzzy =
+        review.status === "active" &&
+        normalizeLegacyRating(latestLog?.rating ?? "good") === "fuzzy" &&
+        Boolean(fuzzyRepairDate) &&
+        typeof review.nextReviewDate === "string" &&
+        review.nextReviewDate > fuzzyRepairDate!;
+      const repairedNextReviewDate = shouldRepairFuzzy && lastReviewDate ? addDaysISO(lastReviewDate, 7) : review.nextReviewDate;
+      const nextReviewDate = review.status === "active" && reviewKind === "memory" && !repairedNextReviewDate
+        ? addDaysISO(todayISO(), 1)
+        : repairedNextReviewDate;
+      const intervalDays = shouldRepairFuzzy ? 7 : review.intervalDays;
+      const fsrsCard = reviewKind === "memory"
+        ? review.fsrsCard ?? (review.status === "active" ? createInitialFsrsCard(nextReviewDate ?? addDaysISO(todayISO(), 1)) : undefined)
+        : undefined;
+
+      if (
+        review.reviewKind === reviewKind &&
+        review.scheduler === scheduler &&
+        review.nextReviewDate === nextReviewDate &&
+        review.intervalDays === intervalDays &&
+        review.fsrsCard === fsrsCard
+      ) {
+        return review;
+      }
+
+      return {
+        ...review,
+        reviewKind,
+        scheduler,
+        nextReviewDate,
+        intervalDays,
+        fsrsCard,
+        updatedAt: nowISO(),
+      };
+    });
+
+    const changed = migrated.some((review, index) => review !== reviews[index]);
+    if (changed) {
+      await db.recordReviews.bulkPut(migrated);
+    }
   }
 
   private async cleanupOrphanAssetsForRecord(record: RecordBlock, draft?: RecordDraft): Promise<void> {
@@ -370,14 +496,13 @@ export class DexieStorageAdapter implements StorageAdapter {
     return candidates
       .filter((review) => isReviewDueOn(review, date) && activeBlocks.has(review.recordId))
       .sort((a, b) => {
-        const aToday = a.nextReviewDate === date ? 0 : 1;
-        const bToday = b.nextReviewDate === date ? 0 : 1;
-        if (aToday !== bToday) {
-          return aToday - bToday;
-        }
         const byDue = (a.nextReviewDate ?? "").localeCompare(b.nextReviewDate ?? "");
         if (byDue !== 0) {
           return byDue;
+        }
+        const byKind = (a.reviewKind === "memory" ? 0 : 1) - (b.reviewKind === "memory" ? 0 : 1);
+        if (byKind !== 0) {
+          return byKind;
         }
         const aRecord = activeBlocks.get(a.recordId);
         const bRecord = activeBlocks.get(b.recordId);
@@ -385,7 +510,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       });
   }
 
-  async addRecordToReview(recordId: string): Promise<RecordReviewState | undefined> {
+  async addRecordToReview(recordId: string, kind: RecordReviewKind = DEFAULT_REVIEW_KIND): Promise<RecordReviewState | undefined> {
     const record = await this.activeRecord(recordId);
     if (!record) {
       return undefined;
@@ -394,12 +519,12 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (existing?.status === "active") {
       return existing;
     }
-    const saved = this.reviewStateForNewCycle(recordId, existing);
+    const saved = this.reviewStateForNewCycle(recordId, existing, kind);
     await db.recordReviews.put(saved);
     return saved;
   }
 
-  async addRecordsToReview(recordIds: string[]): Promise<RecordReviewBulkResult> {
+  async addRecordsToReview(recordIds: string[], kind: RecordReviewKind = DEFAULT_REVIEW_KIND): Promise<RecordReviewBulkResult> {
     const uniqueIds = Array.from(new Set(recordIds));
     const result: RecordReviewBulkResult = { added: 0, reset: 0, skippedActive: 0 };
     for (const recordId of uniqueIds) {
@@ -412,7 +537,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         result.skippedActive += 1;
         continue;
       }
-      await db.recordReviews.put(this.reviewStateForNewCycle(recordId, existing));
+      await db.recordReviews.put(this.reviewStateForNewCycle(recordId, existing, kind));
       if (existing) {
         result.reset += 1;
       } else {
@@ -422,13 +547,24 @@ export class DexieStorageAdapter implements StorageAdapter {
     return result;
   }
 
+  async setRecordReviewKind(recordId: string, kind: RecordReviewKind): Promise<RecordReviewState | undefined> {
+    const record = await this.activeRecord(recordId);
+    if (!record) {
+      return undefined;
+    }
+    const existing = await db.recordReviews.get(recordId);
+    const saved = this.reviewStateForNewCycle(recordId, existing, kind);
+    await db.recordReviews.put(saved);
+    return saved;
+  }
+
   async resetRecordReview(recordId: string): Promise<RecordReviewState | undefined> {
     const record = await this.activeRecord(recordId);
     if (!record) {
       return undefined;
     }
     const existing = await db.recordReviews.get(recordId);
-    const saved = this.reviewStateForNewCycle(recordId, existing);
+    const saved = this.reviewStateForNewCycle(recordId, existing, existing?.reviewKind ?? DEFAULT_REVIEW_KIND);
     await db.recordReviews.put(saved);
     return saved;
   }
@@ -462,6 +598,8 @@ export class DexieStorageAdapter implements StorageAdapter {
       rememberedCount: 0,
       fuzzyCount: 0,
       forgotCount: 0,
+      goodCount: 0,
+      easyCount: 0,
     };
     await db.recordReviewDayStats.put(stat);
     return stat;
@@ -483,28 +621,47 @@ export class DexieStorageAdapter implements StorageAdapter {
       if (!current || current.status !== "active") {
         return undefined;
       }
-      if (current.lastReviewDate === reviewedDate) {
-        return current;
-      }
-      const scheduled = applySm2Review(current, rating, reviewedDate, reviewedAt);
+      const correctionLog = current.lastReviewDate === reviewedDate
+        ? (await db.recordReviewLogs.where("recordId").equals(recordId).toArray())
+          .filter((log) => isoDateTimeToLocalDate(log.reviewedAt) === reviewedDate)
+          .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0]
+        : undefined;
+      const baseState = correctionLog
+        ? reviewStateBeforeLog(current, correctionLog)
+        : current.lastReviewDate === reviewedDate
+          ? { ...current, totalReviews: Math.max(0, current.totalReviews - 1) }
+          : current;
+      const scheduled = applyRecordReview(baseState, rating, reviewedDate, reviewedAt);
       const nextState = { ...scheduled.state, updatedAt: nowISO() };
+      const normalizedRating = normalizeLegacyRating(rating);
       const log: RecordReviewLog = {
-        ...createBaseEntity(),
+        ...(correctionLog ?? createBaseEntity()),
         recordId,
         rating,
+        normalizedRating,
+        reviewKind: nextState.reviewKind ?? DEFAULT_REVIEW_KIND,
+        scheduler: nextState.scheduler ?? schedulerForKind(nextState.reviewKind ?? DEFAULT_REVIEW_KIND),
         reviewedAt,
-        previousEaseFactor: current.easeFactor,
+        previousEaseFactor: baseState.easeFactor,
         nextEaseFactor: nextState.easeFactor,
-        previousRepetition: current.repetition,
+        previousRepetition: baseState.repetition,
         nextRepetition: nextState.repetition,
-        previousIntervalDays: current.intervalDays,
+        previousIntervalDays: baseState.intervalDays,
         nextIntervalDays: nextState.intervalDays,
-        previousNextReviewDate: current.nextReviewDate,
+        previousNextReviewDate: baseState.nextReviewDate,
         nextReviewDate: nextState.nextReviewDate,
+        previousLastReviewDate: baseState.lastReviewDate,
+        previousLastReviewedAt: baseState.lastReviewedAt,
+        previousConsecutiveRemembered: baseState.consecutiveRemembered,
+        previousTotalReviews: baseState.totalReviews,
+        previousFsrsCard: baseState.fsrsCard,
+        nextFsrsCard: nextState.fsrsCard,
+        updatedAt: nowISO(),
       };
       await db.recordReviews.put(nextState);
       await db.recordReviewLogs.put(log);
-      const stat = await db.recordReviewDayStats.get(reviewedDate) ?? {
+      const existingStat = await db.recordReviewDayStats.get(reviewedDate);
+      const stat = existingStat ?? {
         ...createBaseEntity(),
         id: reviewedDate,
         date: reviewedDate,
@@ -513,15 +670,21 @@ export class DexieStorageAdapter implements StorageAdapter {
         rememberedCount: 0,
         fuzzyCount: 0,
         forgotCount: 0,
+        goodCount: 0,
+        easyCount: 0,
       };
-      const nextStat: RecordReviewDayStat = {
-        ...stat,
-        reviewedCount: stat.reviewedCount + 1,
-        rememberedCount: stat.rememberedCount + (rating === "remembered" ? 1 : 0),
-        fuzzyCount: stat.fuzzyCount + (rating === "fuzzy" ? 1 : 0),
-        forgotCount: stat.forgotCount + (rating === "forgot" ? 1 : 0),
-        updatedAt: nowISO(),
-      };
+      const nextStat: RecordReviewDayStat = correctionLog && existingStat
+        ? updateDayStatForRatingCorrection(stat, correctionLog.normalizedRating ?? correctionLog.rating, normalizedRating)
+        : {
+          ...stat,
+          reviewedCount: stat.reviewedCount + 1,
+          rememberedCount: stat.rememberedCount + (normalizedRating === "good" || normalizedRating === "easy" ? 1 : 0),
+          fuzzyCount: stat.fuzzyCount + (normalizedRating === "fuzzy" ? 1 : 0),
+          forgotCount: stat.forgotCount + (normalizedRating === "forgot" ? 1 : 0),
+          goodCount: (stat.goodCount ?? 0) + (normalizedRating === "good" ? 1 : 0),
+          easyCount: (stat.easyCount ?? 0) + (normalizedRating === "easy" ? 1 : 0),
+          updatedAt: nowISO(),
+        };
       await db.recordReviewDayStats.put(nextStat);
       return nextState;
     });
@@ -573,7 +736,8 @@ export class DexieStorageAdapter implements StorageAdapter {
       const key = isoDateTimeToLocalDate(log.reviewedAt);
       const current = byDate.get(key) ?? { remembered: 0, reviewed: 0 };
       current.reviewed += 1;
-      if (log.rating === "remembered") {
+      const normalizedRating = log.normalizedRating ?? normalizeLegacyRating(log.rating);
+      if (normalizedRating === "good" || normalizedRating === "easy") {
         current.remembered += 1;
       }
       byDate.set(key, current);
@@ -1031,6 +1195,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ]);
       },
     );
+    await this.migrateRecordReviewsToMixedSystem();
   }
 
   async restoreStreamableSnapshot(
@@ -1085,6 +1250,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ]);
       },
     );
+    await this.migrateRecordReviewsToMixedSystem();
 
     const total = snapshot.assets.length;
     for (const [index, meta] of snapshot.assets.entries()) {

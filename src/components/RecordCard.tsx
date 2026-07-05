@@ -2,7 +2,7 @@ import { BrainCircuit, FileText, RefreshCw, Star } from "lucide-react";
 
 import type { RecordBlock, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
-import { isReviewDueOn } from "../lib/reviewScheduler";
+import { isReviewDueOn, reviewKindLabel } from "../lib/reviewScheduler";
 
 interface RecordCardProps {
   record: RecordBlock;
@@ -17,14 +17,14 @@ const reviewLabel = (review?: RecordReviewState): string => {
   if (!review || review.status === "removed") return "加入复习";
   if (review.status === "mastered") return "已掌握";
   if (isReviewDueOn(review, todayISO())) return "待复习";
-  return review.nextReviewDate ? `下次 ${review.nextReviewDate.slice(5)}` : "复习中";
+  return review.nextReviewDate ? `${reviewKindLabel(review.reviewKind)} ${review.nextReviewDate.slice(5)}` : reviewKindLabel(review.reviewKind);
 };
 
 const compactReviewLabel = (review?: RecordReviewState): string => {
   if (!review || review.status === "removed") return "加入";
   if (review.status === "mastered") return "掌握";
   if (isReviewDueOn(review, todayISO())) return "复习";
-  return review.nextReviewDate ? review.nextReviewDate.slice(5) : "复习";
+  return review.reviewKind === "memory" ? "记忆" : "回看";
 };
 
 export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewState, onAddReview }: RecordCardProps) => {

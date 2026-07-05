@@ -6,7 +6,9 @@ export type Subject = string;
 export type MasteryStatus = "待复习" | "复习中" | "已掌握";
 export type Difficulty = 1 | 2 | 3 | 4 | 5;
 export type ReviewResult = "remembered" | "forgot";
-export type RecordReviewRating = "remembered" | "fuzzy" | "forgot";
+export type RecordReviewKind = "overview" | "memory";
+export type RecordReviewScheduler = "overview-v1" | "fsrs-v6" | "sm2-legacy";
+export type RecordReviewRating = "forgot" | "fuzzy" | "good" | "easy" | "remembered";
 export type RecordReviewStatus = "active" | "mastered" | "removed";
 export type ExportKind = "full-backup" | "subject-markdown" | "knowledge-json" | "plain-text";
 export type ImportProgressStage =
@@ -75,6 +77,8 @@ export interface RecordDraft {
 export interface RecordReviewState extends BaseEntity {
   recordId: EntityId;
   status: RecordReviewStatus;
+  reviewKind?: RecordReviewKind;
+  scheduler?: RecordReviewScheduler;
   easeFactor: number;
   repetition: number;
   intervalDays: number;
@@ -83,11 +87,28 @@ export interface RecordReviewState extends BaseEntity {
   lastReviewedAt?: ISODateTime;
   consecutiveRemembered: number;
   totalReviews: number;
+  fsrsCard?: RecordReviewFsrsCard;
+}
+
+export interface RecordReviewFsrsCard {
+  dueDate: ISODate;
+  stability: number;
+  difficulty: number;
+  elapsedDays: number;
+  scheduledDays: number;
+  learningSteps: number;
+  reps: number;
+  lapses: number;
+  state: number;
+  lastReviewDate?: ISODate;
 }
 
 export interface RecordReviewLog extends BaseEntity {
   recordId: EntityId;
   rating: RecordReviewRating;
+  normalizedRating?: Exclude<RecordReviewRating, "remembered">;
+  reviewKind?: RecordReviewKind;
+  scheduler?: RecordReviewScheduler;
   reviewedAt: ISODateTime;
   previousEaseFactor: number;
   nextEaseFactor: number;
@@ -97,6 +118,12 @@ export interface RecordReviewLog extends BaseEntity {
   nextIntervalDays: number;
   previousNextReviewDate?: ISODate;
   nextReviewDate?: ISODate;
+  previousLastReviewDate?: ISODate;
+  previousLastReviewedAt?: ISODateTime;
+  previousConsecutiveRemembered?: number;
+  previousTotalReviews?: number;
+  previousFsrsCard?: RecordReviewFsrsCard;
+  nextFsrsCard?: RecordReviewFsrsCard;
 }
 
 export interface RecordReviewDayStat extends BaseEntity {
@@ -106,6 +133,8 @@ export interface RecordReviewDayStat extends BaseEntity {
   rememberedCount: number;
   fuzzyCount: number;
   forgotCount: number;
+  goodCount?: number;
+  easyCount?: number;
   completedAt?: ISODateTime;
 }
 
@@ -564,8 +593,9 @@ export interface StorageAdapter {
   listRecordReviews(): Promise<RecordReviewState[]>;
   getRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
   listDueRecordReviews(date: ISODate): Promise<RecordReviewState[]>;
-  addRecordToReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
-  addRecordsToReview(recordIds: EntityId[]): Promise<RecordReviewBulkResult>;
+  addRecordToReview(recordId: EntityId, kind?: RecordReviewKind): Promise<RecordReviewState | undefined>;
+  addRecordsToReview(recordIds: EntityId[], kind?: RecordReviewKind): Promise<RecordReviewBulkResult>;
+  setRecordReviewKind(recordId: EntityId, kind: RecordReviewKind): Promise<RecordReviewState | undefined>;
   rateRecordReview(recordId: EntityId, rating: RecordReviewRating, reviewedAt?: ISODateTime): Promise<RecordReviewState | undefined>;
   resetRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
   removeRecordFromReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
