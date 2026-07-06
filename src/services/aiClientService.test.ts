@@ -68,15 +68,14 @@ afterEach(() => {
 });
 
 describe("buildAiMessages", () => {
-  it("asks the model to answer with Markdown, formulas and no HTML", () => {
+  it("asks the model to follow the current task with concise Markdown and no HTML", () => {
     const messages = buildAiMessages(undefined, [], "继续");
     const systemPrompt = String(messages[0].content);
 
-    expect(systemPrompt).toContain("GitHub-flavored Markdown");
-    expect(systemPrompt).toContain("$...$");
-    expect(systemPrompt).toContain("$$...$$");
-    expect(systemPrompt).toContain("Markdown 表格");
-    expect(systemPrompt).toContain("fenced code block");
+    expect(systemPrompt).toContain("优先执行用户当前请求");
+    expect(systemPrompt).toContain("日志外补充");
+    expect(systemPrompt).toContain("不要默认必须等待用户回答");
+    expect(systemPrompt).toContain("Markdown 和 LaTeX");
     expect(systemPrompt).toContain("不要输出 HTML");
   });
 
