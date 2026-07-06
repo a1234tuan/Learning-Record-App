@@ -30,7 +30,7 @@ import {
   validateSubjectName,
 } from "../lib/subjects";
 import { enqueueAutoOcrForRecord } from "../services/ocrJobService";
-import { markAutoBackupDirty, onAppBackgroundAutoBackup } from "../services/autoBackupService";
+import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupService";
 
 export const useAppData = () => {
   const [initialized, setInitialized] = useState(false);
@@ -77,23 +77,20 @@ export const useAppData = () => {
       await refresh();
       setInitialized(true);
       await storage.purgeExpiredDeletedBlocks(30);
+      if (!mounted) {
+        return;
+      }
       await refresh();
-      await markAutoBackupDirty("app-start");
+      await flushAutoBackupNow("app-start");
+      if (!mounted) {
+        return;
+      }
+      await refresh();
     });
     return () => {
       mounted = false;
     };
   }, [refresh]);
-
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        void onAppBackgroundAutoBackup();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
 
   const todayEntry = useMemo(
     () => entries.find((entry) => entry.date === todayISO()) ?? null,

@@ -184,7 +184,7 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
         <summary>备份说明</summary>
         <p className="helper-text">
           建议选择网盘同步目录或手机公共文档目录。断网不影响本地记录，但卸载 App、清理应用数据或浏览器站点数据会删除本地库；Web 端自动备份会覆盖同一份 latest zip。
-          Android 端会写入 study-journal-backup 增量文件夹仓库，只同步新增或缺失资源，并保留最近 5 个快照。绑定只授予文件夹权限；从旧仓库拉取请使用“从自动备份文件夹恢复”，推送当前本地数据请使用“立即同步”。
+          Android 端会写入 study-journal-backup 增量文件夹仓库，只同步新增或缺失资源，并保留最近 5 个快照。自动备份会在打开 App 时同步一次；编辑过程中需要立刻备份时，请点击“立即同步”。绑定只授予文件夹权限；从旧仓库拉取请使用“从自动备份文件夹恢复”。
         </p>
       </details>
     </section>

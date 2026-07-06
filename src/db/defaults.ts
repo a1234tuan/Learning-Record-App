@@ -166,7 +166,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   subjects: createDefaultSubjects(),
   autoBackup: {
     enabled: false,
-    debounceMs: 45_000,
+    debounceMs: 600_000,
   },
   ai: {
     currentProviderId: "default",

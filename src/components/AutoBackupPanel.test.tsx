@@ -10,7 +10,7 @@ vi.mock("../services/autoBackupService", () => ({
   flushAutoBackupNow: vi.fn(),
   getAutoBackupSettings: (settings: AppSettings) => ({
     enabled: settings.autoBackup?.enabled ?? false,
-    debounceMs: settings.autoBackup?.debounceMs ?? 45_000,
+    debounceMs: settings.autoBackup?.debounceMs ?? 600_000,
     folderName: settings.autoBackup?.folderName,
     backupFormat: settings.autoBackup?.backupFormat,
     lastBackupAt: settings.autoBackup?.lastBackupAt,
@@ -41,7 +41,7 @@ const settings = (
   autoBackup: {
     enabled: true,
     folderName: "backup",
-    debounceMs: 45_000,
+    debounceMs: 600_000,
     lastError,
     ...autoBackup,
   },
@@ -120,5 +120,7 @@ describe("AutoBackupPanel", () => {
     expect(screen.getByText("资源数量")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
     expect(screen.getByText("20260621T010000000Z")).toBeInTheDocument();
+    expect(screen.getByText(/打开 App 时同步一次/)).toBeInTheDocument();
+    expect(screen.getByText(/编辑过程中需要立刻备份/)).toBeInTheDocument();
   });
 });

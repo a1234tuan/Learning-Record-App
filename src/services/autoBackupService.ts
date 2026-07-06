@@ -3,11 +3,9 @@ import { nowISO } from "../lib/date";
 import { autoBackupAdapter, type AutoBackupAdapter } from "./autoBackupAdapter";
 import { storage } from "./storageAdapter";
 
-const DEFAULT_DEBOUNCE_MS = 45_000;
+const DEFAULT_DEBOUNCE_MS = 600_000;
 
-let timer: number | undefined;
 let runningPromise: Promise<AppSettings> | undefined;
-let dirty = false;
 
 const withAutoBackupDefaults = (settings: AppSettings): AppSettings => ({
   ...settings,
@@ -98,10 +96,6 @@ export const flushAutoBackupNow = async (
   store: StorageAdapter = storage,
 ): Promise<AppSettings> => {
   void reason;
-  if (timer) {
-    window.clearTimeout(timer);
-    timer = undefined;
-  }
   if (runningPromise) {
     return runningPromise;
   }
@@ -128,7 +122,6 @@ export const flushAutoBackupNow = async (
     try {
       const result = await adapter.writeLatest(store);
       ensureValidWriteResult(result);
-      dirty = false;
       const nextSettings: AppSettings = {
         ...settings,
         autoBackup: {
@@ -178,29 +171,8 @@ export const markAutoBackupDirty = async (
   store: StorageAdapter = storage,
 ): Promise<void> => {
   void reason;
-  dirty = true;
-  let settings;
-  try {
-    settings = getAutoBackupSettings(await store.getSettings());
-  } catch {
-    return;
-  }
-  if (!settings?.enabled) {
-    return;
-  }
-  if (timer) {
-    window.clearTimeout(timer);
-  }
-  timer = window.setTimeout(() => {
-    timer = undefined;
-    if (dirty) {
-      void flushAutoBackupNow("debounced", adapter, store);
-    }
-  }, settings.debounceMs ?? DEFAULT_DEBOUNCE_MS);
+  void adapter;
+  void store;
 };
 
-export const onAppBackgroundAutoBackup = async (): Promise<void> => {
-  if (dirty) {
-    await flushAutoBackupNow("background");
-  }
-};
+export const onAppBackgroundAutoBackup = async (): Promise<void> => undefined;

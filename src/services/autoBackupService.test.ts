@@ -6,6 +6,7 @@ import {
   bindAutoBackupFolder,
   flushAutoBackupNow,
   markAutoBackupDirty,
+  onAppBackgroundAutoBackup,
   setAutoBackupEnabled,
 } from "./autoBackupService";
 
@@ -26,7 +27,7 @@ const settings = (
   autoBackup: {
     enabled,
     folderName: "backup",
-    debounceMs: 45_000,
+    debounceMs: 600_000,
     ...autoBackup,
   },
   schemaVersion: 3,
@@ -101,15 +102,25 @@ describe("autoBackupService", () => {
     vi.useFakeTimers();
   });
 
-  it("debounces multiple dirty writes into one latest backup", async () => {
+  it("does not auto-sync dirty changes during normal editing", async () => {
     const store = makeStore();
     const adapter = makeAdapter();
 
-    await markAutoBackupDirty("one", adapter, store);
-    await markAutoBackupDirty("two", adapter, store);
-    await vi.advanceTimersByTimeAsync(45_000);
+    await markAutoBackupDirty("record", adapter, store);
+    await markAutoBackupDirty("asset", adapter, store);
+    await vi.advanceTimersByTimeAsync(600_000);
 
-    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
+    expect(adapter.writeLatest).not.toHaveBeenCalled();
+  });
+
+  it("does not flush dirty changes when the app goes to the background", async () => {
+    const store = makeStore();
+    const adapter = makeAdapter();
+
+    await markAutoBackupDirty("record", adapter, store);
+    await onAppBackgroundAutoBackup();
+
+    expect(adapter.writeLatest).not.toHaveBeenCalled();
   });
 
   it("manual flush writes immediately", async () => {
@@ -134,6 +145,16 @@ describe("autoBackupService", () => {
     expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       autoBackup: expect.objectContaining({ lastBackupSize: 1234 }),
     }));
+  });
+
+  it("app-start flush writes once when automatic backup is enabled", async () => {
+    const store = makeStore();
+    const adapter = makeAdapter(true, { folderName: "backup", size: 4321 });
+
+    const nextSettings = await flushAutoBackupNow("app-start", adapter, store);
+
+    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
+    expect(nextSettings.autoBackup?.lastBackupSize).toBe(4321);
   });
 
   it("records the provider's actual file name and warning when native verification reports a renamed file", async () => {
