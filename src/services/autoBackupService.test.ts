@@ -227,15 +227,26 @@ describe("autoBackupService", () => {
     }));
   });
 
-  it("binds a folder and enables auto backup", async () => {
+  it("binds a folder without forcing automatic writes on for a fresh install", async () => {
     const store = makeStore(settings(false));
     const adapter = makeAdapter();
 
-    await bindAutoBackupFolder(adapter, store);
+    const nextSettings = await bindAutoBackupFolder(adapter, store);
 
     expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
-      autoBackup: expect.objectContaining({ enabled: true, folderName: "backup" }),
+      autoBackup: expect.objectContaining({ enabled: false, folderName: "backup" }),
     }));
+    expect(nextSettings.autoBackup?.enabled).toBe(false);
+  });
+
+  it("keeps automatic writes enabled when rebinding an already enabled folder", async () => {
+    const store = makeStore(settings(true));
+    const adapter = makeAdapter();
+
+    const nextSettings = await bindAutoBackupFolder(adapter, store);
+
+    expect(nextSettings.autoBackup?.enabled).toBe(true);
+    expect(nextSettings.autoBackup?.folderName).toBe("backup");
   });
 
   it("rejects enabling when no adapter is available", async () => {

@@ -83,7 +83,7 @@ export const bindAutoBackupFolder = async (
     ...settings,
     autoBackup: {
       ...currentAutoBackup(settings),
-      enabled: true,
+      enabled: settings.autoBackup?.enabled ?? false,
       folderName: bound.folderName,
       lastError: undefined,
     },

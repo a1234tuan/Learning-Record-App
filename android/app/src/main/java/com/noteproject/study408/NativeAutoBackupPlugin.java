@@ -547,12 +547,12 @@ public class NativeAutoBackupPlugin extends Plugin {
 
         execute(() -> {
             try {
-                Uri rootUri = documentUriForTree(Uri.parse(treeUriText));
-                ensureDirectory(rootUri, repositoryName);
+                Uri repositoryUri = resolveRepositoryRoot(Uri.parse(treeUriText), repositoryName, true);
+                RepositoryDocument repository = readDocument(repositoryUri);
 
                 JSObject response = new JSObject();
                 response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
-                response.put("repositoryName", repositoryName);
+                response.put("repositoryName", repository.displayName != null ? repository.displayName : repositoryName);
                 call.resolve(response);
             } catch (Exception error) {
                 call.reject(error.getMessage() != null ? error.getMessage() : "创建自动备份仓库失败。", error);
@@ -836,10 +836,33 @@ public class NativeAutoBackupPlugin extends Plugin {
         return created;
     }
 
+    private boolean isDirectoryDocument(RepositoryDocument document) {
+        return document != null && DocumentsContract.Document.MIME_TYPE_DIR.equals(document.mimeType);
+    }
+
+    private boolean isRepositoryRoot(Uri rootUri, String repositoryName) throws Exception {
+        RepositoryDocument root = readDocument(rootUri);
+        if (repositoryName.equals(root.displayName) && isDirectoryDocument(root)) {
+            return true;
+        }
+
+        RepositoryDocument manifest = findChild(rootUri, "manifest.json");
+        RepositoryDocument snapshots = findChild(rootUri, "snapshots");
+        return manifest != null
+            && !isDirectoryDocument(manifest)
+            && isDirectoryDocument(snapshots);
+    }
+
+    private Uri resolveRepositoryRoot(Uri treeUri, String repositoryName, boolean create) throws Exception {
+        Uri rootUri = documentUriForTree(treeUri);
+        if (isRepositoryRoot(rootUri, repositoryName)) {
+            return rootUri;
+        }
+        return create ? ensureDirectory(rootUri, repositoryName) : childDirectory(rootUri, repositoryName, false);
+    }
+
     private Uri resolveRepositoryDirectory(Uri treeUri, String repositoryName, String directory, boolean create) throws Exception {
-        Uri current = create
-            ? ensureDirectory(documentUriForTree(treeUri), repositoryName)
-            : childDirectory(documentUriForTree(treeUri), repositoryName, false);
+        Uri current = resolveRepositoryRoot(treeUri, repositoryName, create);
         if (current == null) {
             return null;
         }

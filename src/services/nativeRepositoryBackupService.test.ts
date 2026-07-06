@@ -8,6 +8,7 @@ import {
 import {
   beginNativeBackupRepositoryFileWrite,
   deleteNativeBackupRepositoryFile,
+  ensureNativeBackupRepository,
   readNativeBackupRepositoryTextFile,
 } from "./nativeAutoBackup";
 
@@ -188,6 +189,23 @@ const snapshot = (assetIds: string[] = ["asset-1"]): StreamableBackupSnapshot =>
   recordDrafts: [],
 });
 
+const emptySnapshot = (): StreamableBackupSnapshot => {
+  const base = snapshot([]);
+  return {
+    ...base,
+    payload: {
+      ...base.payload,
+      manifest: {
+        ...base.payload.manifest,
+        counts: { entries: 0, blocks: 0, mistakes: 0, assets: 0, tags: 0, reviews: 0, studySessions: 0 },
+      },
+      entries: [],
+      blocks: [],
+    },
+    assets: [],
+  };
+};
+
 const asset = (id: string): Asset => ({
   id,
   createdAt: stamp,
@@ -198,6 +216,8 @@ const asset = (id: string): Asset => ({
   kind: "image",
   data: new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
 });
+
+const nextMillisecond = () => new Promise((resolve) => setTimeout(resolve, 2));
 
 describe("native repository backup service", () => {
   beforeEach(() => {
@@ -240,6 +260,18 @@ describe("native repository backup service", () => {
     expect(store.restoreStreamableSnapshot).not.toHaveBeenCalled();
   });
 
+  it("does not create or initialize a repository before restore", async () => {
+    await writeNativeRepositoryBackupSnapshot(snapshot(), async (id) => asset(id));
+    vi.mocked(ensureNativeBackupRepository).mockClear();
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await restoreNativeRepositoryBackup(store);
+
+    expect(ensureNativeBackupRepository).not.toHaveBeenCalled();
+  });
+
   it("falls back to scanning snapshots when manifest is broken", async () => {
     await writeNativeRepositoryBackupSnapshot(snapshot(), async (id) => asset(id));
     nativeMock.__repositoryFiles.set("manifest.json", {
@@ -254,6 +286,53 @@ describe("native repository backup service", () => {
 
     expect(summary.records).toBe(1);
     expect(store.restoreStreamableSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the newest non-empty snapshot when the manifest latest snapshot is empty", async () => {
+    const nonEmpty = await writeNativeRepositoryBackupSnapshot(snapshot(), async (id) => asset(id));
+    await nextMillisecond();
+    const empty = await writeNativeRepositoryBackupSnapshot(emptySnapshot(), async () => undefined);
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    const summary = await restoreNativeRepositoryBackup(store);
+
+    expect(empty.snapshotId).not.toBe(nonEmpty.snapshotId);
+    expect(summary.records).toBe(1);
+    expect(summary.assets).toBe(1);
+    expect(store.restoreStreamableSnapshot).toHaveBeenCalledTimes(1);
+    const restored = vi.mocked(store.restoreStreamableSnapshot).mock.calls[0][0];
+    expect(restored.payload.blocks).toHaveLength(1);
+  });
+
+  it("rejects an all-empty repository instead of reporting a successful restore with zeros", async () => {
+    await writeNativeRepositoryBackupSnapshot(emptySnapshot(), async () => undefined);
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await expect(restoreNativeRepositoryBackup(store)).rejects.toThrow("没有可恢复的数据");
+
+    expect(store.restoreStreamableSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("skips an empty newer snapshot when scanning after a broken manifest", async () => {
+    await writeNativeRepositoryBackupSnapshot(snapshot(), async (id) => asset(id));
+    await nextMillisecond();
+    await writeNativeRepositoryBackupSnapshot(emptySnapshot(), async () => undefined);
+    nativeMock.__repositoryFiles.set("manifest.json", {
+      data: new TextEncoder().encode("{bad json"),
+      lastModified: Date.now() + 10,
+    });
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    const summary = await restoreNativeRepositoryBackup(store);
+
+    expect(summary.records).toBe(1);
+    expect(summary.assets).toBe(1);
   });
 
   it("does not delete assets referenced by retained snapshots during cleanup", async () => {

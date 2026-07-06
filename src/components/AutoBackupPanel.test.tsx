@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSettings } from "../types";
-import { flushAutoBackupNow } from "../services/autoBackupService";
+import { bindAutoBackupFolder, flushAutoBackupNow } from "../services/autoBackupService";
 import { AutoBackupPanel } from "./AutoBackupPanel";
 
 vi.mock("../services/autoBackupService", () => ({
@@ -49,6 +49,25 @@ const settings = (
 });
 
 describe("AutoBackupPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("binds a folder without immediately syncing current local data", async () => {
+    vi.mocked(bindAutoBackupFolder).mockResolvedValueOnce(settings(undefined, { enabled: false, folderName: "old-backup" }));
+
+    render(<AutoBackupPanel settings={settings(undefined, { enabled: false })} onChanged={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /绑定备份文件夹/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/已绑定备份文件夹/)).toBeInTheDocument();
+    });
+    expect(bindAutoBackupFolder).toHaveBeenCalledTimes(1);
+    expect(flushAutoBackupNow).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已绑定备份文件夹，并写入/)).not.toBeInTheDocument();
+  });
+
   it("shows the sync error instead of a success message when flush reports a backup error", async () => {
     vi.mocked(flushAutoBackupNow).mockResolvedValueOnce(settings("自动备份写入结果为空。"));
 

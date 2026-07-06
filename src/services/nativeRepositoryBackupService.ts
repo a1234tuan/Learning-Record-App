@@ -70,6 +70,12 @@ interface RepositoryWriteSummary {
   warning?: string;
 }
 
+type LoadedRepositorySnapshot = {
+  snapshot: StreamableBackupSnapshot;
+  assetPaths: Record<string, string>;
+  snapshotId: string;
+};
+
 const textBlob = (text: string, type = "application/json") =>
   new Blob([text], { type });
 
@@ -183,6 +189,18 @@ const parseSnapshotFile = (text: string): { snapshot: StreamableBackupSnapshot; 
   const snapshot = normalizeSnapshot(parsed);
   const assetPaths = parsed.assetPaths ?? Object.fromEntries(snapshot.assets.map((asset) => [asset.id, assetPath(asset)]));
   return { snapshot, assetPaths };
+};
+
+const snapshotSummary = (snapshot: StreamableBackupSnapshot): ImportSummary =>
+  summarizeSnapshot({
+    payload: snapshot.payload,
+    assets: snapshot.assets.map((meta) => metaToAsset(meta, new Blob())),
+    recordDrafts: snapshot.recordDrafts,
+  });
+
+const hasRecoverableData = (snapshot: StreamableBackupSnapshot): boolean => {
+  const summary = snapshotSummary(snapshot);
+  return summary.records > 0 || summary.deletedRecords > 0 || summary.assets > 0;
 };
 
 const listRepositorySize = async () => {
@@ -360,28 +378,52 @@ export const writeNativeRepositoryBackup = async (
 
 const loadSnapshotFromManifest = async (
   manifest: RepositoryManifest,
-): Promise<{ snapshot: StreamableBackupSnapshot; assetPaths: Record<string, string>; snapshotId: string }> => {
-  const latest = manifest.snapshots.find((snapshot) => snapshot.id === manifest.latestSnapshotId) ?? manifest.snapshots[0];
-  if (!latest) {
+): Promise<LoadedRepositorySnapshot> => {
+  const candidates = [
+    ...manifest.snapshots.filter((snapshot) => snapshot.id === manifest.latestSnapshotId),
+    ...manifest.snapshots.filter((snapshot) => snapshot.id !== manifest.latestSnapshotId),
+  ];
+  if (!candidates.length) {
     throw new Error("自动备份仓库没有可恢复的快照。");
   }
-  const text = (await readNativeBackupRepositoryTextFile(REPOSITORY_NAME, latest.path)).text;
-  const parsed = parseSnapshotFile(text);
-  return { ...parsed, snapshotId: latest.id };
+
+  let firstLoaded: LoadedRepositorySnapshot | undefined;
+  for (const candidate of candidates) {
+    const text = (await readNativeBackupRepositoryTextFile(REPOSITORY_NAME, candidate.path)).text;
+    const parsed = parseSnapshotFile(text);
+    const loaded = { ...parsed, snapshotId: candidate.id };
+    firstLoaded ??= loaded;
+    if (hasRecoverableData(loaded.snapshot)) {
+      return loaded;
+    }
+  }
+
+  if (firstLoaded) {
+    return firstLoaded;
+  }
+  throw new Error("自动备份仓库没有可恢复的快照。");
 };
 
-const scanLatestSnapshot = async (): Promise<{ snapshot: StreamableBackupSnapshot; assetPaths: Record<string, string>; snapshotId: string }> => {
+const scanLatestSnapshot = async (): Promise<LoadedRepositorySnapshot> => {
   const files = (await listNativeBackupRepositoryFiles(REPOSITORY_NAME, "snapshots"))
     .filter((file) => file.displayName.endsWith(".json"))
     .sort((a, b) => (b.lastModified ?? 0) - (a.lastModified ?? 0) || b.displayName.localeCompare(a.displayName));
+  let firstLoaded: LoadedRepositorySnapshot | undefined;
   for (const file of files) {
     try {
       const text = (await readNativeBackupRepositoryTextFile(REPOSITORY_NAME, file.path)).text;
       const parsed = parseSnapshotFile(text);
-      return { ...parsed, snapshotId: file.displayName.replace(/\.json$/i, "") };
+      const loaded = { ...parsed, snapshotId: file.displayName.replace(/\.json$/i, "") };
+      firstLoaded ??= loaded;
+      if (hasRecoverableData(loaded.snapshot)) {
+        return loaded;
+      }
     } catch {
       // Try the next snapshot; this path is used when manifest.json is broken.
     }
+  }
+  if (firstLoaded) {
+    return firstLoaded;
   }
   throw new Error("自动备份仓库没有可解析的快照。");
 };
@@ -427,14 +469,12 @@ export const restoreNativeRepositoryBackup = async (
   }
 
   options.onProgress?.({ stage: "indexing", message: "正在检查自动备份仓库。" });
-  await ensureNativeBackupRepository(REPOSITORY_NAME);
   const { snapshot, assetPaths } = await loadLatestSnapshot();
   await verifyRepositoryAssets(snapshot.assets, assetPaths);
-  const summary = summarizeSnapshot({
-    payload: snapshot.payload,
-    assets: snapshot.assets.map((meta) => metaToAsset(meta, new Blob())),
-    recordDrafts: snapshot.recordDrafts,
-  });
+  const summary = snapshotSummary(snapshot);
+  if (!hasRecoverableData(snapshot)) {
+    throw new Error("自动备份仓库中没有可恢复的数据。");
+  }
 
   options.onProgress?.({ stage: "restoring", message: "仓库快照已通过校验，正在覆盖当前本地数据。" });
   await store.restoreStreamableSnapshot(snapshot, async (meta, index, total) => {

@@ -168,7 +168,7 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
   const importRepository = () =>
     run("repository-import", async () => {
       setImportStatus({ state: "idle" });
-      const ok = window.confirm("从自动备份文件夹恢复会覆盖当前本地数据。请确认已绑定正确的自动备份文件夹。");
+      const ok = window.confirm("从自动备份文件夹恢复会覆盖当前本地数据。请确认已绑定旧仓库所在的父文件夹，或直接绑定 study-journal-backup 文件夹。");
       if (!ok) {
         setImportStatus({ state: "cancelled", title: "已取消恢复", detail: "没有修改当前本地数据。" });
         return;
@@ -259,7 +259,7 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
               <div>
                 <DatabaseBackup size={20} />
                 <h3>自动备份文件夹恢复</h3>
-                <p>从已绑定的增量仓库恢复。恢复前会先校验快照和资源完整性，适合大资源量备份。</p>
+                <p>从已绑定的增量仓库拉取恢复，可选择仓库父文件夹或 study-journal-backup 本身。恢复前会先校验快照和资源完整性。</p>
               </div>
               <button type="button" className="secondary-button" onClick={importRepository} disabled={busy !== null}>
                 <DatabaseBackup size={18} />
