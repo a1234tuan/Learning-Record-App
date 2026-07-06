@@ -36,9 +36,9 @@ Android APK 请前往 [GitHub Releases](https://github.com/a1234tuan/Learning-Re
 
 | 混合复习 | 复习管理 |
 | --- | --- |
-| <img src="docs/images/review.png" width="320" alt="混合复习" /> | <img src="docs/images/review2.png" width="320" alt="复习管理" /> |
+| <img src="docs/images/review2.png" width="320" alt="复习管理" /> | <img src="docs/images/review.png" width="320" alt="混合复习" /> |
 
-| AI 问答 | AI 追问 |
+| AI 问答 | 问答窗口 |
 | --- | --- |
 | <img src="docs/images/ai-chat.png" width="320" alt="AI 问答" /> | <img src="docs/images/ai-chat2.png" width="320" alt="AI 追问" /> |
 
