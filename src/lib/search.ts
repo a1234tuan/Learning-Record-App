@@ -2,6 +2,7 @@ import type { Asset, Block, DayEntry, RecordBlock, SearchResult } from "../types
 import { recordToPlainText } from "./recordContent";
 
 const normalize = (value: string): string => value.toLocaleLowerCase("zh-CN");
+const DEFAULT_SEARCH_LIMIT = Number.POSITIVE_INFINITY;
 
 const excerpt = (text: string, query: string): string => {
   const normalizedText = normalize(text);
@@ -14,16 +15,24 @@ const excerpt = (text: string, query: string): string => {
 };
 
 export const blockToText = (block: Block, assets: Asset[] = []): string => {
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
+  return blockToTextWithAssetMap(block, assetMap);
+};
+
+const blockToTextWithAssetMap = (block: Block, assetMap: Map<string, Asset>): string => {
   const assetTitle = (id: string) => {
-    const asset = assets.find((item) => item.id === id);
+    const asset = assetMap.get(id);
     return `${asset?.title ?? ""} ${asset?.fileName ?? ""}`;
   };
   switch (block.type) {
     case "record":
+      const recordAssets = block.assets
+        .map((asset) => assetMap.get(asset.id))
+        .filter((asset): asset is Asset => Boolean(asset));
       return [
         block.title,
         block.subject,
-        recordToPlainText(block, assets),
+        recordToPlainText(block, recordAssets),
         block.assets.map((asset) => `${asset.title} ${assetTitle(asset.id)}`).join(" "),
         block.formulas.map((formula) => `${formula.title ?? ""} ${formula.latex}`).join(" "),
       ].join(" ");
@@ -48,10 +57,10 @@ export const blockToText = (block: Block, assets: Asset[] = []): string => {
   }
 };
 
-const recordAssetText = (record: RecordBlock, assets: Asset[], kind: "meta" | "ocr") =>
+const recordAssetText = (record: RecordBlock, assetMap: Map<string, Asset>, kind: "meta" | "ocr") =>
   record.assets
     .map((ref) => {
-      const asset = assets.find((item) => item.id === ref.id);
+      const asset = assetMap.get(ref.id);
       if (!asset) {
         return "";
       }
@@ -66,12 +75,16 @@ export const searchAll = (
   entries: DayEntry[],
   blocks: Block[],
   assets: Asset[] = [],
+  limit = DEFAULT_SEARCH_LIMIT,
 ): SearchResult[] => {
   const normalizedQuery = normalize(query.trim());
   if (!normalizedQuery) {
     return [];
   }
 
+  const maxResults = Number.isFinite(limit) ? Math.max(0, limit) : DEFAULT_SEARCH_LIMIT;
+  const isFull = () => results.length >= maxResults;
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
   const results: SearchResult[] = [];
   for (const entry of entries) {
     const text = `${entry.title} ${entry.summary ?? ""} ${entry.tags.join(" ")}`;
@@ -85,13 +98,16 @@ export const searchAll = (
         tags: entry.tags,
         matchSource: "entry",
       });
+      if (isFull()) {
+        return results;
+      }
     }
   }
 
   for (const block of blocks) {
-    const contentText = blockToText(block, assets);
-    const assetMetaText = block.type === "record" ? recordAssetText(block, assets, "meta") : "";
-    const assetOcrText = block.type === "record" ? recordAssetText(block, assets, "ocr") : "";
+    const contentText = blockToTextWithAssetMap(block, assetMap);
+    const assetMetaText = block.type === "record" ? recordAssetText(block, assetMap, "meta") : "";
+    const assetOcrText = block.type === "record" ? recordAssetText(block, assetMap, "ocr") : "";
     const hitContent = normalize(contentText).includes(normalizedQuery);
     const hitAssetMeta = normalize(assetMetaText).includes(normalizedQuery);
     const hitAssetOcr = normalize(assetOcrText).includes(normalizedQuery);
@@ -99,7 +115,7 @@ export const searchAll = (
       const matchSource = hitAssetOcr ? "assetOcr" : hitAssetMeta ? "assetMeta" : "content";
       const matchedAsset = block.type === "record" && matchSource !== "content"
         ? block.assets.find((ref) => {
-          const asset = assets.find((item) => item.id === ref.id);
+          const asset = assetMap.get(ref.id);
           const text = matchSource === "assetOcr"
             ? asset?.ocrText ?? ""
             : `${ref.title} ${asset?.title ?? ""} ${asset?.fileName ?? ""}`;
@@ -118,6 +134,9 @@ export const searchAll = (
         assetId: matchedAsset?.id,
         matchSource,
       });
+      if (isFull()) {
+        return results;
+      }
     }
   }
 

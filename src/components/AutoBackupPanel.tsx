@@ -26,12 +26,40 @@ const formatBackupFileName = (settings: AppSettings): string => {
   return autoBackup.lastBackupFileName ?? "study-journal-latest.zip";
 };
 
+const formatBackupKind = (settings: AppSettings): string => {
+  const format = getAutoBackupSettings(settings)?.backupFormat;
+  return format === "folder-repository-v1" ? "增量文件夹备份" : "latest zip";
+};
+
+const formatBackupSize = (settings: AppSettings): string => {
+  const autoBackup = getAutoBackupSettings(settings);
+  const size = autoBackup?.backupFormat === "folder-repository-v1"
+    ? autoBackup.lastBackupRepositorySize ?? autoBackup.lastBackupSize
+    : autoBackup?.lastBackupSize;
+  return size ? formatBytes(size) : "-";
+};
+
+const formatBytesValue = (value?: number): string =>
+  value ? formatBytes(value) : "-";
+
 const backupSuccessMessage = (settings: AppSettings, message: string): string => {
   const lastError = getAutoBackupSettings(settings)?.lastError;
   if (lastError) {
     throw new Error(lastError);
   }
   return message;
+};
+
+const backupActionMessage = (settings: AppSettings, action: "bind" | "manual"): string => {
+  const repository = getAutoBackupSettings(settings)?.backupFormat === "folder-repository-v1";
+  if (action === "bind") {
+    return repository
+      ? "已绑定备份文件夹，并写入增量备份仓库。"
+      : "已绑定备份文件夹，并写入 study-journal-latest.zip。";
+  }
+  return repository
+    ? "已立即同步到增量备份仓库。"
+    : "已立即同步到 study-journal-latest.zip。";
 };
 
 export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) => {
@@ -81,9 +109,29 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
           <strong>{formatBackupFileName(settings)}</strong>
         </div>
         <div>
-          <span>备份大小</span>
-          <strong>{autoBackup?.lastBackupSize ? formatBytes(autoBackup.lastBackupSize) : "-"}</strong>
+          <span>备份格式</span>
+          <strong>{formatBackupKind(settings)}</strong>
         </div>
+        <div>
+          <span>{autoBackup?.backupFormat === "folder-repository-v1" ? "仓库总大小" : "备份大小"}</span>
+          <strong>{formatBackupSize(settings)}</strong>
+        </div>
+        {autoBackup?.backupFormat === "folder-repository-v1" && (
+          <>
+            <div>
+              <span>本次写入</span>
+              <strong>{formatBytesValue(autoBackup.lastBackupBytesWritten)}</strong>
+            </div>
+            <div>
+              <span>资源数量</span>
+              <strong>{autoBackup.lastBackupAssetCount ?? "-"}</strong>
+            </div>
+            <div>
+              <span>最新快照</span>
+              <strong>{autoBackup.lastBackupSnapshotId ?? "-"}</strong>
+            </div>
+          </>
+        )}
       </div>
       <div className="card-actions">
         <button
@@ -94,7 +142,7 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
             void run(async () => {
               await bindAutoBackupFolder();
               const nextSettings = await flushAutoBackupNow("bind");
-              return backupSuccessMessage(nextSettings, "已绑定备份文件夹，并写入 study-journal-latest.zip。");
+              return backupSuccessMessage(nextSettings, backupActionMessage(nextSettings, "bind"));
             })
           }
         >
@@ -122,7 +170,7 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
           onClick={() =>
             void run(async () => {
               const nextSettings = await flushAutoBackupNow("manual");
-              return backupSuccessMessage(nextSettings, "已立即同步到 study-journal-latest.zip。");
+              return backupSuccessMessage(nextSettings, backupActionMessage(nextSettings, "manual"));
             })
           }
         >
@@ -141,7 +189,8 @@ export const AutoBackupPanel = ({ settings, onChanged }: AutoBackupPanelProps) =
       <details className="auto-backup-help">
         <summary>备份说明</summary>
         <p className="helper-text">
-          建议选择网盘同步目录或手机公共文档目录。断网不影响本地记录，但卸载 App、清理应用数据或浏览器站点数据会删除本地库；自动备份会覆盖同一份 latest zip，避免多份快照持续占空间。
+          建议选择网盘同步目录或手机公共文档目录。断网不影响本地记录，但卸载 App、清理应用数据或浏览器站点数据会删除本地库；Web 端自动备份会覆盖同一份 latest zip。
+          Android 端会写入 study-journal-backup 增量文件夹仓库，只同步新增或缺失资源，并保留最近 5 个快照。
         </p>
       </details>
     </section>

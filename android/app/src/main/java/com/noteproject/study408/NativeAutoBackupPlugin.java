@@ -14,8 +14,11 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,12 +54,38 @@ public class NativeAutoBackupPlugin extends Plugin {
     private static class WriteSession {
         final Uri uri;
         final OutputStream output;
+        final String path;
+        final String displayName;
         long size;
 
         WriteSession(Uri uri, OutputStream output) {
+            this(uri, output, "", LATEST_FILE_NAME);
+        }
+
+        WriteSession(Uri uri, OutputStream output, String path, String displayName) {
             this.uri = uri;
             this.output = output;
+            this.path = path;
+            this.displayName = displayName;
             this.size = 0;
+        }
+    }
+
+    private static class RepositoryDocument {
+        final Uri uri;
+        final String documentId;
+        final String displayName;
+        final String mimeType;
+        final long size;
+        final long lastModified;
+
+        RepositoryDocument(Uri uri, String documentId, String displayName, String mimeType, long size, long lastModified) {
+            this.uri = uri;
+            this.documentId = documentId;
+            this.displayName = displayName;
+            this.mimeType = mimeType;
+            this.size = size;
+            this.lastModified = lastModified;
         }
     }
 
@@ -507,6 +536,229 @@ public class NativeAutoBackupPlugin extends Plugin {
         });
     }
 
+    @PluginMethod
+    public void ensureRepository(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri rootUri = documentUriForTree(Uri.parse(treeUriText));
+                ensureDirectory(rootUri, repositoryName);
+
+                JSObject response = new JSObject();
+                response.put("folderName", prefs().getString(KEY_FOLDER_NAME, null));
+                response.put("repositoryName", repositoryName);
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "创建自动备份仓库失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void listRepositoryFiles(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String directory = call.getString("directory", "");
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri directoryUri = resolveRepositoryDirectory(Uri.parse(treeUriText), repositoryName, directory, false);
+                JSArray files = directoryUri == null ? new JSArray() : listRepositoryDocuments(directoryUri, directory);
+                JSObject response = new JSObject();
+                response.put("files", files);
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "读取自动备份仓库目录失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void beginRepositoryFileWrite(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String path = normalizeRepositoryPath(call.getString("path", ""));
+        String mimeType = call.getString("mimeType", mimeTypeForPath(path));
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+        if (path.isEmpty()) {
+            call.reject("缺少自动备份仓库文件路径。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri treeUri = Uri.parse(treeUriText);
+                Uri fileUri = findOrCreateRepositoryFile(treeUri, repositoryName, path, mimeType);
+                OutputStream output = getContext().getContentResolver().openOutputStream(fileUri, "wt");
+                if (output == null) {
+                    throw new IllegalStateException("无法打开自动备份仓库文件写入流。");
+                }
+
+                String sessionId = UUID.randomUUID().toString();
+                writeSessions.put(sessionId, new WriteSession(fileUri, output, path, lastPathSegment(path)));
+
+                JSObject response = new JSObject();
+                response.put("sessionId", sessionId);
+                response.put("path", path);
+                response.put("uri", fileUri.toString());
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "开始写入自动备份仓库文件失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void appendRepositoryFileWrite(PluginCall call) {
+        appendWriteLatest(call);
+    }
+
+    @PluginMethod
+    public void finishRepositoryFileWrite(PluginCall call) {
+        String sessionId = call.getString("sessionId");
+        if (sessionId == null || sessionId.isEmpty()) {
+            call.reject("缺少自动备份仓库写入会话。");
+            return;
+        }
+
+        WriteSession session = writeSessions.remove(sessionId);
+        if (session == null) {
+            call.reject("自动备份仓库写入会话已失效。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                session.output.flush();
+                session.output.close();
+                RepositoryDocument document = readDocument(session.uri);
+                long size = document.size >= 0 ? document.size : session.size;
+                if (size < 0) {
+                    throw new IllegalStateException("无法验证自动备份仓库文件大小：" + session.path);
+                }
+
+                JSObject response = new JSObject();
+                response.put("path", session.path);
+                response.put("displayName", document.displayName != null ? document.displayName : session.displayName);
+                response.put("size", size);
+                response.put("uri", session.uri.toString());
+                response.put("lastModified", document.lastModified);
+                call.resolve(response);
+            } catch (Exception error) {
+                closeQuietly(session.output);
+                call.reject(error.getMessage() != null ? error.getMessage() : "完成自动备份仓库文件写入失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelRepositoryFileWrite(PluginCall call) {
+        cancelWriteLatest(call);
+    }
+
+    @PluginMethod
+    public void readRepositoryTextFile(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String path = normalizeRepositoryPath(call.getString("path", ""));
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+        if (path.isEmpty()) {
+            call.reject("缺少自动备份仓库文件路径。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri fileUri = resolveRepositoryFile(Uri.parse(treeUriText), repositoryName, path, true);
+                byte[] bytes = readAllBytes(fileUri);
+                JSObject response = new JSObject();
+                response.put("text", new String(bytes, StandardCharsets.UTF_8));
+                response.put("size", bytes.length);
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "读取自动备份仓库文本失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void readRepositoryFileChunk(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String path = normalizeRepositoryPath(call.getString("path", ""));
+        int offset = call.getInt("offset", 0);
+        int length = call.getInt("length", 768 * 1024);
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+        if (path.isEmpty()) {
+            call.reject("缺少自动备份仓库文件路径。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri fileUri = resolveRepositoryFile(Uri.parse(treeUriText), repositoryName, path, true);
+                byte[] bytes = readChunk(fileUri, Math.max(0, offset), Math.max(1, Math.min(length, 2 * 1024 * 1024)));
+                RepositoryDocument document = readDocument(fileUri);
+                long size = document.size;
+                boolean done = size >= 0 ? offset + bytes.length >= size : bytes.length == 0;
+
+                JSObject response = new JSObject();
+                response.put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                response.put("bytesRead", bytes.length);
+                response.put("done", done);
+                call.resolve(response);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "读取自动备份仓库文件分块失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void deleteRepositoryFile(PluginCall call) {
+        String repositoryName = safePathSegment(call.getString("repositoryName", "study-journal-backup"));
+        String path = normalizeRepositoryPath(call.getString("path", ""));
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            call.reject("尚未绑定自动备份文件夹。");
+            return;
+        }
+        if (path.isEmpty()) {
+            call.reject("缺少自动备份仓库文件路径。");
+            return;
+        }
+
+        execute(() -> {
+            try {
+                Uri fileUri = resolveRepositoryFile(Uri.parse(treeUriText), repositoryName, path, false);
+                if (fileUri != null) {
+                    DocumentsContract.deleteDocument(getContext().getContentResolver(), fileUri);
+                }
+                call.resolve();
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "删除自动备份仓库文件失败。", error);
+            }
+        });
+    }
+
     private ZipWriteSession zipWriteSession(PluginCall call) {
         String sessionId = call.getString("sessionId");
         ZipWriteSession session = zipWriteSessions.get(sessionId);
@@ -516,11 +768,265 @@ public class NativeAutoBackupPlugin extends Plugin {
         return session;
     }
 
+    private Uri boundRootDocumentUri() {
+        String treeUriText = prefs().getString(KEY_TREE_URI, null);
+        if (treeUriText == null) {
+            throw new IllegalStateException("尚未绑定自动备份文件夹。");
+        }
+        return documentUriForTree(Uri.parse(treeUriText));
+    }
+
     private Uri documentUriForTree(Uri treeUri) {
         return DocumentsContract.buildDocumentUriUsingTree(
             treeUri,
             DocumentsContract.getTreeDocumentId(treeUri)
         );
+    }
+
+    private RepositoryDocument findChild(Uri parentUri, String displayName) throws Exception {
+        Uri childrenUri = childrenUriForDocument(parentUri);
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(
+            childrenUri,
+            new String[] {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            },
+            null,
+            null,
+            null
+        )) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(1);
+                    if (displayName.equals(name)) {
+                        String documentId = cursor.getString(0);
+                        String mimeType = cursor.getString(2);
+                        long size = cursor.isNull(3) ? -1 : cursor.getLong(3);
+                        long lastModified = cursor.isNull(4) ? 0 : cursor.getLong(4);
+                        Uri uri = DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId);
+                        return new RepositoryDocument(uri, documentId, name, mimeType, size, lastModified);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private Uri ensureDirectory(Uri parentUri, String name) throws Exception {
+        String safeName = safePathSegment(name);
+        RepositoryDocument existing = findChild(parentUri, safeName);
+        if (existing != null) {
+            if (!DocumentsContract.Document.MIME_TYPE_DIR.equals(existing.mimeType)) {
+                throw new IllegalStateException("自动备份仓库路径已存在但不是文件夹：" + safeName);
+            }
+            return existing.uri;
+        }
+        Uri created = DocumentsContract.createDocument(
+            getContext().getContentResolver(),
+            parentUri,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            safeName
+        );
+        if (created == null) {
+            throw new IllegalStateException("无法创建自动备份仓库文件夹：" + safeName);
+        }
+        return created;
+    }
+
+    private Uri resolveRepositoryDirectory(Uri treeUri, String repositoryName, String directory, boolean create) throws Exception {
+        Uri current = create
+            ? ensureDirectory(documentUriForTree(treeUri), repositoryName)
+            : childDirectory(documentUriForTree(treeUri), repositoryName, false);
+        if (current == null) {
+            return null;
+        }
+
+        String normalized = normalizeRepositoryPath(directory);
+        if (normalized.isEmpty()) {
+            return current;
+        }
+
+        for (String segment : normalized.split("/")) {
+            if (segment.isEmpty()) {
+                continue;
+            }
+            current = create ? ensureDirectory(current, segment) : childDirectory(current, segment, false);
+            if (current == null) {
+                return null;
+            }
+        }
+        return current;
+    }
+
+    private Uri childDirectory(Uri parentUri, String name, boolean required) throws Exception {
+        RepositoryDocument child = findChild(parentUri, safePathSegment(name));
+        if (child == null) {
+            if (required) {
+                throw new IllegalStateException("自动备份仓库缺少文件夹：" + name);
+            }
+            return null;
+        }
+        if (!DocumentsContract.Document.MIME_TYPE_DIR.equals(child.mimeType)) {
+            throw new IllegalStateException("自动备份仓库路径不是文件夹：" + name);
+        }
+        return child.uri;
+    }
+
+    private Uri findOrCreateRepositoryFile(Uri treeUri, String repositoryName, String path, String mimeType) throws Exception {
+        String normalized = normalizeRepositoryPath(path);
+        String directory = parentPath(normalized);
+        String fileName = lastPathSegment(normalized);
+        Uri parentUri = resolveRepositoryDirectory(treeUri, repositoryName, directory, true);
+        RepositoryDocument existing = findChild(parentUri, fileName);
+        if (existing != null) {
+            if (DocumentsContract.Document.MIME_TYPE_DIR.equals(existing.mimeType)) {
+                throw new IllegalStateException("自动备份仓库目标路径是文件夹：" + normalized);
+            }
+            return existing.uri;
+        }
+        Uri created = DocumentsContract.createDocument(
+            getContext().getContentResolver(),
+            parentUri,
+            mimeType,
+            fileName
+        );
+        if (created == null) {
+            throw new IllegalStateException("无法创建自动备份仓库文件：" + normalized);
+        }
+        return created;
+    }
+
+    private Uri resolveRepositoryFile(Uri treeUri, String repositoryName, String path, boolean required) throws Exception {
+        String normalized = normalizeRepositoryPath(path);
+        String directory = parentPath(normalized);
+        String fileName = lastPathSegment(normalized);
+        Uri parentUri = resolveRepositoryDirectory(treeUri, repositoryName, directory, false);
+        if (parentUri == null) {
+            if (required) {
+                throw new IllegalStateException("自动备份仓库缺少文件夹：" + directory);
+            }
+            return null;
+        }
+        RepositoryDocument document = findChild(parentUri, fileName);
+        if (document == null) {
+            if (required) {
+                throw new IllegalStateException("自动备份仓库缺少文件：" + normalized);
+            }
+            return null;
+        }
+        if (DocumentsContract.Document.MIME_TYPE_DIR.equals(document.mimeType)) {
+            throw new IllegalStateException("自动备份仓库目标路径是文件夹：" + normalized);
+        }
+        return document.uri;
+    }
+
+    private JSArray listRepositoryDocuments(Uri directoryUri, String directory) throws Exception {
+        JSArray files = new JSArray();
+        Uri childrenUri = childrenUriForDocument(directoryUri);
+        String normalizedDirectory = normalizeRepositoryPath(directory);
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(
+            childrenUri,
+            new String[] {
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            },
+            null,
+            null,
+            null
+        )) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(0);
+                    long size = cursor.isNull(2) ? -1 : cursor.getLong(2);
+                    long lastModified = cursor.isNull(3) ? 0 : cursor.getLong(3);
+                    JSObject file = new JSObject();
+                    file.put("path", normalizedDirectory.isEmpty() ? name : normalizedDirectory + "/" + name);
+                    file.put("displayName", name);
+                    file.put("size", size);
+                    file.put("lastModified", lastModified);
+                    files.put(file);
+                }
+            }
+        }
+        return files;
+    }
+
+    private RepositoryDocument readDocument(Uri documentUri) throws Exception {
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(
+            documentUri,
+            new String[] {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            },
+            null,
+            null,
+            null
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String documentId = cursor.getString(0);
+                String name = cursor.getString(1);
+                String mimeType = cursor.getString(2);
+                long size = cursor.isNull(3) ? -1 : cursor.getLong(3);
+                long lastModified = cursor.isNull(4) ? 0 : cursor.getLong(4);
+                return new RepositoryDocument(documentUri, documentId, name, mimeType, size, lastModified);
+            }
+        }
+        throw new IllegalStateException("无法读取自动备份仓库文件信息。");
+    }
+
+    private byte[] readAllBytes(Uri fileUri) throws Exception {
+        try (InputStream input = getContext().getContentResolver().openInputStream(fileUri)) {
+            if (input == null) {
+                throw new IllegalStateException("无法打开自动备份仓库文件读取流。");
+            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private byte[] readChunk(Uri fileUri, int offset, int length) throws Exception {
+        try (InputStream input = getContext().getContentResolver().openInputStream(fileUri)) {
+            if (input == null) {
+                throw new IllegalStateException("无法打开自动备份仓库文件读取流。");
+            }
+            long skipped = 0;
+            while (skipped < offset) {
+                long step = input.skip(offset - skipped);
+                if (step <= 0) {
+                    if (input.read() == -1) {
+                        return new byte[0];
+                    }
+                    step = 1;
+                }
+                skipped += step;
+            }
+
+            ByteArrayOutputStream output = new ByteArrayOutputStream(length);
+            byte[] buffer = new byte[Math.min(length, 64 * 1024)];
+            int remaining = length;
+            while (remaining > 0) {
+                int read = input.read(buffer, 0, Math.min(buffer.length, remaining));
+                if (read == -1) {
+                    break;
+                }
+                output.write(buffer, 0, read);
+                remaining -= read;
+            }
+            return output.toByteArray();
+        }
     }
 
     private Uri childrenUriForDocument(Uri documentUri) {
@@ -694,5 +1200,82 @@ public class NativeAutoBackupPlugin extends Plugin {
             return LATEST_FILE_NAME;
         }
         return name.replaceAll("[\\\\/:*?\"<>|]+", "_");
+    }
+
+    private String safePathSegment(String name) {
+        String value = name == null ? "" : name.trim();
+        value = value.replaceAll("[\\\\/:*?\"<>|]+", "_");
+        value = value.replaceAll("\\s+", " ");
+        if (value.equals(".") || value.equals("..")) {
+            value = "_";
+        }
+        return value.isEmpty() ? "unnamed" : value;
+    }
+
+    private String normalizeRepositoryPath(String path) {
+        if (path == null) {
+            return "";
+        }
+        String normalized = path.replace("\\", "/").trim();
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        String[] parts = normalized.split("/");
+        StringBuilder builder = new StringBuilder();
+        for (String part : parts) {
+            if (part == null || part.trim().isEmpty() || part.equals(".") || part.equals("..")) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append('/');
+            }
+            builder.append(safePathSegment(part));
+        }
+        return builder.toString();
+    }
+
+    private String parentPath(String path) {
+        int slash = path.lastIndexOf('/');
+        return slash < 0 ? "" : path.substring(0, slash);
+    }
+
+    private String lastPathSegment(String path) {
+        int slash = path.lastIndexOf('/');
+        return safePathSegment(slash < 0 ? path : path.substring(slash + 1));
+    }
+
+    private String mimeTypeForPath(String path) {
+        String lower = path == null ? "" : path.toLowerCase();
+        if (lower.endsWith(".json")) {
+            return "application/json";
+        }
+        if (lower.endsWith(".txt") || lower.endsWith(".md")) {
+            return "text/plain";
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (lower.endsWith(".m4a")) {
+            return "audio/mp4";
+        }
+        if (lower.endsWith(".pdf")) {
+            return "application/pdf";
+        }
+        return "application/octet-stream";
     }
 }

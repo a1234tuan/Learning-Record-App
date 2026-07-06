@@ -5,7 +5,7 @@ import {
   canUseNativeAutoBackup,
   getNativeAutoBackupStatus,
 } from "./nativeAutoBackup";
-import { writeNativeAutoBackupStream } from "./nativeAutoBackupStreamService";
+import { writeNativeRepositoryBackup } from "./nativeRepositoryBackupService";
 
 interface DirectoryPickerWindow extends Window {
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
@@ -17,6 +17,11 @@ let webDirectoryHandle: FileSystemDirectoryHandle | undefined;
 export interface AutoBackupWriteResult {
   folderName?: string;
   size: number;
+  format?: "zip-latest" | "folder-repository-v1";
+  bytesWritten?: number;
+  repositorySize?: number;
+  assetCount?: number;
+  snapshotId?: string;
   uri?: string;
   displayName?: string;
   verifiedAt?: number;
@@ -60,8 +65,7 @@ export const autoBackupAdapter: AutoBackupAdapter = {
 
   async writeLatest(store: StorageAdapter): Promise<AutoBackupWriteResult> {
     if (canUseNativeAutoBackup()) {
-      const result = await writeNativeAutoBackupStream(store);
-      return result;
+      return writeNativeRepositoryBackup(store);
     }
     if (!webDirectoryHandle) {
       throw new Error("尚未绑定自动备份文件夹。");

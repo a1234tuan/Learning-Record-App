@@ -152,6 +152,33 @@ describe("autoBackupService", () => {
     expect(nextSettings.autoBackup?.lastError).toBeUndefined();
   });
 
+  it("persists repository backup metadata from Android incremental sync", async () => {
+    const store = makeStore();
+    const adapter = makeAdapter(true, {
+      folderName: "backup",
+      size: 12_345,
+      format: "folder-repository-v1",
+      bytesWritten: 456,
+      repositorySize: 12_345,
+      assetCount: 7,
+      snapshotId: "20260621T010000000Z",
+      displayName: "study-journal-backup",
+    });
+
+    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+
+    expect(nextSettings.autoBackup).toEqual(expect.objectContaining({
+      backupFormat: "folder-repository-v1",
+      lastBackupSize: 12_345,
+      lastBackupBytesWritten: 456,
+      lastBackupRepositorySize: 12_345,
+      lastBackupAssetCount: 7,
+      lastBackupSnapshotId: "20260621T010000000Z",
+      lastBackupFileName: "study-journal-backup",
+      lastError: undefined,
+    }));
+  });
+
   it("does not advance last backup time when the write result is empty", async () => {
     const previousBackupAt = "2026-06-20T00:00:00.000Z";
     const store = makeStore(settings(true, { lastBackupAt: previousBackupAt, lastBackupSize: 999 }));

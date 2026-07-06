@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { StorageAdapter } from "../types";
 import { autoBackupAdapter } from "./autoBackupAdapter";
-import { writeNativeAutoBackupStream } from "./nativeAutoBackupStreamService";
+import { writeNativeRepositoryBackup } from "./nativeRepositoryBackupService";
 
 vi.mock("./nativeAutoBackup", () => ({
   bindNativeAutoBackupFolder: vi.fn(async () => ({ folderName: "backup" })),
@@ -10,17 +10,21 @@ vi.mock("./nativeAutoBackup", () => ({
   getNativeAutoBackupStatus: vi.fn(async () => ({ bound: true, folderName: "backup" })),
 }));
 
-vi.mock("./nativeAutoBackupStreamService", () => ({
-  writeNativeAutoBackupStream: vi.fn(async () => ({ folderName: "backup", size: 9876 })),
+vi.mock("./nativeRepositoryBackupService", () => ({
+  writeNativeRepositoryBackup: vi.fn(async () => ({
+    folderName: "backup",
+    size: 9876,
+    format: "folder-repository-v1",
+  })),
 }));
 
 describe("autoBackupAdapter", () => {
-  it("uses the dedicated native auto backup stream writer on Android", async () => {
+  it("uses the native repository writer on Android", async () => {
     const store = {} as StorageAdapter;
 
     const result = await autoBackupAdapter.writeLatest(store);
 
-    expect(writeNativeAutoBackupStream).toHaveBeenCalledWith(store);
-    expect(result).toEqual({ folderName: "backup", size: 9876 });
+    expect(writeNativeRepositoryBackup).toHaveBeenCalledWith(store);
+    expect(result).toEqual({ folderName: "backup", size: 9876, format: "folder-repository-v1" });
   });
 });

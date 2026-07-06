@@ -268,8 +268,13 @@ export interface SubjectConfig extends BaseEntity {
 export interface AutoBackupSettings {
   enabled: boolean;
   folderName?: string;
+  backupFormat?: "zip-latest" | "folder-repository-v1";
   lastBackupAt?: ISODateTime;
   lastBackupSize?: number;
+  lastBackupBytesWritten?: number;
+  lastBackupRepositorySize?: number;
+  lastBackupAssetCount?: number;
+  lastBackupSnapshotId?: string;
   lastBackupFileName?: string;
   lastBackupUri?: string;
   lastBackupVerifiedAt?: ISODateTime;

@@ -1,5 +1,5 @@
 import { Archive, ArrowDown, ArrowLeft, ArrowUp, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Block, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { formatChineseDate, nowISO } from "../lib/date";
@@ -9,6 +9,8 @@ import {
   getSubjectCounts,
 } from "../lib/journalSelectors";
 import { RecordCard } from "../components/RecordCard";
+
+const MONTH_RECORD_STEP = 50;
 
 interface CategoriesPageProps {
   blocks: Block[];
@@ -26,6 +28,28 @@ interface CategoriesPageProps {
   reviewStatesByRecord?: Record<string, RecordReviewState>;
   onAddToReview?: (recordId: string) => void;
 }
+
+type MonthRecordGroup = {
+  month: string;
+  records: RecordBlock[];
+};
+
+const monthKey = (date: string) => date.slice(0, 7);
+
+const monthLabel = (month: string) => {
+  const [year, monthNumber] = month.split("-");
+  return `${year}年${monthNumber}月`;
+};
+
+const groupRecordsByMonth = (records: RecordBlock[]): MonthRecordGroup[] => {
+  const groups = new Map<string, RecordBlock[]>();
+  for (const record of records) {
+    const key = monthKey(record.date);
+    groups.set(key, [...(groups.get(key) ?? []), record]);
+  }
+  return Array.from(groups, ([month, monthRecords]) => ({ month, records: monthRecords }))
+    .sort((a, b) => b.month.localeCompare(a.month));
+};
 
 export const CategoriesPage = ({
   blocks,
@@ -55,6 +79,14 @@ export const CategoriesPage = ({
     () => (activeSubject ? getRecordsBySubject(records, activeSubject) : []),
     [activeSubject, records],
   );
+  const monthGroups = useMemo(() => groupRecordsByMonth(activeRecords), [activeRecords]);
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set());
+  const [monthVisibleCounts, setMonthVisibleCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setExpandedMonths(monthGroups[0] ? new Set([monthGroups[0].month]) : new Set());
+    setMonthVisibleCounts({});
+  }, [activeSubject, monthGroups]);
 
   const addSubject = async () => {
     const name = newSubject.trim();
@@ -159,6 +191,25 @@ export const CategoriesPage = ({
   };
 
   const categoryList = subjectCounts.filter((item) => !item.config?.archivedAt || item.count > 0);
+
+  const toggleMonth = (month: string) => {
+    setExpandedMonths((current) => {
+      const next = new Set(current);
+      if (next.has(month)) {
+        next.delete(month);
+      } else {
+        next.add(month);
+      }
+      return next;
+    });
+  };
+
+  const showMoreMonthRecords = (month: string) => {
+    setMonthVisibleCounts((current) => ({
+      ...current,
+      [month]: (current[month] ?? MONTH_RECORD_STEP) + MONTH_RECORD_STEP,
+    }));
+  };
 
   return (
     <main className="page categories-page">
@@ -302,19 +353,51 @@ export const CategoriesPage = ({
             </div>
           ) : (
             <div className="subject-record-timeline">
-              {activeRecords.map((record) => (
-                <div key={record.id} className="dated-record-row">
-                  <small>{formatChineseDate(record.date)}</small>
-                  <RecordCard
-                    record={record}
-                    onOpen={onOpenRecord}
-                    onAskAi={onAskAi}
-                    onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
-                    reviewState={reviewStatesByRecord[record.id]}
-                    onAddReview={() => onAddToReview(record.id)}
-                  />
-                </div>
-              ))}
+              {monthGroups.map((group) => {
+                const expanded = expandedMonths.has(group.month);
+                const visibleCount = monthVisibleCounts[group.month] ?? MONTH_RECORD_STEP;
+                const visibleRecords = group.records.slice(0, visibleCount);
+                const hiddenCount = group.records.length - visibleRecords.length;
+                return (
+                  <section key={group.month} className="subject-month-group">
+                    <button
+                      type="button"
+                      className="subject-month-toggle"
+                      onClick={() => toggleMonth(group.month)}
+                      aria-expanded={expanded}
+                    >
+                      <span>{monthLabel(group.month)}</span>
+                      <small>{group.records.length} 条</small>
+                    </button>
+                    {expanded && (
+                      <div className="subject-month-records">
+                        {visibleRecords.map((record) => (
+                          <div key={record.id} className="dated-record-row">
+                            <small>{formatChineseDate(record.date)}</small>
+                            <RecordCard
+                              record={record}
+                              onOpen={onOpenRecord}
+                              onAskAi={onAskAi}
+                              onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                              reviewState={reviewStatesByRecord[record.id]}
+                              onAddReview={() => onAddToReview(record.id)}
+                            />
+                          </div>
+                        ))}
+                        {hiddenCount > 0 && (
+                          <button
+                            type="button"
+                            className="secondary-button subject-month-more"
+                            onClick={() => showMoreMonthRecords(group.month)}
+                          >
+                            显示更多（剩余 {hiddenCount} 条）
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           )}
         </section>

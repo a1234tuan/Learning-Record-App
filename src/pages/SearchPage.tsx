@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Search } from "lucide-react";
 
 import type { Asset, Block, DayEntry } from "../types";
@@ -14,8 +14,29 @@ interface SearchPageProps {
   onOpenRecord?: (recordId: string, assetId?: string) => void;
 }
 
+const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_RESULT_LIMIT = 200;
+
 export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBack, onOpenRecord }: SearchPageProps) => {
-  const results = useMemo(() => searchAll(query, entries, blocks, assets), [assets, blocks, entries, query]);
+  const [deferredQuery, setDeferredQuery] = useState(query);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setDeferredQuery("");
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setDeferredQuery(query), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const rawResults = useMemo(
+    () => deferredQuery.trim()
+      ? searchAll(deferredQuery, entries, blocks, assets, SEARCH_RESULT_LIMIT + 1)
+      : [],
+    [assets, blocks, deferredQuery, entries],
+  );
+  const results = rawResults.slice(0, SEARCH_RESULT_LIMIT);
+  const hasMoreResults = rawResults.length > SEARCH_RESULT_LIMIT;
 
   return (
     <main className="page search-page">
@@ -40,6 +61,9 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBa
         />
       </label>
       <section className="search-results">
+        {hasMoreResults && (
+          <p className="status-message">结果较多，仅显示前 {SEARCH_RESULT_LIMIT} 条，请缩小关键词。</p>
+        )}
         {results.map((result) => (
           <button
             key={`${result.type}-${result.id}`}

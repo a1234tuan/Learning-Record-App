@@ -1,10 +1,11 @@
-import { Download, Upload } from "lucide-react";
+import { DatabaseBackup, Download, Upload } from "lucide-react";
 import { useState } from "react";
 
 import type { AppSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary } from "../types";
 import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
 import { importAndRestoreSnapshot } from "../services/importRestoreService";
 import { nativeBackupAdapter } from "../services/nativeBackupAdapter";
+import { restoreNativeRepositoryBackup } from "../services/nativeRepositoryBackupService";
 import { storage } from "../services/storageAdapter";
 import { manualZipSyncAdapter } from "../services/syncAdapters";
 import { isNativePlatform } from "../lib/platform";
@@ -75,10 +76,10 @@ const ImportStatusCard = ({ status }: { status: ImportStatus }) => {
 export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
   const [message, setMessage] = useState("");
   const [importStatus, setImportStatus] = useState<ImportStatus>({ state: "idle" });
-  const [busy, setBusy] = useState<ExportKind | "import" | null>(null);
+  const [busy, setBusy] = useState<ExportKind | "import" | "repository-import" | null>(null);
   const native = isNativePlatform();
 
-  const run = async (action: ExportKind | "import", task: () => Promise<string | void>) => {
+  const run = async (action: ExportKind | "import" | "repository-import", task: () => Promise<string | void>) => {
     setBusy(action);
     setMessage("");
     try {
@@ -164,6 +165,59 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
       }
     });
 
+  const importRepository = () =>
+    run("repository-import", async () => {
+      setImportStatus({ state: "idle" });
+      const ok = window.confirm("从自动备份文件夹恢复会覆盖当前本地数据。请确认已绑定正确的自动备份文件夹。");
+      if (!ok) {
+        setImportStatus({ state: "cancelled", title: "已取消恢复", detail: "没有修改当前本地数据。" });
+        return;
+      }
+      let activeSummary: ImportSummary | undefined;
+      setImportStatus({ state: "parsing", title: "检查自动备份仓库", detail: "正在校验 manifest、snapshot 和资源文件。" });
+      try {
+        const summary = await restoreNativeRepositoryBackup(storage, {
+          onProgress: (progress) => {
+            if (progress.stage === "restoring" && activeSummary) {
+              setImportStatus({
+                state: "restoring",
+                title: "正在恢复数据",
+                detail: progressDetail(progress),
+                summary: activeSummary,
+              });
+              return;
+            }
+            if (progress.stage === "assets" && activeSummary) {
+              setImportStatus({
+                state: "restoring",
+                title: "正在恢复资源",
+                detail: progressDetail(progress),
+                summary: activeSummary,
+              });
+              return;
+            }
+            setImportStatus({
+              state: "parsing",
+              title: progress.stage === "indexing" ? "检查自动备份仓库" : "正在解析仓库快照",
+              detail: progressDetail(progress),
+            });
+          },
+        });
+        activeSummary = summary;
+        setImportStatus({
+          state: "success",
+          title: "仓库恢复成功",
+          detail: `${formatImportSummary(summary)} 备份版本 v${summary.version}。`,
+          summary,
+        });
+        await onRestored();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "自动备份仓库恢复失败。";
+        setImportStatus({ state: "error", title: "仓库恢复失败", detail });
+        throw error;
+      }
+    });
+
   return (
     <main className="page backup-page">
       <PageHeader
@@ -192,13 +246,27 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
             <div>
               <Upload size={20} />
               <h3>导入恢复</h3>
-              <p>只接受完整备份 zip。导入会覆盖当前本地数据，导入前请先备份。</p>
+              <p>只接受完整备份 zip。导入会覆盖当前本地数据，512MB 以上建议优先用自动备份文件夹恢复。</p>
             </div>
             <button type="button" className="secondary-button" onClick={importZip} disabled={busy !== null}>
               <Upload size={18} />
               {busy === "import" ? "导入中..." : "从 zip 导入"}
             </button>
           </SurfaceCard>
+
+          {native && (
+            <SurfaceCard className="more-action-card backup-action-card" variant="raised">
+              <div>
+                <DatabaseBackup size={20} />
+                <h3>自动备份文件夹恢复</h3>
+                <p>从已绑定的增量仓库恢复。恢复前会先校验快照和资源完整性，适合大资源量备份。</p>
+              </div>
+              <button type="button" className="secondary-button" onClick={importRepository} disabled={busy !== null}>
+                <DatabaseBackup size={18} />
+                {busy === "repository-import" ? "恢复中..." : "从文件夹恢复"}
+              </button>
+            </SurfaceCard>
+          )}
         </div>
         <ImportStatusCard status={importStatus} />
       </section>

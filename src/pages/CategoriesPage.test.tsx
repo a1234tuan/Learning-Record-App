@@ -17,30 +17,35 @@ const subjects: SubjectConfig[] = [
 
 type SaveSubjectsMock = Mock<(subjects: SubjectConfig[]) => Promise<void>>;
 
-const record = (subject: string): RecordBlock => ({
-  id: `record-${subject}`,
+const record = (subject: string, overrides: Partial<RecordBlock> = {}): RecordBlock => ({
+  id: overrides.id ?? `record-${subject}`,
   createdAt: stamp,
   updatedAt: stamp,
   type: "record",
-  date: "2026-06-21",
-  order: 0,
+  date: overrides.date ?? "2026-06-21",
+  order: overrides.order ?? 0,
   subject,
-  title: `${subject}记录`,
+  title: overrides.title ?? `${subject}记录`,
   contentHtml: "<p></p>",
   assets: [],
   formulas: [],
   mistakeRefs: [],
+  ...overrides,
 });
 
 const createSaveSubjectsMock = (): SaveSubjectsMock =>
   vi.fn(async (_subjects: SubjectConfig[]) => undefined);
 
-const renderPage = (blocks: Block[] = [], onSaveSubjects: SaveSubjectsMock = createSaveSubjectsMock()) => render(
+const renderPage = (
+  blocks: Block[] = [],
+  onSaveSubjects: SaveSubjectsMock = createSaveSubjectsMock(),
+  options: { activeSubject?: string | null; managing?: boolean } = {},
+) => render(
   <CategoriesPage
     blocks={blocks}
     subjects={subjects}
-    activeSubject={null}
-    managing
+    activeSubject={options.activeSubject ?? null}
+    managing={options.managing ?? true}
     onActiveSubjectChange={vi.fn()}
     onManagingChange={vi.fn()}
     onOpenRecord={vi.fn()}
@@ -89,5 +94,38 @@ describe("CategoriesPage", () => {
     expect(onSaveSubjects).not.toHaveBeenCalled();
     const mathRow = screen.getByText("数学").closest(".subject-manager-row");
     expect(mathRow).toHaveTextContent("该学科已有学习记录，不能直接删除。可以先归档、改名，或把记录迁移到其他学科。");
+  });
+
+  it("groups subject records by month and only renders the first page of each expanded month", () => {
+    const julyRecords = Array.from({ length: 60 }, (_, index) =>
+      record("数学", {
+        id: `july-${index}`,
+        date: `2026-07-${String((index % 28) + 1).padStart(2, "0")}`,
+        order: index,
+        title: `七月记录 ${index + 1}`,
+      }),
+    );
+    const juneRecords = Array.from({ length: 10 }, (_, index) =>
+      record("数学", {
+        id: `june-${index}`,
+        date: `2026-06-${String((index % 28) + 1).padStart(2, "0")}`,
+        order: index,
+        title: `六月记录 ${index + 1}`,
+      }),
+    );
+
+    renderPage([...juneRecords, ...julyRecords], createSaveSubjectsMock(), {
+      activeSubject: "数学",
+      managing: false,
+    });
+
+    expect(screen.getByRole("button", { name: /2026年07月/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /2026年06月/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByText(/七月记录 /)).toHaveLength(50);
+    expect(screen.queryByText(/六月记录 /)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /显示更多/ }));
+
+    expect(screen.getAllByText(/七月记录 /)).toHaveLength(60);
   });
 });

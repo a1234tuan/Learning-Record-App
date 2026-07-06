@@ -19,6 +19,21 @@ export interface NativeAutoBackupFolderFile {
   lastModified?: number;
 }
 
+export interface NativeRepositoryFile {
+  path: string;
+  displayName: string;
+  size: number;
+  lastModified?: number;
+}
+
+export interface NativeRepositoryWriteResult {
+  path: string;
+  displayName: string;
+  size: number;
+  uri?: string;
+  lastModified?: number;
+}
+
 interface NativeAutoBackupPlugin {
   bindFolder(): Promise<{ folderName: string }>;
   isBound(): Promise<{ bound: boolean; folderName?: string }>;
@@ -65,6 +80,42 @@ interface NativeAutoBackupPlugin {
   diagnoseFolder(options: {
     limit: number;
   }): Promise<{ folderName?: string; files: NativeAutoBackupFolderFile[] }>;
+  ensureRepository(options: {
+    repositoryName: string;
+  }): Promise<{ folderName?: string; repositoryName: string }>;
+  listRepositoryFiles(options: {
+    repositoryName: string;
+    directory: string;
+  }): Promise<{ files: NativeRepositoryFile[] }>;
+  beginRepositoryFileWrite(options: {
+    repositoryName: string;
+    path: string;
+    mimeType: string;
+  }): Promise<{ sessionId: string; path: string; uri?: string }>;
+  appendRepositoryFileWrite(options: {
+    sessionId: string;
+    data: string;
+  }): Promise<{ size: number }>;
+  finishRepositoryFileWrite(options: {
+    sessionId: string;
+  }): Promise<NativeRepositoryWriteResult>;
+  cancelRepositoryFileWrite(options: {
+    sessionId: string;
+  }): Promise<void>;
+  readRepositoryTextFile(options: {
+    repositoryName: string;
+    path: string;
+  }): Promise<{ text: string; size: number }>;
+  readRepositoryFileChunk(options: {
+    repositoryName: string;
+    path: string;
+    offset: number;
+    length: number;
+  }): Promise<{ data: string; bytesRead: number; done: boolean }>;
+  deleteRepositoryFile(options: {
+    repositoryName: string;
+    path: string;
+  }): Promise<void>;
 }
 
 const NativeAutoBackup = registerPlugin<NativeAutoBackupPlugin>("NativeAutoBackup");
@@ -137,3 +188,55 @@ export const diagnoseNativeAutoBackupFolder = async (
   limit = 20,
 ): Promise<{ folderName?: string; files: NativeAutoBackupFolderFile[] }> =>
   NativeAutoBackup.diagnoseFolder({ limit });
+
+export const ensureNativeBackupRepository = async (
+  repositoryName: string,
+): Promise<{ folderName?: string; repositoryName: string }> =>
+  NativeAutoBackup.ensureRepository({ repositoryName });
+
+export const listNativeBackupRepositoryFiles = async (
+  repositoryName: string,
+  directory: string,
+): Promise<NativeRepositoryFile[]> =>
+  (await NativeAutoBackup.listRepositoryFiles({ repositoryName, directory })).files;
+
+export const beginNativeBackupRepositoryFileWrite = async (
+  repositoryName: string,
+  path: string,
+  mimeType: string,
+): Promise<{ sessionId: string; path: string; uri?: string }> =>
+  NativeAutoBackup.beginRepositoryFileWrite({ repositoryName, path, mimeType });
+
+export const appendNativeBackupRepositoryFileWrite = async (
+  sessionId: string,
+  data: string,
+): Promise<{ size: number }> =>
+  NativeAutoBackup.appendRepositoryFileWrite({ sessionId, data });
+
+export const finishNativeBackupRepositoryFileWrite = async (
+  sessionId: string,
+): Promise<NativeRepositoryWriteResult> =>
+  NativeAutoBackup.finishRepositoryFileWrite({ sessionId });
+
+export const cancelNativeBackupRepositoryFileWrite = async (sessionId: string): Promise<void> =>
+  NativeAutoBackup.cancelRepositoryFileWrite({ sessionId });
+
+export const readNativeBackupRepositoryTextFile = async (
+  repositoryName: string,
+  path: string,
+): Promise<{ text: string; size: number }> =>
+  NativeAutoBackup.readRepositoryTextFile({ repositoryName, path });
+
+export const readNativeBackupRepositoryFileChunk = async (
+  repositoryName: string,
+  path: string,
+  offset: number,
+  length: number,
+): Promise<{ data: string; bytesRead: number; done: boolean }> =>
+  NativeAutoBackup.readRepositoryFileChunk({ repositoryName, path, offset, length });
+
+export const deleteNativeBackupRepositoryFile = async (
+  repositoryName: string,
+  path: string,
+): Promise<void> =>
+  NativeAutoBackup.deleteRepositoryFile({ repositoryName, path });

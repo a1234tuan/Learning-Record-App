@@ -915,6 +915,45 @@ button:disabled {
   color: var(--primary-strong);
 }
 
+.subject-month-group {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.subject-month-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+}
+
+.subject-month-toggle span {
+  font-weight: 800;
+}
+
+.subject-month-toggle small {
+  color: var(--muted);
+}
+
+.subject-month-records {
+  display: grid;
+  gap: 12px;
+}
+
+.subject-month-more {
+  width: fit-content;
+  justify-self: center;
+}
+
 .subject-manager {
   display: grid;
   gap: 12px;
@@ -2010,7 +2049,7 @@ button:disabled {
 
 .auto-backup-status {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
