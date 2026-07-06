@@ -4,6 +4,10 @@
 
 它不是单纯的闪卡软件，也不是通用协作文档。学习日志把“每天到底学了什么、哪里没懂、什么时候该回头看、如何用 AI 检查自己有没有真正掌握”放进同一条个人学习闭环里。
 
+## 下载
+
+Android APK 请前往 [GitHub Releases](https://github.com/a1234tuan/Learning-Record-App/releases) 下载。
+
 ## 产品定位
 
 学习日志面向长期自学、备考、课程复盘和个人知识沉淀场景：
@@ -23,6 +27,24 @@
 - **录音资料库**：集中查看日志中引用过的录音，支持搜索、播放、倍速和循环。
 - **Android 大资源备份**：支持自动备份文件夹仓库，资源独立保存，只同步新增或缺失资源，并保留最近 5 个快照。
 - **本地优先**：没有账号系统，核心数据保存在本机；用户自行选择是否配置 AI、OCR 和备份。
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/today.png" width="220" alt="今日记录" />
+  <img src="docs/images/editor.png" width="220" alt="富编辑器" />
+  <img src="docs/images/review.png" width="220" alt="混合复习" />
+</p>
+
+<p align="center">
+  <img src="docs/images/review2.png" width="220" alt="复习管理" />
+  <img src="docs/images/ai-chat.png" width="220" alt="AI 问答" />
+  <img src="docs/images/ai-chat2.png" width="220" alt="AI 追问" />
+</p>
+
+<p align="center">
+  <img src="docs/images/backup.png" width="220" alt="备份恢复" />
+</p>
 
 ## 功能概览
 
@@ -146,7 +168,7 @@ src/
   styles/       主题、布局、页面和组件样式
 android/        Capacitor Android 工程
 scripts/        Android 打包辅助脚本
-docs/           项目文档
+docs/           项目图片与文档
 ```
 
 ## 常用命令
@@ -193,7 +215,6 @@ npm run android:build:release
 - AI 看图、长上下文和输出质量取决于模型供应商与 API 兼容性。
 - 单个超大资源文件仍可能受 Android WebView、IndexedDB、Blob 和设备内存限制。
 
-## 开源状态
+## 许可证
 
-开源前请先确认许可证。推荐在仓库根目录添加 `LICENSE` 文件，例如 MIT、Apache-2.0 或 GPL 系列之一。没有许可证时，即使代码公开，也不等于其他人可以自由使用、修改和分发。
-
+本项目使用 MIT License，详见 [LICENSE](LICENSE)。
