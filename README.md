@@ -197,4 +197,3 @@ npm run android:build:release
 
 开源前请先确认许可证。推荐在仓库根目录添加 `LICENSE` 文件，例如 MIT、Apache-2.0 或 GPL 系列之一。没有许可证时，即使代码公开，也不等于其他人可以自由使用、修改和分发。
 
-仓库清理和 GitHub 发布建议见 [docs/OPEN_SOURCE_RELEASE.md](docs/OPEN_SOURCE_RELEASE.md)。
