@@ -30,21 +30,21 @@ Android APK 请前往 [GitHub Releases](https://github.com/a1234tuan/Learning-Re
 
 ## 界面预览
 
-<p align="center">
-  <img src="docs/images/today.png" width="220" alt="今日记录" />
-  <img src="docs/images/editor.png" width="220" alt="富编辑器" />
-  <img src="docs/images/review.png" width="220" alt="混合复习" />
-</p>
+| 今日记录 | 富编辑器 |
+| --- | --- |
+| <img src="docs/images/today.png" width="320" alt="今日记录" /> | <img src="docs/images/editor.png" width="320" alt="富编辑器" /> |
 
-<p align="center">
-  <img src="docs/images/review2.png" width="220" alt="复习管理" />
-  <img src="docs/images/ai-chat.png" width="220" alt="AI 问答" />
-  <img src="docs/images/ai-chat2.png" width="220" alt="AI 追问" />
-</p>
+| 混合复习 | 复习管理 |
+| --- | --- |
+| <img src="docs/images/review.png" width="320" alt="混合复习" /> | <img src="docs/images/review2.png" width="320" alt="复习管理" /> |
 
-<p align="center">
-  <img src="docs/images/backup.png" width="220" alt="备份恢复" />
-</p>
+| AI 问答 | AI 追问 |
+| --- | --- |
+| <img src="docs/images/ai-chat.png" width="320" alt="AI 问答" /> | <img src="docs/images/ai-chat2.png" width="320" alt="AI 追问" /> |
+
+| 备份恢复 |
+| --- |
+| <img src="docs/images/backup.png" width="320" alt="备份恢复" /> |
 
 ## 功能概览
 
