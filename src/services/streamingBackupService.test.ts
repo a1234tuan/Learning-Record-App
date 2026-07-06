@@ -1,0 +1,154 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { StorageAdapter, StreamableBackupSnapshot } from "../types";
+import { NativeZipArchive } from "./nativeZipArchive";
+import { importNativeStreamableBackupAndRestore, writeNativeStreamableBackupSnapshot } from "./streamingBackupService";
+
+vi.mock("./nativeZipArchive", () => ({
+  canUseNativeZipArchive: () => true,
+  NativeZipArchive: {
+    beginExport: vi.fn(async () => ({ sessionId: "s1", uri: "file:///backup.zip" })),
+    beginEntry: vi.fn(),
+    appendEntry: vi.fn(),
+    finishEntry: vi.fn(),
+    finishExport: vi.fn(async () => ({ uri: "file:///backup.zip", size: 1 })),
+    cancelExport: vi.fn(),
+    beginImport: vi.fn(async () => ({ sessionId: "import-1", entries: ["data.json"] })),
+    readEntry: vi.fn(),
+    readEntryChunk: vi.fn(),
+    finishImport: vi.fn(),
+    cancelImport: vi.fn(),
+  },
+}));
+
+const decodeTextEntry = (data: string): string => decodeURIComponent(escape(atob(data)));
+const encodeTextEntry = (text: string): string => btoa(unescape(encodeURIComponent(text)));
+
+const stamp = "2026-06-21T00:00:00.000Z";
+
+const snapshot: StreamableBackupSnapshot = {
+  payload: {
+    manifest: {
+      format: "study-journal",
+      version: 4,
+      exportedAt: stamp,
+      appVersion: "0.1.0",
+      counts: {
+        entries: 1,
+        blocks: 1,
+        mistakes: 0,
+        assets: 0,
+        tags: 0,
+        reviews: 0,
+        studySessions: 0,
+      },
+    },
+    entries: [
+      {
+        id: "e1",
+        createdAt: stamp,
+        updatedAt: stamp,
+        date: "2026-06-21",
+        title: "2026-06-21",
+        tags: [],
+        pinned: false,
+        favorite: false,
+      },
+    ],
+    blocks: [
+      {
+        id: "r1",
+        createdAt: stamp,
+        updatedAt: stamp,
+        type: "record",
+        date: "2026-06-21",
+        order: 0,
+        subject: "数据结构",
+        title: "结构内容",
+        contentHtml: [
+          "<p>正文内容</p>",
+          '<record-comparison-table data-json=\'{"title":"链路表","columns":[{"id":"c1","label":"概念"},{"id":"c2","label":"作用"}],"rows":[{"id":"row1","cells":{"c1":"高亮块","c2":"写入 Markdown"}}]}\'></record-comparison-table>',
+          '<record-highlight-block data-tone="yellow"><p>黄色重点</p></record-highlight-block>',
+        ].join(""),
+        assets: [],
+        formulas: [],
+        mistakeRefs: [],
+      },
+    ],
+    recordDrafts: [],
+    mistakes: [],
+    tags: [],
+    reviews: [],
+    recordReviews: [],
+    recordReviewLogs: [],
+    recordReviewDayStats: [],
+    studySessions: [],
+    settings: {
+      id: "settings",
+      examDate: "2026-12-27",
+      theme: "system",
+      accentColor: "#2f6f5e",
+      backupReminderDays: 7,
+      fontScale: 1,
+      lineHeight: 1.7,
+      schemaVersion: 4,
+    },
+  },
+  assets: [],
+  recordDrafts: [],
+};
+
+describe("streaming backup", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("writes readable record body markdown into Android streamable entry files", async () => {
+    const writtenEntries = new Map<string, string>();
+    let currentPath = "";
+    vi.mocked(NativeZipArchive.beginEntry).mockImplementation(async ({ path }) => {
+      currentPath = path;
+    });
+    vi.mocked(NativeZipArchive.appendEntry).mockImplementation(async ({ data }) => {
+      writtenEntries.set(currentPath, `${writtenEntries.get(currentPath) ?? ""}${decodeTextEntry(data)}`);
+    });
+
+    await writeNativeStreamableBackupSnapshot(snapshot, "cache-share", vi.fn());
+
+    const markdown = writtenEntries.get("entries/2026-06-21.md");
+    expect(markdown).toContain("正文内容");
+    expect(markdown).toContain("| 概念 | 作用 |");
+    expect(markdown).toContain("| 高亮块 | 写入 Markdown |");
+    expect(markdown).toContain("> 浅黄色高亮");
+    expect(markdown).toContain("> 黄色重点");
+  });
+
+  it("creates subject configs for unknown subjects during Android streamable import", async () => {
+    const importedPayload = {
+      ...snapshot.payload,
+      blocks: [
+        {
+          ...snapshot.payload.blocks[0],
+          subject: "物理",
+          title: "物理记录",
+        },
+      ],
+      settings: {
+        ...snapshot.payload.settings,
+        subjects: [],
+      },
+      assets: [],
+    };
+    vi.mocked(NativeZipArchive.readEntry).mockResolvedValue({
+      data: encodeTextEntry(JSON.stringify(importedPayload)),
+    });
+    const store = {
+      restoreStreamableSnapshot: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await importNativeStreamableBackupAndRestore("content://backup.zip", store);
+
+    const restoredSnapshot = vi.mocked(store.restoreStreamableSnapshot).mock.calls[0][0];
+    expect(restoredSnapshot.payload.settings.subjects?.map((subject) => subject.name)).toContain("物理");
+  });
+});

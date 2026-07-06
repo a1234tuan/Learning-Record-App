@@ -1,0 +1,504 @@
+.surface-card,
+.today-hero,
+.new-record-panel,
+.entry-meta-panel,
+.monthly-heatmap-panel,
+.day-log-card,
+.category-entry-card,
+.record-list-panel,
+.record-card,
+.more-action-card,
+.more-link-card,
+.ai-export-panel,
+.ai-settings-panel,
+.auto-backup-panel,
+.settings-card,
+.stats-card,
+.empty-state {
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--color-surface) 96%, var(--color-bg));
+  box-shadow: var(--shadow-soft);
+}
+
+.surface-card {
+  padding: 16px;
+}
+
+.surface-card-raised {
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.surface-card-interactive,
+.record-card,
+.day-log-card,
+.more-link-card,
+.category-entry-card {
+  --press-y: 0px;
+  --press-scale: 1;
+  transform: translateY(var(--press-y)) scale(var(--press-scale));
+  transform-origin: center;
+  transition:
+    transform var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    background var(--motion-fast) ease;
+}
+
+.surface-card-interactive:hover,
+.record-card:hover,
+.day-log-card:hover,
+.more-link-card:hover,
+.category-entry-card:hover {
+  --press-y: -1px;
+  border-color: color-mix(in srgb, var(--color-primary) 30%, var(--color-border));
+  box-shadow: 0 1px 2px rgba(40, 37, 31, 0.05), 0 10px 24px rgba(40, 37, 31, 0.08);
+}
+
+.record-card-main {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.record-favorite-button {
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
+}
+
+.action-button,
+.primary-button,
+.secondary-button,
+.subtle-button,
+.quick-insert button,
+.quick-insert label,
+.editor-file-button {
+  min-height: 40px;
+  border-radius: var(--radius-control);
+  transition:
+    transform var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.action-button-primary,
+.primary-button {
+  border-color: var(--color-primary-strong);
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.action-button-secondary,
+.secondary-button {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.action-button-primary:hover:not(:disabled),
+.primary-button:hover:not(:disabled) {
+  background: var(--color-primary-strong);
+}
+
+.action-button-secondary:hover:not(:disabled),
+.secondary-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface));
+}
+
+.action-button-ghost,
+.subtle-button {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  color: var(--color-primary-strong);
+}
+
+.action-button-danger,
+.icon-button.danger {
+  color: var(--color-danger);
+}
+
+.icon-button {
+  border-radius: var(--radius-control);
+  transition:
+    transform var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.action-button,
+.primary-button,
+.secondary-button,
+.subtle-button,
+.icon-button,
+.player-play-button,
+.play-mode-button,
+.bottom-nav button,
+.sidebar nav button,
+.subject-picker button,
+.editor-toolbar button,
+.quick-insert button,
+.quick-insert label,
+.editor-file-button,
+.surface-card-interactive,
+.record-card,
+.day-log-card,
+.more-link-card,
+.category-entry-card,
+.recording-folder-card,
+.recording-row-main,
+.list-row,
+.ai-settings-toggle,
+.record-ai-button,
+.attachment-link,
+.image-preview-button,
+.compact-image-button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:is(
+  .action-button,
+  .primary-button,
+  .secondary-button,
+  .subtle-button,
+  .icon-button,
+  .player-play-button,
+  .play-mode-button,
+  .bottom-nav button,
+  .sidebar nav button,
+  .subject-picker button,
+  .editor-toolbar button,
+  .quick-insert button,
+  .quick-insert label,
+  .editor-file-button,
+  .surface-card-interactive,
+  .record-card,
+  .day-log-card,
+  .list-row,
+  .record-card-main,
+  .record-ai-button,
+  .record-favorite-button,
+  .category-entry-card,
+  .category-card,
+  .recording-folder-card,
+  .recording-row-main,
+  .more-link-card,
+  .ai-settings-toggle,
+  .ai-session-list button,
+  .ai-preset-row button,
+  .month-grid button,
+  .attachment-link,
+  .image-preview-button,
+  .compact-image-button
+) {
+  --press-y: 0px;
+  --press-scale: 1;
+  touch-action: manipulation;
+  transform: translateY(var(--press-y)) scale(var(--press-scale));
+  transform-origin: center;
+  transition:
+    transform var(--motion-fast) cubic-bezier(0.2, 0.8, 0.2, 1),
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+:is(
+  .action-button,
+  .primary-button,
+  .secondary-button,
+  .subtle-button,
+  .icon-button,
+  .player-play-button,
+  .play-mode-button,
+  .bottom-nav button,
+  .subject-picker button,
+  .editor-toolbar button,
+  .quick-insert button,
+  .quick-insert label,
+  .editor-file-button,
+  .surface-card-interactive,
+  .record-card,
+  .day-log-card,
+  .list-row,
+  .record-card-main,
+  .record-ai-button,
+  .record-favorite-button,
+  .category-entry-card,
+  .category-card,
+  .recording-folder-card,
+  .recording-row-main,
+  .more-link-card,
+  .ai-settings-toggle,
+  .ai-session-list button,
+  .ai-preset-row button,
+  .month-grid button,
+  .attachment-link,
+  .image-preview-button,
+  .compact-image-button
+):active:not(:disabled) {
+  --press-y: -1px;
+  --press-scale: 1.015;
+}
+
+.sidebar nav button:active:not(:disabled) {
+  transform: translateX(2px) translateY(-1px) scale(1.015);
+}
+
+.list-row {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: var(--radius-card);
+  padding: 13px 14px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: left;
+}
+
+.list-row:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary) 4%, var(--color-surface));
+}
+
+.list-row-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
+.list-row-content {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.list-row-content strong,
+.list-row-content small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-row-content small,
+.list-row-meta {
+  color: var(--color-muted);
+}
+
+.subject-picker-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.subject-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subject-picker button {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 74%, transparent);
+  border-radius: var(--radius-pill);
+  padding: 0 13px;
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  color: var(--color-muted);
+  font-weight: 800;
+}
+
+.subject-picker button.active {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
+.subject-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.eyebrow {
+  color: var(--color-primary-strong);
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+}
+
+.bottom-nav button {
+  border-radius: var(--radius-pill);
+  transition:
+    transform var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.bottom-nav button.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.bottom-nav button.active svg {
+  stroke-width: 2.5;
+}
+
+.app-toast {
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, #20231f 92%, transparent);
+  box-shadow: var(--shadow-floating);
+}
+
+.status-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    .action-button,
+    .primary-button,
+    .secondary-button,
+    .subtle-button,
+    .icon-button,
+    .player-play-button,
+    .play-mode-button,
+    .bottom-nav button,
+    .sidebar nav button,
+    .subject-picker button,
+    .editor-toolbar button,
+    .quick-insert button,
+    .quick-insert label,
+    .editor-file-button,
+    .surface-card-interactive,
+    .record-card,
+    .day-log-card,
+    .list-row,
+    .record-card-main,
+    .record-ai-button,
+    .record-favorite-button,
+    .category-entry-card,
+    .category-card,
+    .recording-folder-card,
+    .recording-row-main,
+    .more-link-card,
+    .ai-settings-toggle,
+    .ai-session-list button,
+    .ai-preset-row button,
+    .month-grid button,
+    .attachment-link,
+    .image-preview-button,
+    .compact-image-button
+  ),
+  :is(
+    .surface-card-interactive,
+    .record-card,
+    .day-log-card,
+    .more-link-card,
+    .ai-settings-toggle,
+    .category-entry-card,
+    .recording-folder-card,
+    .sidebar nav button
+  ):hover,
+  .sidebar nav button:active:not(:disabled) {
+    transform: none;
+    transition: none;
+  }
+}
+
+.plain-input,
+.code-input,
+.formula-input,
+.quote-input,
+.mistake-form input,
+.mistake-form textarea,
+.mistake-form select,
+.settings-panel input,
+.settings-panel select,
+.search-box input,
+.study-session-form input,
+.study-session-form select,
+.subject-add-row input,
+.subject-manager-row input,
+.entry-meta-panel input,
+.record-editor-head > input,
+.record-asset-card input,
+.asset-card input,
+.formula-editor-card input,
+.formula-editor-card textarea,
+.compact-asset-actions select,
+.recording-rename-control input,
+.secret-input input,
+.preset-editor-card textarea,
+.review-search-box input,
+.review-manager-toolbar select,
+.structure-block-head input,
+.structure-block-head select,
+.collapse-block-head input,
+.structure-node-fields input,
+.structure-node-fields textarea,
+.comparison-column-editor input,
+.comparison-row-card textarea,
+.sticky-note textarea,
+.sticky-note select,
+.ai-input-bar textarea {
+  border-color: var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.plain-input:focus,
+.code-input:focus,
+.formula-input:focus,
+.quote-input:focus,
+.mistake-form input:focus,
+.mistake-form textarea:focus,
+.mistake-form select:focus,
+.settings-panel input:focus,
+.settings-panel select:focus,
+.search-box input:focus,
+.study-session-form input:focus,
+.study-session-form select:focus,
+.subject-add-row input:focus,
+.subject-manager-row input:focus,
+.entry-meta-panel input:focus,
+.record-editor-head > input:focus,
+.record-asset-card input:focus,
+.asset-card input:focus,
+.formula-editor-card input:focus,
+.formula-editor-card textarea:focus,
+.compact-asset-actions select:focus,
+.recording-rename-control input:focus,
+.secret-input input:focus,
+.preset-editor-card textarea:focus,
+.review-search-box input:focus,
+.review-manager-toolbar select:focus,
+.structure-block-head input:focus,
+.structure-block-head select:focus,
+.collapse-block-head input:focus,
+.structure-node-fields input:focus,
+.structure-node-fields textarea:focus,
+.comparison-column-editor input:focus,
+.comparison-row-card textarea:focus,
+.sticky-note textarea:focus,
+.sticky-note select:focus,
+.ai-input-bar textarea:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
