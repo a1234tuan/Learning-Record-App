@@ -508,6 +508,8 @@ export const ReviewPage = ({
               <section className="review-rating-bar">
                 {ratingConfig.map((item) => {
                   const Icon = item.icon;
+                  const preview = ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]);
+                  const intervalText = preview ? intervalLabel(preview.intervalDays) : undefined;
                   return (
                     <button
                       key={item.rating}
@@ -515,12 +517,12 @@ export const ReviewPage = ({
                       className={item.className}
                       disabled={Boolean(ratingRecordId)}
                       onClick={() => void rate(item.rating)}
+                      aria-label={intervalText ? `${item.label}，${intervalText}` : item.label}
+                      title={intervalText ? `${item.label} · ${intervalText}` : item.label}
                     >
                       <Icon size={18} />
                       <span>{item.label}</span>
-                      {ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]) && (
-                        <small>{intervalLabel(ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number])!.intervalDays)}</small>
-                      )}
+                      {intervalText && <small>{intervalText}</small>}
                     </button>
                   );
                 })}
