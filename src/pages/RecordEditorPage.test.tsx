@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Asset, RecordBlock, RecordDraft, RecordReviewState, SubjectConfig } from "../types";
+import type { Asset, RecordBlock, RecordDraft, RecordReviewLog, RecordReviewState, SubjectConfig } from "../types";
 
 const richEditorMock = vi.hoisted(() => {
   const state: {
@@ -127,6 +127,25 @@ const reviewState: RecordReviewState = {
   consecutiveRemembered: 1,
   totalReviews: 1,
 };
+
+const reviewLog = (patch: Partial<RecordReviewLog> = {}): RecordReviewLog => ({
+  id: "review-log-1",
+  recordId: record.id,
+  createdAt: stamp,
+  updatedAt: stamp,
+  rating: "good",
+  normalizedRating: "good",
+  reviewKind: "overview",
+  scheduler: "overview-v1",
+  reviewedAt: "2026-06-22T00:00:00.000Z",
+  previousEaseFactor: 2.5,
+  nextEaseFactor: 2.6,
+  previousRepetition: 1,
+  nextRepetition: 2,
+  previousIntervalDays: 1,
+  nextIntervalDays: 6,
+  ...patch,
+});
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -339,6 +358,18 @@ describe("RecordEditorPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /加入复习/ }).at(-1)!);
 
     await waitFor(() => expect(onAddToReview).toHaveBeenCalledWith(record.id));
+  });
+
+  it("shows review evaluation text in the read-only review history", async () => {
+    const { onGetDraft } = renderEditor({
+      initialEditing: false,
+      reviewState,
+      reviewLogs: [reviewLog({ evaluationText: "- 这里已经理解了互斥条件" })],
+    });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    expect(screen.getByText("- 这里已经理解了互斥条件")).toBeInTheDocument();
   });
 
   it("keeps editing and preserves a draft when the formal save fails", async () => {

@@ -245,8 +245,10 @@ export const useAppData = () => {
   );
 
   const rateRecordReview = useCallback(
-    async (recordId: string, rating: RecordReviewRating) => {
-      const saved = await storage.rateRecordReview(recordId, rating);
+    async (recordId: string, rating: RecordReviewRating, evaluationText?: string) => {
+      const saved = evaluationText === undefined
+        ? await storage.rateRecordReview(recordId, rating)
+        : await storage.rateRecordReview(recordId, rating, undefined, evaluationText);
       await refresh();
       if (saved) {
         await markAutoBackupDirty("record-review-rate");

@@ -781,8 +781,11 @@ export const RecordEditorPage = ({
                   <div className="record-review-history">
                     {reviewLogs.slice(0, 12).map((log) => (
                       <article key={log.id}>
-                        <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
-                        <small>间隔 {log.previousIntervalDays} 天 → {log.nextIntervalDays} 天</small>
+                        <div>
+                          <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
+                          <small>间隔 {log.previousIntervalDays} 天 → {log.nextIntervalDays} 天</small>
+                        </div>
+                        {log.evaluationText?.trim() && <p className="record-review-evaluation">{log.evaluationText}</p>}
                       </article>
                     ))}
                   </div>

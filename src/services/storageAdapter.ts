@@ -90,6 +90,11 @@ const updateDayStatForRatingCorrection = (
   };
 };
 
+const normalizeReviewEvaluationText = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
 const reviewStateBeforeLog = (current: RecordReviewState, log: RecordReviewLog): RecordReviewState => {
   const previousRating = normalizeLegacyRating(log.normalizedRating ?? log.rating);
   const previousConsecutiveRemembered = log.previousConsecutiveRemembered ??
@@ -605,7 +610,12 @@ export class DexieStorageAdapter implements StorageAdapter {
     return stat;
   }
 
-  async rateRecordReview(recordId: string, rating: RecordReviewRating, reviewedAt = nowISO()): Promise<RecordReviewState | undefined> {
+  async rateRecordReview(
+    recordId: string,
+    rating: RecordReviewRating,
+    reviewedAt = nowISO(),
+    evaluationText?: string,
+  ): Promise<RecordReviewState | undefined> {
     const record = await this.activeRecord(recordId);
     const review = await db.recordReviews.get(recordId);
     if (!review || !record || review.status !== "active") {
@@ -615,6 +625,8 @@ export class DexieStorageAdapter implements StorageAdapter {
       return undefined;
     }
     const reviewedDate = isoDateTimeToLocalDate(reviewedAt);
+    const hasEvaluationTextArgument = arguments.length >= 4;
+    const normalizedEvaluationText = normalizeReviewEvaluationText(evaluationText);
 
     const saved = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
       const current = await db.recordReviews.get(recordId);
@@ -641,6 +653,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         normalizedRating,
         reviewKind: nextState.reviewKind ?? DEFAULT_REVIEW_KIND,
         scheduler: nextState.scheduler ?? schedulerForKind(nextState.reviewKind ?? DEFAULT_REVIEW_KIND),
+        evaluationText: hasEvaluationTextArgument ? normalizedEvaluationText : correctionLog?.evaluationText,
         reviewedAt,
         previousEaseFactor: baseState.easeFactor,
         nextEaseFactor: nextState.easeFactor,
@@ -658,6 +671,9 @@ export class DexieStorageAdapter implements StorageAdapter {
         nextFsrsCard: nextState.fsrsCard,
         updatedAt: nowISO(),
       };
+      if (!log.evaluationText) {
+        delete log.evaluationText;
+      }
       await db.recordReviews.put(nextState);
       await db.recordReviewLogs.put(log);
       const existingStat = await db.recordReviewDayStats.get(reviewedDate);

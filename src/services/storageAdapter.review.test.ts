@@ -79,12 +79,12 @@ const review = (patch: Partial<RecordReviewState> = {}): RecordReviewState => ({
   ...patch,
 });
 
-const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[]) => {
+const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[], reviewLogs: RecordReviewLog[] = []) => {
   vi.resetModules();
   const fakeDb = {
     blocks: new MemoryTable<Block>(blocks),
     recordReviews: new MemoryTable<RecordReviewState>(reviews),
-    recordReviewLogs: new MemoryTable<RecordReviewLog>(),
+    recordReviewLogs: new MemoryTable<RecordReviewLog>(reviewLogs),
     recordReviewDayStats: new MemoryTable<RecordReviewDayStat>(),
     transaction: async (_mode: string, ...args: unknown[]) => {
       const callback = args.at(-1) as () => Promise<unknown>;
@@ -97,6 +97,25 @@ const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[]) => {
 };
 
 describe("DexieStorageAdapter record review invariants", () => {
+  it("stores trimmed evaluation text with the review log", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
+
+    await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z", "  - 新理解\n- 掌握更稳  ");
+
+    const logs = await fakeDb.recordReviewLogs.toArray();
+    expect(logs).toHaveLength(1);
+    expect(logs[0].evaluationText).toBe("- 新理解\n- 掌握更稳");
+  });
+
+  it("omits blank evaluation text from the review log", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
+
+    await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z", " \n ");
+
+    const logs = await fakeDb.recordReviewLogs.toArray();
+    expect(logs[0].evaluationText).toBeUndefined();
+  });
+
   it("removes an overdue card from today's due list after rating it", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
 
@@ -117,8 +136,8 @@ describe("DexieStorageAdapter record review invariants", () => {
   it("updates the same-day rating without duplicating logs or stats", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
 
-    await adapter.rateRecordReview("record-1", "remembered", "2026-07-02T16:30:00.000Z");
-    const secondResult = await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z");
+    await adapter.rateRecordReview("record-1", "remembered", "2026-07-02T16:30:00.000Z", "旧评价");
+    const secondResult = await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z", "更新评价");
 
     expect(secondResult?.lastReviewDate).toBe("2026-07-03");
     expect(secondResult?.totalReviews).toBe(3);
@@ -129,6 +148,7 @@ describe("DexieStorageAdapter record review invariants", () => {
     expect(logs[0]).toMatchObject({
       rating: "forgot",
       normalizedRating: "forgot",
+      evaluationText: "更新评价",
       previousTotalReviews: 2,
       nextReviewDate: "2026-07-04",
     });
@@ -138,6 +158,20 @@ describe("DexieStorageAdapter record review invariants", () => {
       forgotCount: 1,
       rememberedCount: 0,
       goodCount: 0,
+    });
+  });
+
+  it("keeps same-day evaluation text when correcting a rating without a new evaluation", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
+
+    await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z", "第一次评价");
+    await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z");
+
+    const logs = await fakeDb.recordReviewLogs.toArray();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      rating: "forgot",
+      evaluationText: "第一次评价",
     });
   });
 

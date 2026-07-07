@@ -109,6 +109,7 @@ export interface RecordReviewLog extends BaseEntity {
   normalizedRating?: Exclude<RecordReviewRating, "remembered">;
   reviewKind?: RecordReviewKind;
   scheduler?: RecordReviewScheduler;
+  evaluationText?: string;
   reviewedAt: ISODateTime;
   previousEaseFactor: number;
   nextEaseFactor: number;
@@ -606,7 +607,7 @@ export interface StorageAdapter {
   addRecordToReview(recordId: EntityId, kind?: RecordReviewKind): Promise<RecordReviewState | undefined>;
   addRecordsToReview(recordIds: EntityId[], kind?: RecordReviewKind): Promise<RecordReviewBulkResult>;
   setRecordReviewKind(recordId: EntityId, kind: RecordReviewKind): Promise<RecordReviewState | undefined>;
-  rateRecordReview(recordId: EntityId, rating: RecordReviewRating, reviewedAt?: ISODateTime): Promise<RecordReviewState | undefined>;
+  rateRecordReview(recordId: EntityId, rating: RecordReviewRating, reviewedAt?: ISODateTime, evaluationText?: string): Promise<RecordReviewState | undefined>;
   resetRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
   removeRecordFromReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
   listRecordReviewLogs(recordId?: EntityId): Promise<RecordReviewLog[]>;

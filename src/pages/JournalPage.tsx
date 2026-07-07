@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { CheckSquare, Search, Square, X } from "lucide-react";
 
-import type { Block, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { MonthlyHeatmap } from "../components/MonthlyHeatmap";
 import { DayLogCard } from "../components/DayLogCard";
 import { RecordCard } from "../components/RecordCard";
@@ -22,6 +22,7 @@ interface JournalPageProps {
   onAskAi: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
   reviewStatesByRecord?: Record<string, RecordReviewState>;
+  reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
   onAddToReview?: (recordId: string) => void;
   onAddManyToReview?: (recordIds: string[]) => Promise<string> | string;
 }
@@ -40,6 +41,7 @@ export const JournalPage = ({
   onAskAi,
   onToggleFavorite,
   reviewStatesByRecord = {},
+  reviewLogsByRecord = {},
   onAddToReview = () => undefined,
   onAddManyToReview = () => "",
 }: JournalPageProps) => {
@@ -125,6 +127,7 @@ export const JournalPage = ({
                   onAskAi={selecting ? undefined : onAskAi}
                   onToggleFavorite={selecting ? undefined : (favorite) => onToggleFavorite(record, favorite)}
                   reviewState={reviewStatesByRecord[record.id]}
+                  reviewLogs={reviewLogsByRecord[record.id]}
                   onAddReview={selecting ? undefined : () => onAddToReview(record.id)}
                 />
               </div>

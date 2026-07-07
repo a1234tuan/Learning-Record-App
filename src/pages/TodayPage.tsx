@@ -1,7 +1,7 @@
 import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
-import type { Block, DayEntry, RecordBlock, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Block, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
@@ -22,6 +22,7 @@ interface TodayPageProps {
   onAskAi?: (date: string) => void;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => void;
   reviewStatesByRecord?: Record<string, RecordReviewState>;
+  reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
   dueReviewStates?: RecordReviewState[];
   reviewTitlesByRecord?: Record<string, string>;
   onAddToReview?: (recordId: string) => void;
@@ -40,6 +41,7 @@ export const TodayPage = ({
   onAskAi,
   onToggleFavorite,
   reviewStatesByRecord = {},
+  reviewLogsByRecord = {},
   dueReviewStates = [],
   reviewTitlesByRecord = {},
   onAddToReview = () => undefined,
@@ -137,6 +139,7 @@ export const TodayPage = ({
               onAskAi={onAskAi}
               onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
               reviewState={reviewStatesByRecord[record.id]}
+              reviewLogs={reviewLogsByRecord[record.id]}
               onAddReview={() => onAddToReview(record.id)}
             />
           ))

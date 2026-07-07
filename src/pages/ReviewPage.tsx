@@ -1,7 +1,9 @@
 ﻿import {
+  ChevronDown,
   CheckCircle2,
   Edit3,
   Eye,
+  MessageSquare,
   PauseCircle,
   PlusCircle,
   RefreshCw,
@@ -13,16 +15,17 @@
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewKind, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
+import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
-import { todayISO } from "../lib/date";
+import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
 import {
   ACTIVE_REVIEW_RATINGS,
   REVIEW_DAILY_SUGGESTED_LIMIT,
   isReviewDueOn,
   previewReviewRatings,
+  ratingLabel,
   reviewKindLabel,
 } from "../lib/reviewScheduler";
 import type { ReviewMode } from "../lib/tabNavigation";
@@ -31,6 +34,7 @@ interface ReviewPageProps {
   records: RecordBlock[];
   dueReviews: RecordReviewState[];
   reviewStates: RecordReviewState[];
+  reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
   stats: RecordReviewStats | null;
   mode: ReviewMode;
   queueIds: string[];
@@ -39,7 +43,7 @@ interface ReviewPageProps {
   onQueueChange: (ids: string[]) => void;
   onCurrentRecordChange: (id?: string) => void;
   onEnsureDay: (date: string, dueCountAtFirstOpen: number) => Promise<unknown>;
-  onRate: (recordId: string, rating: RecordReviewRating) => Promise<void>;
+  onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
   onEditRecord: (record: RecordBlock) => void;
@@ -79,6 +83,42 @@ const intervalLabel = (days: number) => days <= 1 ? "明天" : `${days}天后`;
 const sameIds = (left: string[], right: string[]) =>
   left.length === right.length && left.every((id, index) => id === right[index]);
 
+const EMPTY_REVIEW_LOGS: RecordReviewLog[] = [];
+const REVIEW_EVALUATION_DRAFT_PREFIX = "study-journal-review-evaluation-draft:";
+
+const hasEvaluationText = (log: RecordReviewLog) => Boolean(log.evaluationText?.trim());
+
+const reviewEvaluationDraftKey = (recordId: string) => `${REVIEW_EVALUATION_DRAFT_PREFIX}${recordId}`;
+
+const readReviewEvaluationDraft = (recordId: string): string => {
+  try {
+    return window.localStorage.getItem(reviewEvaluationDraftKey(recordId)) ?? "";
+  } catch {
+    return "";
+  }
+};
+
+const writeReviewEvaluationDraft = (recordId: string, text: string) => {
+  try {
+    const key = reviewEvaluationDraftKey(recordId);
+    if (text.trim()) {
+      window.localStorage.setItem(key, text);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage may be unavailable in private contexts; the in-memory draft still works for this session.
+  }
+};
+
+const removeReviewEvaluationDraft = (recordId: string) => {
+  try {
+    window.localStorage.removeItem(reviewEvaluationDraftKey(recordId));
+  } catch {
+    // Ignore unavailable storage.
+  }
+};
+
 const suggestedDailyLimitIds = (reviews: RecordReviewState[], today: string) =>
   reviews
     .filter((review) => isReviewDueOn(review, today))
@@ -113,6 +153,7 @@ export const ReviewPage = ({
   records,
   dueReviews,
   reviewStates,
+  reviewLogsByRecord = {},
   stats,
   mode,
   queueIds,
@@ -139,6 +180,9 @@ export const ReviewPage = ({
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [ratingError, setRatingError] = useState("");
   const [showAllDue, setShowAllDue] = useState(false);
+  const [evaluationOpen, setEvaluationOpen] = useState(false);
+  const [evaluationDraft, setEvaluationDraft] = useState("");
+  const [evaluationDraftRecordId, setEvaluationDraftRecordId] = useState<string | undefined>();
   const today = todayISO();
   const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
   const reviewMap = useMemo(() => new Map(reviewStates.map((review) => [review.recordId, review])), [reviewStates]);
@@ -159,6 +203,11 @@ export const ReviewPage = ({
   const currentId = currentRecordId && effectiveQueue.includes(currentRecordId) ? currentRecordId : effectiveQueue[0];
   const currentRecord = currentId ? recordMap.get(currentId) : undefined;
   const currentReview = currentId ? queuedDueReviews.find((review) => review.recordId === currentId) : undefined;
+  const currentReviewLogs = currentId ? reviewLogsByRecord[currentId] ?? EMPTY_REVIEW_LOGS : EMPTY_REVIEW_LOGS;
+  const currentEvaluationLogs = useMemo(
+    () => currentReviewLogs.filter(hasEvaluationText),
+    [currentReviewLogs],
+  );
   const currentIndex = currentId ? effectiveQueue.indexOf(currentId) + 1 : 0;
   const overdueCount = availableDueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
   const todayCount = availableDueReviews.filter((review) => review.nextReviewDate === today).length;
@@ -232,6 +281,20 @@ export const ReviewPage = ({
   }, [today]);
 
   useEffect(() => {
+    const savedDraft = currentId ? readReviewEvaluationDraft(currentId) : "";
+    setEvaluationDraft(savedDraft);
+    setEvaluationDraftRecordId(currentId);
+    setEvaluationOpen(Boolean(savedDraft));
+  }, [currentId]);
+
+  useEffect(() => {
+    if (!currentId || evaluationDraftRecordId !== currentId) {
+      return;
+    }
+    writeReviewEvaluationDraft(currentId, evaluationDraft);
+  }, [currentId, evaluationDraft, evaluationDraftRecordId]);
+
+  useEffect(() => {
     setRatedRecordIds((current) => {
       const next = new Set(
         Array.from(current).filter((id) =>
@@ -253,13 +316,24 @@ export const ReviewPage = ({
     const previousQueue = effectiveQueue;
     const previousCurrentId = currentId;
     const nextQueue = effectiveQueue.filter((id) => id !== currentId);
+    const evaluationText = evaluationDraftRecordId === ratedId
+      ? evaluationDraft.trim()
+      : readReviewEvaluationDraft(ratedId).trim();
+    if (evaluationText) {
+      writeReviewEvaluationDraft(ratedId, evaluationText);
+    }
     setRatingError("");
     setRatingRecordId(ratedId);
     setRatedRecordIds((current) => new Set(current).add(ratedId));
     onQueueChange(nextQueue);
     onCurrentRecordChange(nextQueue[0]);
     try {
-      await onRate(ratedId, rating);
+      if (evaluationText) {
+        await onRate(ratedId, rating, evaluationText);
+      } else {
+        await onRate(ratedId, rating);
+      }
+      removeReviewEvaluationDraft(ratedId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
       setRatedRecordIds((current) => {
@@ -384,25 +458,73 @@ export const ReviewPage = ({
                 readOnly
               />
             </article>
-            <section className="review-rating-bar">
-              {ratingConfig.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.rating}
-                    type="button"
-                    className={item.className}
-                    disabled={Boolean(ratingRecordId)}
-                    onClick={() => void rate(item.rating)}
-                  >
-                    <Icon size={18} />
-                    <span>{item.label}</span>
-                    {ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]) && (
-                      <small>{intervalLabel(ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number])!.intervalDays)}</small>
+            <section className={`review-bottom-controls ${evaluationOpen ? "open" : ""}`}>
+              <section className="review-evaluation-panel" aria-label="复习评价">
+                <button
+                  type="button"
+                  className="review-evaluation-toggle"
+                  onClick={() => setEvaluationOpen((open) => !open)}
+                  aria-expanded={evaluationOpen}
+                >
+                  <MessageSquare size={17} />
+                  <span>
+                    <strong>本次评价</strong>
+                    <small>
+                      {evaluationDraft.trim()
+                        ? "草稿已保存"
+                        : currentEvaluationLogs.length > 0
+                          ? `${currentEvaluationLogs.length} 条历史评价`
+                          : "暂无评价"}
+                    </small>
+                  </span>
+                  <ChevronDown size={17} />
+                </button>
+                {evaluationOpen && (
+                  <div className="review-evaluation-body">
+                    <textarea
+                      value={evaluationDraft}
+                      onChange={(event) => setEvaluationDraft(event.target.value)}
+                      disabled={Boolean(ratingRecordId)}
+                      aria-label="本次复习评价"
+                      placeholder="新的理解、掌握程度、待补点..."
+                    />
+                    <div className="review-evaluation-state">
+                      <small>{evaluationDraft.trim() ? "评分后写入历史评价" : "评分时随卡片提交"}</small>
+                      {currentEvaluationLogs.length > 0 && <small>{currentEvaluationLogs.length} 条历史评价</small>}
+                    </div>
+                    {currentEvaluationLogs.length > 0 && (
+                      <div className="review-evaluation-history">
+                        {currentEvaluationLogs.slice(0, 8).map((log) => (
+                          <article key={log.id}>
+                            <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
+                            <p>{log.evaluationText}</p>
+                          </article>
+                        ))}
+                      </div>
                     )}
-                  </button>
-                );
-              })}
+                  </div>
+                )}
+              </section>
+              <section className="review-rating-bar">
+                {ratingConfig.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.rating}
+                      type="button"
+                      className={item.className}
+                      disabled={Boolean(ratingRecordId)}
+                      onClick={() => void rate(item.rating)}
+                    >
+                      <Icon size={18} />
+                      <span>{item.label}</span>
+                      {ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]) && (
+                        <small>{intervalLabel(ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number])!.intervalDays)}</small>
+                      )}
+                    </button>
+                  );
+                })}
+              </section>
             </section>
           </>
         )
@@ -441,6 +563,7 @@ export const ReviewPage = ({
               </div>
             ) : managedRecords.map((record) => {
               const review = reviewMap.get(record.id);
+              const hasEvaluation = (reviewLogsByRecord[record.id] ?? EMPTY_REVIEW_LOGS).some(hasEvaluationText);
               const status = reviewStatusLabel(review, today);
               const dueLabel = reviewDueLabel(review);
               const active = review?.status === "active";
@@ -450,7 +573,14 @@ export const ReviewPage = ({
                     <span className="record-subject-chip">{record.subject}</span>
                     <div>
                       <strong>{record.title}</strong>
-                      <small>{record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次</small>
+                      <small>
+                        {record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次
+                        {hasEvaluation && (
+                          <span className="review-evaluation-inline-indicator" title="有复习评价" aria-label="有复习评价">
+                            <MessageSquare size={14} />
+                          </span>
+                        )}
+                      </small>
                     </div>
                   </div>
                   <span className={`review-status-pill ${status === "新卡" || status === "已搁置" ? "new" : active ? "active" : "done"}`}>

@@ -450,6 +450,7 @@ export const App = () => {
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
             reviewStatesByRecord={recordReviewsByRecord}
+            reviewLogsByRecord={reviewLogsByRecord}
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
           />
         );
@@ -546,6 +547,7 @@ export const App = () => {
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
             reviewStatesByRecord={recordReviewsByRecord}
+            reviewLogsByRecord={reviewLogsByRecord}
             dueReviewStates={app.dueRecordReviews}
             reviewTitlesByRecord={recordTitlesById}
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
@@ -599,6 +601,7 @@ export const App = () => {
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
             reviewStatesByRecord={recordReviewsByRecord}
+            reviewLogsByRecord={reviewLogsByRecord}
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
             onAddManyToReview={async (recordIds) => {
               const result = await app.addRecordsToReview(recordIds);
@@ -628,6 +631,7 @@ export const App = () => {
             onSaveSubjects={app.saveSubjects}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
             reviewStatesByRecord={recordReviewsByRecord}
+            reviewLogsByRecord={reviewLogsByRecord}
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
           />
         );
@@ -639,6 +643,7 @@ export const App = () => {
             records={app.blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt)}
             dueReviews={app.dueRecordReviews}
             reviewStates={app.recordReviews}
+            reviewLogsByRecord={reviewLogsByRecord}
             stats={app.recordReviewStats}
             mode={tabMemory.review.mode}
             queueIds={tabMemory.review.queueIds}
@@ -661,8 +666,8 @@ export const App = () => {
               )
             }
             onEnsureDay={app.ensureRecordReviewDay}
-            onRate={async (recordId, rating) => {
-              await app.rateRecordReview(recordId, rating);
+            onRate={async (recordId, rating, evaluationText) => {
+              await app.rateRecordReview(recordId, rating, evaluationText);
             }}
             onRefresh={app.refresh}
             onOpenRecord={(record) => openRecordInTab(record, "review")}

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RecordBlock, RecordReviewState } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewState } from "../types";
 
 vi.mock("../lib/date", () => ({
   todayISO: () => "2026-07-03",
@@ -39,6 +39,25 @@ const review = (patch: Partial<RecordReviewState> = {}): RecordReviewState => ({
   ...patch,
 });
 
+const reviewLog = (patch: Partial<RecordReviewLog> = {}): RecordReviewLog => ({
+  id: "review-log-1",
+  recordId: record.id,
+  createdAt: "2026-06-01T00:00:00.000Z",
+  updatedAt: "2026-06-01T00:00:00.000Z",
+  rating: "good",
+  normalizedRating: "good",
+  reviewKind: "overview",
+  scheduler: "overview-v1",
+  reviewedAt: "2026-07-02T00:00:00.000Z",
+  previousEaseFactor: 2.5,
+  nextEaseFactor: 2.6,
+  previousRepetition: 1,
+  nextRepetition: 2,
+  previousIntervalDays: 1,
+  nextIntervalDays: 6,
+  ...patch,
+});
+
 describe("RecordCard", () => {
   it("keeps action buttons from opening the record", () => {
     const onOpen = vi.fn();
@@ -64,5 +83,19 @@ describe("RecordCard", () => {
     );
 
     expect(screen.getByRole("button", { name: /轻回看 07-02/ })).not.toHaveClass("due");
+  });
+
+  it("shows only an icon when the card has historical review evaluation", () => {
+    render(
+      <RecordCard
+        record={record}
+        onOpen={vi.fn()}
+        reviewState={review()}
+        reviewLogs={[reviewLog({ evaluationText: "历史评价正文" })]}
+      />,
+    );
+
+    expect(screen.getByLabelText("有复习评价")).toBeInTheDocument();
+    expect(screen.queryByText("历史评价正文")).not.toBeInTheDocument();
   });
 });

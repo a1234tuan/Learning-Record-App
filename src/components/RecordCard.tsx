@@ -1,6 +1,6 @@
-import { BrainCircuit, FileText, RefreshCw, Star } from "lucide-react";
+import { BrainCircuit, FileText, MessageSquare, RefreshCw, Star } from "lucide-react";
 
-import type { RecordBlock, RecordReviewState } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
 import { isReviewDueOn, reviewKindLabel } from "../lib/reviewScheduler";
 
@@ -10,6 +10,7 @@ interface RecordCardProps {
   onAskAi?: (date: string) => void;
   onToggleFavorite?: (favorite: boolean) => void;
   reviewState?: RecordReviewState;
+  reviewLogs?: RecordReviewLog[];
   onAddReview?: () => void;
 }
 
@@ -27,12 +28,13 @@ const compactReviewLabel = (review?: RecordReviewState): string => {
   return review.reviewKind === "memory" ? "记忆" : "回看";
 };
 
-export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewState, onAddReview }: RecordCardProps) => {
+export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewState, reviewLogs = [], onAddReview }: RecordCardProps) => {
   const assetText = record.assets.length > 0 ? `${record.assets.length} 个资源` : "无资源";
   const formulaText = record.formulas.length > 0 ? `${record.formulas.length} 个公式` : "无公式";
   const canAddReview = onAddReview && (!reviewState || reviewState.status === "removed" || reviewState.status === "mastered");
   const reviewActive = reviewState?.status === "active";
   const reviewDue = isReviewDueOn(reviewState, todayISO());
+  const hasReviewEvaluation = reviewLogs.some((log) => Boolean(log.evaluationText?.trim()));
 
   return (
     <article className="record-card">
@@ -76,6 +78,11 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
             >
               <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
             </button>
+          )}
+          {hasReviewEvaluation && (
+            <span className="record-evaluation-indicator" title="有复习评价" aria-label="有复习评价" role="img">
+              <MessageSquare size={15} />
+            </span>
           )}
         </div>
       </div>

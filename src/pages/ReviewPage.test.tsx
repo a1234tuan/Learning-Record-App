@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RecordBlock, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
 
 vi.mock("../components/RichTextEditor", () => ({
   RichTextEditor: () => <div data-testid="rich-editor" />,
@@ -46,6 +46,25 @@ const review = (recordId: string, patch: Partial<RecordReviewState> = {}): Recor
   nextReviewDate: "2026-07-02",
   consecutiveRemembered: 1,
   totalReviews: 2,
+  ...patch,
+});
+
+const reviewLog = (recordId: string, patch: Partial<RecordReviewLog> = {}): RecordReviewLog => ({
+  id: `log-${recordId}`,
+  recordId,
+  createdAt: stamp,
+  updatedAt: stamp,
+  rating: "good",
+  normalizedRating: "good",
+  reviewKind: "overview",
+  scheduler: "overview-v1",
+  reviewedAt: "2026-07-02T16:30:00.000Z",
+  previousEaseFactor: 2.5,
+  nextEaseFactor: 2.6,
+  previousRepetition: 1,
+  nextRepetition: 2,
+  previousIntervalDays: 1,
+  nextIntervalDays: 6,
   ...patch,
 });
 
@@ -114,6 +133,10 @@ const clickRating = (name: string | RegExp) => {
 };
 
 describe("ReviewPage", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("manages all record cards with deck, due date and review actions", () => {
     const { handlers } = renderReviewPage();
 
@@ -256,6 +279,65 @@ describe("ReviewPage", () => {
 
     expect(screen.queryByText("BFS 队列")).not.toBeInTheDocument();
     await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good"));
+  });
+
+  it("submits the current evaluation draft with the rating and clears the saved draft", async () => {
+    const onRate = vi.fn().mockResolvedValue(undefined);
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      queueIds: ["active"],
+      currentRecordId: "active",
+      onRate,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.change(screen.getByLabelText("本次复习评价"), {
+      target: { value: "- 新理解\n1. 掌握更稳" },
+    });
+    clickRating(/良好/);
+
+    await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good", "- 新理解\n1. 掌握更稳"));
+    expect(window.localStorage.getItem("study-journal-review-evaluation-draft:active")).toBeNull();
+  });
+
+  it("keeps the evaluation draft when rating fails", async () => {
+    const onRate = vi.fn().mockRejectedValue(new Error("数据库写入失败"));
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      queueIds: ["active"],
+      currentRecordId: "active",
+      onRate,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.change(screen.getByLabelText("本次复习评价"), {
+      target: { value: "这次还是容易混淆" },
+    });
+    clickRating(/良好/);
+
+    await waitFor(() => expect(screen.getByText(/复习评分失败/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("本次复习评价")).toHaveValue("这次还是容易混淆"));
+  });
+
+  it("shows historical evaluation text in the review evaluation panel", () => {
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      reviewLogsByRecord: {
+        active: [reviewLog("active", { evaluationText: "- 上次把页表和 TLB 关系理顺了" })],
+      },
+      queueIds: ["active"],
+      currentRecordId: "active",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+
+    expect(screen.getByText("- 上次把页表和 TLB 关系理顺了")).toBeInTheDocument();
   });
 
   it("disables rating buttons while a rating is in flight and avoids duplicate rate calls", async () => {
