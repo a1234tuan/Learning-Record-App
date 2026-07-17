@@ -191,6 +191,7 @@ export const ReviewPage = ({
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [undoHistory, setUndoHistory] = useState<ReviewUndoEntry[]>([]);
+  const [pendingUndoRestore, setPendingUndoRestore] = useState<ReviewUndoEntry | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [ratingError, setRatingError] = useState("");
   const [showAllDue, setShowAllDue] = useState(false);
@@ -265,17 +266,17 @@ export const ReviewPage = ({
   }, [today]);
 
   useEffect(() => {
-    if (showAllDue) {
+    if (showAllDue || pendingUndoRestore) {
       return;
     }
     const nextDailyLimitIds = suggestedDailyLimitIds(dueReviews, today);
     if (!sameIds(dailyLimitIds, nextDailyLimitIds)) {
       setDailyLimitIds(nextDailyLimitIds);
     }
-  }, [dailyLimitIds, dueReviews, showAllDue, today]);
+  }, [dailyLimitIds, dueReviews, pendingUndoRestore, showAllDue, today]);
 
   useEffect(() => {
-    if (!queueReady) {
+    if (!queueReady || pendingUndoRestore) {
       return;
     }
     const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : queuedDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
@@ -288,11 +289,12 @@ export const ReviewPage = ({
     if (nextQueue.length === 0 && currentRecordId) {
       onCurrentRecordChange(undefined);
     }
-  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, queueIds, queueReady, queuedDueReviews, recordMap]);
+  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, pendingUndoRestore, queueIds, queueReady, queuedDueReviews, recordMap]);
 
   useEffect(() => {
     setRatedRecordIds(new Set());
     setUndoHistory([]);
+    setPendingUndoRestore(null);
   }, [today]);
 
   useEffect(() => {
@@ -323,8 +325,23 @@ export const ReviewPage = ({
     });
   }, [dueReviews, today]);
 
+  useEffect(() => {
+    if (!pendingUndoRestore) {
+      return;
+    }
+    const restoredCardIsDue = dueReviews.some(
+      (review) => review.recordId === pendingUndoRestore.currentRecordId && isReviewDueOn(review, today),
+    );
+    const restoredDailyScopeIsReady =
+      showAllDue === pendingUndoRestore.showAllDue &&
+      (showAllDue || sameIds(dailyLimitIds, pendingUndoRestore.dailyLimitIds));
+    if (restoredCardIsDue && !ratedRecordIds.has(pendingUndoRestore.currentRecordId) && restoredDailyScopeIsReady) {
+      setPendingUndoRestore(null);
+    }
+  }, [dailyLimitIds, dueReviews, pendingUndoRestore, ratedRecordIds, showAllDue, today]);
+
   const rate = async (rating: RecordReviewRating) => {
-    if (!currentId || ratingRecordId || undoing) {
+    if (!currentId || ratingRecordId || undoing || pendingUndoRestore) {
       return;
     }
     const ratedId = currentId;
@@ -392,12 +409,13 @@ export const ReviewPage = ({
 
   const undoLastRating = useCallback(async () => {
     const entry = undoHistory[undoHistory.length - 1];
-    if (!entry || ratingRecordId || undoing) {
+    if (!entry || ratingRecordId || undoing || pendingUndoRestore) {
       return;
     }
 
     setRatingError("");
     setUndoing(true);
+    setPendingUndoRestore(entry);
     try {
       await onUndo(entry.token);
       setUndoHistory((current) => current.slice(0, -1));
@@ -420,12 +438,13 @@ export const ReviewPage = ({
       onQueueChange(entry.queueIds);
       onCurrentRecordChange(entry.currentRecordId);
     } catch (error) {
+      setPendingUndoRestore(null);
       const message = error instanceof Error ? error.message : "未知错误";
       setRatingError(`撤回评分失败：${message}`);
     } finally {
       setUndoing(false);
     }
-  }, [onCurrentRecordChange, onModeChange, onQueueChange, onUndo, ratingRecordId, undoHistory, undoing]);
+  }, [onCurrentRecordChange, onModeChange, onQueueChange, onUndo, pendingUndoRestore, ratingRecordId, undoHistory, undoing]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -441,7 +460,8 @@ export const ReviewPage = ({
         isEditable ||
         undoHistory.length === 0 ||
         Boolean(ratingRecordId) ||
-        undoing
+        undoing ||
+        Boolean(pendingUndoRestore)
       ) {
         return;
       }
@@ -450,7 +470,7 @@ export const ReviewPage = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [ratingRecordId, undoHistory.length, undoLastRating, undoing]);
+  }, [pendingUndoRestore, ratingRecordId, undoHistory.length, undoLastRating, undoing]);
 
   const continueRemainingDue = () => {
     const nextQueue = availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
@@ -497,7 +517,7 @@ export const ReviewPage = ({
               type="button"
               className="secondary-button review-undo-button"
               onClick={() => void undoLastRating()}
-              disabled={undoHistory.length === 0 || Boolean(ratingRecordId) || undoing}
+              disabled={undoHistory.length === 0 || Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
               aria-keyshortcuts="Control+Z Meta+Z"
               title="撤回上次评分（Ctrl+Z）"
             >
@@ -600,7 +620,7 @@ export const ReviewPage = ({
                     <textarea
                       value={evaluationDraft}
                       onChange={(event) => setEvaluationDraft(event.target.value)}
-                      disabled={Boolean(ratingRecordId) || undoing}
+                      disabled={Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
                       aria-label="本次复习评价"
                       placeholder="新的理解、掌握程度、待补点..."
                     />
@@ -631,7 +651,7 @@ export const ReviewPage = ({
                       key={item.rating}
                       type="button"
                       className={item.className}
-                      disabled={Boolean(ratingRecordId) || undoing}
+                      disabled={Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
                       onClick={() => void rate(item.rating)}
                       aria-label={intervalText ? `${item.label}，${intervalText}` : item.label}
                       title={intervalText ? `${item.label} · ${intervalText}` : item.label}

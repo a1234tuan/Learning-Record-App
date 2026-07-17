@@ -438,6 +438,7 @@ describe("ReviewPage", () => {
 
   it("keeps an undone card in the active queue after refreshed due reviews arrive", async () => {
     const initialDueReviews = [review("active"), review("second", { nextReviewDate: "2026-07-03" })];
+    const undoRefresh = deferred<void>();
 
     const ReviewQueueHarness = () => {
       const [dueReviews, setDueReviews] = useState(initialDueReviews);
@@ -465,6 +466,7 @@ describe("ReviewPage", () => {
             }}
             onUndo={async () => {
               setDueReviews(initialDueReviews);
+              await undoRefresh.promise;
             }}
             onRefresh={vi.fn().mockResolvedValue(undefined)}
             onOpenRecord={vi.fn()}
@@ -482,6 +484,9 @@ describe("ReviewPage", () => {
     clickRating(/良好/);
     await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+    await waitFor(() => expect(screen.getByTestId("review-queue")).toHaveTextContent("second"));
+
+    undoRefresh.resolve(undefined);
 
     await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByTestId("review-queue")).toHaveTextContent("active|second"));
