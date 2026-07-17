@@ -17,9 +17,11 @@ import type {
   RecordReviewDayStat,
   RecordReviewLog,
   RecordReviewKind,
+  RecordReviewRateResult,
   RecordReviewRating,
   RecordReviewState,
   RecordReviewStats,
+  RecordReviewUndoToken,
   ReviewSchedule,
   StorageAdapter,
   StorageSnapshot,
@@ -615,7 +617,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     rating: RecordReviewRating,
     reviewedAt = nowISO(),
     evaluationText?: string,
-  ): Promise<RecordReviewState | undefined> {
+  ): Promise<RecordReviewRateResult | undefined> {
     const record = await this.activeRecord(recordId);
     const review = await db.recordReviews.get(recordId);
     if (!review || !record || review.status !== "active") {
@@ -628,7 +630,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     const hasEvaluationTextArgument = arguments.length >= 4;
     const normalizedEvaluationText = normalizeReviewEvaluationText(evaluationText);
 
-    const saved = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+    const result = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
       const current = await db.recordReviews.get(recordId);
       if (!current || current.status !== "active") {
         return undefined;
@@ -702,10 +704,20 @@ export class DexieStorageAdapter implements StorageAdapter {
           updatedAt: nowISO(),
         };
       await db.recordReviewDayStats.put(nextStat);
-      return nextState;
+      return {
+        review: nextState,
+        undoToken: {
+          recordId,
+          reviewedAt,
+          reviewLogId: log.id,
+          previousReview: current,
+          previousLog: correctionLog,
+          previousDayStat: existingStat,
+        },
+      };
     });
 
-    if (!saved) {
+    if (!result) {
       return undefined;
     }
     const remainingDue = await this.listDueRecordReviews(reviewedDate);
@@ -715,7 +727,47 @@ export class DexieStorageAdapter implements StorageAdapter {
         await db.recordReviewDayStats.put({ ...stat, completedAt: nowISO(), updatedAt: nowISO() });
       }
     }
-    return saved;
+    return result;
+  }
+
+  async undoRecordReview(token: RecordReviewUndoToken): Promise<RecordReviewState | undefined> {
+    if (token.recordId !== token.previousReview.recordId) {
+      return undefined;
+    }
+
+    return db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+      const [current, currentLog, recordLogs] = await Promise.all([
+        db.recordReviews.get(token.recordId),
+        db.recordReviewLogs.get(token.reviewLogId),
+        db.recordReviewLogs.where("recordId").equals(token.recordId).toArray(),
+      ]);
+      const latestLog = recordLogs.sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0];
+      if (
+        !current ||
+        !currentLog ||
+        currentLog.recordId !== token.recordId ||
+        currentLog.reviewedAt !== token.reviewedAt ||
+        latestLog?.id !== currentLog.id ||
+        current.lastReviewedAt !== token.reviewedAt
+      ) {
+        return undefined;
+      }
+
+      await db.recordReviews.put(token.previousReview);
+      if (token.previousLog) {
+        await db.recordReviewLogs.put(token.previousLog);
+      } else {
+        await db.recordReviewLogs.delete(token.reviewLogId);
+      }
+
+      const reviewedDate = isoDateTimeToLocalDate(token.reviewedAt);
+      if (token.previousDayStat) {
+        await db.recordReviewDayStats.put(token.previousDayStat);
+      } else {
+        await db.recordReviewDayStats.delete(reviewedDate);
+      }
+      return token.previousReview;
+    });
   }
 
   async listRecordReviewLogs(recordId?: string): Promise<RecordReviewLog[]> {

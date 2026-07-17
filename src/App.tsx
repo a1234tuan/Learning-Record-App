@@ -667,7 +667,11 @@ export const App = () => {
             }
             onEnsureDay={app.ensureRecordReviewDay}
             onRate={async (recordId, rating, evaluationText) => {
-              await app.rateRecordReview(recordId, rating, evaluationText);
+              const result = await app.rateRecordReview(recordId, rating, evaluationText);
+              return result?.undoToken;
+            }}
+            onUndo={async (token) => {
+              await app.undoRecordReview(token);
             }}
             onRefresh={app.refresh}
             onOpenRecord={(record) => openRecordInTab(record, "review")}

@@ -13,6 +13,7 @@ import type {
   RecordReviewRating,
   RecordReviewState,
   RecordReviewStats,
+  RecordReviewUndoToken,
   Subject,
   SubjectConfig,
 } from "../types";
@@ -246,14 +247,27 @@ export const useAppData = () => {
 
   const rateRecordReview = useCallback(
     async (recordId: string, rating: RecordReviewRating, evaluationText?: string) => {
-      const saved = evaluationText === undefined
+      const result = evaluationText === undefined
         ? await storage.rateRecordReview(recordId, rating)
         : await storage.rateRecordReview(recordId, rating, undefined, evaluationText);
       await refresh();
-      if (saved) {
+      if (result) {
         await markAutoBackupDirty("record-review-rate");
       }
-      return saved;
+      return result;
+    },
+    [refresh],
+  );
+
+  const undoRecordReview = useCallback(
+    async (token: RecordReviewUndoToken) => {
+      const restored = await storage.undoRecordReview(token);
+      if (!restored) {
+        throw new Error("这次评分已发生变化，无法撤回");
+      }
+      await refresh();
+      await markAutoBackupDirty("record-review-undo");
+      return restored;
     },
     [refresh],
   );
@@ -531,6 +545,7 @@ export const useAppData = () => {
     addRecordsToReview,
     setRecordReviewKind,
     rateRecordReview,
+    undoRecordReview,
     resetRecordReview,
     removeRecordFromReview,
     ensureRecordReviewDay,

@@ -20,6 +20,10 @@ class MemoryTable<T extends { id: string }> {
     return item.id;
   }
 
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
+  }
+
   async bulkPut(items: T[]): Promise<void> {
     for (const item of items) {
       this.rows.set(item.id, item);
@@ -116,14 +120,54 @@ describe("DexieStorageAdapter record review invariants", () => {
     expect(logs[0].evaluationText).toBeUndefined();
   });
 
+  it("atomically restores the card, evaluation, log, and day stats when undoing a rating", async () => {
+    const originalReview = review();
+    const { adapter, fakeDb } = await loadAdapter([record()], [originalReview]);
+    await adapter.ensureRecordReviewDay("2026-07-03", 1);
+
+    const result = await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z", "重新梳理了队列边界");
+    const restored = await adapter.undoRecordReview(result!.undoToken);
+
+    expect(restored).toEqual(originalReview);
+    expect(await fakeDb.recordReviewLogs.toArray()).toEqual([]);
+    expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({
+      dueCountAtFirstOpen: 1,
+      reviewedCount: 0,
+      rememberedCount: 0,
+      goodCount: 0,
+      easyCount: 0,
+      fuzzyCount: 0,
+      forgotCount: 0,
+    });
+    expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([originalReview]);
+  });
+
+  it("restores the prior same-day log when undoing a rating correction", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
+    await adapter.ensureRecordReviewDay("2026-07-03", 1);
+    await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z", "第一次评价");
+    const correction = await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z", "更正后的评价");
+
+    await adapter.undoRecordReview(correction!.undoToken);
+
+    const logs = await fakeDb.recordReviewLogs.toArray();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ rating: "good", evaluationText: "第一次评价" });
+    expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({
+      reviewedCount: 1,
+      goodCount: 1,
+      forgotCount: 0,
+    });
+  });
+
   it("removes an overdue card from today's due list after rating it", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
 
-    const saved = await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z");
+    const result = await adapter.rateRecordReview("record-1", "good", "2026-07-02T16:30:00.000Z");
 
-    expect(saved?.lastReviewDate).toBe("2026-07-03");
-    expect(saved?.reviewKind).toBe("overview");
-    expect(saved?.nextReviewDate).toBe("2026-07-13");
+    expect(result?.review.lastReviewDate).toBe("2026-07-03");
+    expect(result?.review.reviewKind).toBe("overview");
+    expect(result?.review.nextReviewDate).toBe("2026-07-13");
     expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([]);
     expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
     expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({
@@ -139,10 +183,10 @@ describe("DexieStorageAdapter record review invariants", () => {
     await adapter.rateRecordReview("record-1", "remembered", "2026-07-02T16:30:00.000Z", "旧评价");
     const secondResult = await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z", "更新评价");
 
-    expect(secondResult?.lastReviewDate).toBe("2026-07-03");
-    expect(secondResult?.totalReviews).toBe(3);
-    expect(secondResult?.nextReviewDate).toBe("2026-07-04");
-    expect(secondResult?.intervalDays).toBe(1);
+    expect(secondResult?.review.lastReviewDate).toBe("2026-07-03");
+    expect(secondResult?.review.totalReviews).toBe(3);
+    expect(secondResult?.review.nextReviewDate).toBe("2026-07-04");
+    expect(secondResult?.review.intervalDays).toBe(1);
     const logs = await fakeDb.recordReviewLogs.toArray();
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatchObject({
@@ -189,7 +233,7 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     const saved = await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T01:30:00.000Z");
 
-    expect(saved).toMatchObject({
+    expect(saved?.review).toMatchObject({
       status: "active",
       repetition: 0,
       intervalDays: 1,
@@ -213,9 +257,9 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     const saved = await adapter.rateRecordReview("record-1", "good", "2026-07-03T01:30:00.000Z");
 
-    expect(saved?.status).toBe("active");
-    expect(saved?.nextReviewDate).toBe("2026-07-24");
-    expect(saved?.consecutiveRemembered).toBe(5);
+    expect(saved?.review.status).toBe("active");
+    expect(saved?.review.nextReviewDate).toBe("2026-07-24");
+    expect(saved?.review.consecutiveRemembered).toBe(5);
     expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([]);
   });
 
@@ -258,10 +302,10 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     const saved = await adapter.rateRecordReview("record-1", "good", "2026-07-03T01:30:00.000Z");
 
-    expect(saved?.reviewKind).toBe("memory");
-    expect(saved?.scheduler).toBe("fsrs-v6");
-    expect(saved?.fsrsCard).toBeDefined();
-    expect(Boolean(saved?.nextReviewDate && saved.nextReviewDate > "2026-07-03")).toBe(true);
+    expect(saved?.review.reviewKind).toBe("memory");
+    expect(saved?.review.scheduler).toBe("fsrs-v6");
+    expect(saved?.review.fsrsCard).toBeDefined();
+    expect(Boolean(saved?.review.nextReviewDate && saved.review.nextReviewDate > "2026-07-03")).toBe(true);
   });
 
   it("self-heals restored review states during mixed-system migration", async () => {

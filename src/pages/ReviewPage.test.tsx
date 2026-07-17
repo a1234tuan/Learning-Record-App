@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken } from "../types";
 
 vi.mock("../components/RichTextEditor", () => ({
   RichTextEditor: () => <div data-testid="rich-editor" />,
@@ -68,6 +69,13 @@ const reviewLog = (recordId: string, patch: Partial<RecordReviewLog> = {}): Reco
   ...patch,
 });
 
+const undoToken = (recordId: string): RecordReviewUndoToken => ({
+  recordId,
+  reviewedAt: "2026-07-03T01:30:00.000Z",
+  reviewLogId: `log-${recordId}`,
+  previousReview: review(recordId),
+});
+
 const stats: RecordReviewStats = {
   activeCount: 2,
   masteredCount: 1,
@@ -105,6 +113,7 @@ const renderReviewPage = (options: RenderOptions = {}) => {
     onCurrentRecordChange: vi.fn(),
     onEnsureDay: vi.fn().mockResolvedValue(undefined),
     onRate: vi.fn().mockResolvedValue(undefined),
+    onUndo: vi.fn().mockResolvedValue(undefined),
     onRefresh: vi.fn().mockResolvedValue(undefined),
     onOpenRecord: vi.fn(),
     onEditRecord: vi.fn(),
@@ -238,6 +247,7 @@ describe("ReviewPage", () => {
         onCurrentRecordChange={onCurrentRecordChange}
         onEnsureDay={vi.fn().mockResolvedValue(undefined)}
         onRate={onRate}
+        onUndo={vi.fn().mockResolvedValue(undefined)}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onOpenRecord={vi.fn()}
         onEditRecord={vi.fn()}
@@ -268,6 +278,7 @@ describe("ReviewPage", () => {
         onCurrentRecordChange={onCurrentRecordChange}
         onEnsureDay={vi.fn().mockResolvedValue(undefined)}
         onRate={onRate}
+        onUndo={vi.fn().mockResolvedValue(undefined)}
         onRefresh={vi.fn().mockResolvedValue(undefined)}
         onOpenRecord={vi.fn()}
         onEditRecord={vi.fn()}
@@ -349,7 +360,7 @@ describe("ReviewPage", () => {
       reviewStates: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
       queueIds: ["active", "second"],
       currentRecordId: "active",
-      onRate: onRate as (recordId: string, rating: RecordReviewRating) => Promise<void>,
+      onRate: onRate as (recordId: string, rating: RecordReviewRating) => Promise<RecordReviewUndoToken | undefined>,
     });
 
     clickRating(/良好/);
@@ -383,6 +394,97 @@ describe("ReviewPage", () => {
     expect(screen.getByText(/复习评分失败/)).toBeInTheDocument();
     expect(onQueueChange).toHaveBeenLastCalledWith(["active"]);
     expect(onCurrentRecordChange).toHaveBeenLastCalledWith("active");
+  });
+
+  it("undoes consecutive ratings in reverse order and restores the evaluation draft", async () => {
+    const onRate = vi.fn()
+      .mockResolvedValueOnce(undoToken("active"))
+      .mockResolvedValueOnce(undoToken("second"));
+    const onUndo = vi.fn().mockResolvedValue(undefined);
+    const onQueueChange = vi.fn();
+    const onCurrentRecordChange = vi.fn();
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
+      reviewStates: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
+      queueIds: ["active", "second"],
+      currentRecordId: "active",
+      onRate,
+      onUndo,
+      onQueueChange,
+      onCurrentRecordChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.change(screen.getByLabelText("本次复习评价"), { target: { value: "要重新理解 BFS 层序边界" } });
+    clickRating(/良好/);
+    await waitFor(() => expect(screen.getByRole("button", { name: "撤回" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
+
+    clickRating(/良好/);
+    await waitFor(() => expect(screen.getByText("今天暂无待复习")).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(onUndo).toHaveBeenCalledWith(expect.objectContaining({ recordId: "second" })));
+    await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+    await waitFor(() => expect(onUndo).toHaveBeenCalledWith(expect.objectContaining({ recordId: "active" })));
+    await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("本次复习评价")).toHaveValue("要重新理解 BFS 层序边界"));
+    expect(onQueueChange).toHaveBeenLastCalledWith(["active", "second"]);
+    expect(onCurrentRecordChange).toHaveBeenLastCalledWith("active");
+  });
+
+  it("keeps an undone card in the active queue after refreshed due reviews arrive", async () => {
+    const initialDueReviews = [review("active"), review("second", { nextReviewDate: "2026-07-03" })];
+
+    const ReviewQueueHarness = () => {
+      const [dueReviews, setDueReviews] = useState(initialDueReviews);
+      const [queueIds, setQueueIds] = useState(["active", "second"]);
+      const [currentRecordId, setCurrentRecordId] = useState<string | undefined>("active");
+
+      return (
+        <>
+          <output data-testid="review-queue">{queueIds.join("|")}</output>
+          <ReviewPage
+            records={records}
+            dueReviews={dueReviews}
+            reviewStates={initialDueReviews}
+            stats={stats}
+            mode="queue"
+            queueIds={queueIds}
+            currentRecordId={currentRecordId}
+            onModeChange={vi.fn()}
+            onQueueChange={setQueueIds}
+            onCurrentRecordChange={setCurrentRecordId}
+            onEnsureDay={vi.fn().mockResolvedValue(undefined)}
+            onRate={async (recordId) => {
+              setDueReviews((current) => current.filter((review) => review.recordId !== recordId));
+              return undoToken(recordId);
+            }}
+            onUndo={async () => {
+              setDueReviews(initialDueReviews);
+            }}
+            onRefresh={vi.fn().mockResolvedValue(undefined)}
+            onOpenRecord={vi.fn()}
+            onEditRecord={vi.fn()}
+            onAddToReview={vi.fn()}
+            onRemoveReview={vi.fn()}
+            onResetReview={vi.fn()}
+          />
+        </>
+      );
+    };
+
+    render(<ReviewQueueHarness />);
+
+    clickRating(/良好/);
+    await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+
+    await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("review-queue")).toHaveTextContent("active|second"));
   });
 
   it("advances through due cards and shows empty state after the last card", async () => {

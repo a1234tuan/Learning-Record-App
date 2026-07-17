@@ -11,11 +11,12 @@
   Search,
   Sparkles,
   Star,
+  Undo2,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats } from "../types";
+import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
@@ -43,7 +44,8 @@ interface ReviewPageProps {
   onQueueChange: (ids: string[]) => void;
   onCurrentRecordChange: (id?: string) => void;
   onEnsureDay: (date: string, dueCountAtFirstOpen: number) => Promise<unknown>;
-  onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<void>;
+  onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<RecordReviewUndoToken | undefined>;
+  onUndo: (token: RecordReviewUndoToken) => Promise<void>;
   onRefresh: () => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
   onEditRecord: (record: RecordBlock) => void;
@@ -54,6 +56,15 @@ interface ReviewPageProps {
 
 type ReviewCardFilter = "all" | "due" | "new" | "active" | "suspended" | "mastered";
 type ReviewKindFilter = "all" | RecordReviewKind;
+
+interface ReviewUndoEntry {
+  token: RecordReviewUndoToken;
+  queueIds: string[];
+  currentRecordId: string;
+  evaluationText: string;
+  dailyLimitIds: string[];
+  showAllDue: boolean;
+}
 
 const ratingConfig: Array<{ rating: RecordReviewRating; label: string; icon: typeof CheckCircle2; className: string }> = [
   { rating: "forgot", label: "忘记了", icon: XCircle, className: "forgot" },
@@ -163,6 +174,7 @@ export const ReviewPage = ({
   onCurrentRecordChange,
   onEnsureDay,
   onRate,
+  onUndo,
   onRefresh,
   onOpenRecord,
   onEditRecord,
@@ -178,6 +190,8 @@ export const ReviewPage = ({
   const [query, setQuery] = useState("");
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
+  const [undoHistory, setUndoHistory] = useState<ReviewUndoEntry[]>([]);
+  const [undoing, setUndoing] = useState(false);
   const [ratingError, setRatingError] = useState("");
   const [showAllDue, setShowAllDue] = useState(false);
   const [evaluationOpen, setEvaluationOpen] = useState(false);
@@ -278,6 +292,7 @@ export const ReviewPage = ({
 
   useEffect(() => {
     setRatedRecordIds(new Set());
+    setUndoHistory([]);
   }, [today]);
 
   useEffect(() => {
@@ -309,7 +324,7 @@ export const ReviewPage = ({
   }, [dueReviews, today]);
 
   const rate = async (rating: RecordReviewRating) => {
-    if (!currentId || ratingRecordId) {
+    if (!currentId || ratingRecordId || undoing) {
       return;
     }
     const ratedId = currentId;
@@ -329,9 +344,35 @@ export const ReviewPage = ({
     onCurrentRecordChange(nextQueue[0]);
     try {
       if (evaluationText) {
-        await onRate(ratedId, rating, evaluationText);
+        const token = await onRate(ratedId, rating, evaluationText);
+        if (token) {
+          setUndoHistory((current) => [
+            ...current,
+            {
+              token,
+              queueIds: previousQueue,
+              currentRecordId: previousCurrentId,
+              evaluationText,
+              dailyLimitIds,
+              showAllDue,
+            },
+          ]);
+        }
       } else {
-        await onRate(ratedId, rating);
+        const token = await onRate(ratedId, rating);
+        if (token) {
+          setUndoHistory((current) => [
+            ...current,
+            {
+              token,
+              queueIds: previousQueue,
+              currentRecordId: previousCurrentId,
+              evaluationText,
+              dailyLimitIds,
+              showAllDue,
+            },
+          ]);
+        }
       }
       removeReviewEvaluationDraft(ratedId);
     } catch (error) {
@@ -348,6 +389,68 @@ export const ReviewPage = ({
       setRatingRecordId(null);
     }
   };
+
+  const undoLastRating = useCallback(async () => {
+    const entry = undoHistory[undoHistory.length - 1];
+    if (!entry || ratingRecordId || undoing) {
+      return;
+    }
+
+    setRatingError("");
+    setUndoing(true);
+    try {
+      await onUndo(entry.token);
+      setUndoHistory((current) => current.slice(0, -1));
+      setRatedRecordIds((current) => {
+        const next = new Set(current);
+        next.delete(entry.currentRecordId);
+        return next;
+      });
+      if (entry.evaluationText) {
+        writeReviewEvaluationDraft(entry.currentRecordId, entry.evaluationText);
+      } else {
+        removeReviewEvaluationDraft(entry.currentRecordId);
+      }
+      setEvaluationDraft(entry.evaluationText);
+      setEvaluationDraftRecordId(entry.currentRecordId);
+      setEvaluationOpen(Boolean(entry.evaluationText));
+      setShowAllDue(entry.showAllDue);
+      setDailyLimitIds(entry.dailyLimitIds);
+      onModeChange("queue");
+      onQueueChange(entry.queueIds);
+      onCurrentRecordChange(entry.currentRecordId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setRatingError(`撤回评分失败：${message}`);
+    } finally {
+      setUndoing(false);
+    }
+  }, [onCurrentRecordChange, onModeChange, onQueueChange, onUndo, ratingRecordId, undoHistory, undoing]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      const isEditable = target instanceof HTMLElement && (
+        target.matches("input, textarea, [contenteditable='true']") ||
+        Boolean(target.closest("[contenteditable='true']"))
+      );
+      if (
+        event.key.toLowerCase() !== "z" ||
+        (!event.ctrlKey && !event.metaKey) ||
+        event.shiftKey ||
+        isEditable ||
+        undoHistory.length === 0 ||
+        Boolean(ratingRecordId) ||
+        undoing
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void undoLastRating();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [ratingRecordId, undoHistory.length, undoLastRating, undoing]);
 
   const continueRemainingDue = () => {
     const nextQueue = availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
@@ -389,10 +492,23 @@ export const ReviewPage = ({
         title="间隔复习"
         subtitle={`今日到期 ${todayCount} 条，已过期 ${overdueCount} 条`}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => void onRefresh()}>
-            <RefreshCw size={17} />
-            刷新
-          </button>
+          <>
+            <button
+              type="button"
+              className="secondary-button review-undo-button"
+              onClick={() => void undoLastRating()}
+              disabled={undoHistory.length === 0 || Boolean(ratingRecordId) || undoing}
+              aria-keyshortcuts="Control+Z Meta+Z"
+              title="撤回上次评分（Ctrl+Z）"
+            >
+              <Undo2 size={17} />
+              撤回
+            </button>
+            <button type="button" className="secondary-button" onClick={() => void onRefresh()}>
+              <RefreshCw size={17} />
+              刷新
+            </button>
+          </>
         )}
       />
       {pullReady && <p className="status-message">松手刷新复习列表</p>}
@@ -484,7 +600,7 @@ export const ReviewPage = ({
                     <textarea
                       value={evaluationDraft}
                       onChange={(event) => setEvaluationDraft(event.target.value)}
-                      disabled={Boolean(ratingRecordId)}
+                      disabled={Boolean(ratingRecordId) || undoing}
                       aria-label="本次复习评价"
                       placeholder="新的理解、掌握程度、待补点..."
                     />
@@ -515,7 +631,7 @@ export const ReviewPage = ({
                       key={item.rating}
                       type="button"
                       className={item.className}
-                      disabled={Boolean(ratingRecordId)}
+                      disabled={Boolean(ratingRecordId) || undoing}
                       onClick={() => void rate(item.rating)}
                       aria-label={intervalText ? `${item.label}，${intervalText}` : item.label}
                       title={intervalText ? `${item.label} · ${intervalText}` : item.label}
