@@ -129,6 +129,50 @@ describe("RichTextEditor", () => {
     expect(await screen.findByLabelText("块公式")).toBeInTheDocument();
   });
 
+  it("converts Markdown after an Android-style composition commit", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef?.commands.insertContent("中文**粗体**以及*斜体*和$\\frac{\\sin(x^2)}{x^2}$");
+    });
+    fireEvent.input(document.querySelector(".rich-editor")!);
+
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("中文<strong>粗体</strong>以及<em>斜体</em>和"));
+    expect(editorRef?.getHTML()).toContain("record-inline-math");
+  });
+
+  it("keeps pasted inline formulas inside their surrounding paragraph", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain"
+          ? "所以，式子就理所当然地变成了：\n$= \\lim_{x \\to 0^+} \\frac{-x^4}{ab x^{b-1}}$"
+          : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain("<p>所以，式子就理所当然地变成了：");
+    expect(html).toContain("<record-inline-math");
+    expect(html).toContain('data-latex="= \\lim_{x \\to 0^+} \\frac{-x^4}{ab x^{b-1}}"');
+    expect(html).not.toContain("</p><p><record-inline-math");
+  });
+
   it("creates a block formula on Enter and leaves Markdown literal inside code", async () => {
     let editorRef: Editor | undefined;
     render(
@@ -155,6 +199,27 @@ describe("RichTextEditor", () => {
       editorRef?.commands.insertContent("$x$", { applyInputRules: true });
     });
     await waitFor(() => expect(editorRef?.getHTML()).toContain("$x$"));
+    expect(editorRef?.getHTML()).not.toContain("record-inline-math");
+  });
+
+  it("does not convert formulas inside a double-backtick code span", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => editorRef?.commands.insertContent("``$x$``"));
+    fireEvent.input(document.querySelector(".rich-editor")!);
+
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("``$x$``"));
     expect(editorRef?.getHTML()).not.toContain("record-inline-math");
   });
 

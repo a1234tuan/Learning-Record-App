@@ -103,6 +103,27 @@ export const readClipboardImageFallback = async (): Promise<File | undefined> =>
 
   return undefined;
 };
+
+export const readClipboardTextFallback = async (): Promise<string | undefined> => {
+  try {
+    if (isNativePlatform()) {
+      const result = await Clipboard.read();
+      if ((result.type.startsWith("text/") || !result.type) && result.value) {
+        return result.value;
+      }
+    }
+  } catch {
+    // Native clipboard support is optional. The browser paste event remains the primary path.
+  }
+
+  try {
+    return (await navigator.clipboard?.readText?.()) || undefined;
+  } catch {
+    // Browser clipboard reads require permission and may fail outside the paste gesture.
+  }
+
+  return undefined;
+};
 import { Clipboard } from "@capacitor/clipboard";
 
 import { isNativePlatform } from "./platform";

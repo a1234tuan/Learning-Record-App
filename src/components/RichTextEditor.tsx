@@ -27,9 +27,10 @@ import {
 } from "./RecordHighlightBlockNode";
 import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosition";
 import { createPortal } from "react-dom";
-import { clipboardImageFiles, readClipboardImageFallback } from "../lib/clipboard";
+import { clipboardImageFiles, readClipboardImageFallback, readClipboardTextFallback } from "../lib/clipboard";
 import { looksLikeMarkdown, markdownToTiptapContent } from "../lib/markdownEditor";
 import { MarkdownTypingExtension } from "../lib/markdownInputRules";
+import { isNativePlatform } from "../lib/platform";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -335,6 +336,29 @@ export const RichTextEditor = ({
         if (files.length > 0) {
           event.preventDefault();
           void Promise.all(files.map(insertPastedAsset));
+          return true;
+        }
+
+        if (isNativePlatform() && !markdown && !plainText && !hasImageClipboardItem) {
+          event.preventDefault();
+          void readClipboardTextFallback().then(async (text) => {
+            if (!text) {
+              const image = await readClipboardImageFallback();
+              if (image) {
+                await insertPastedAsset(image);
+              }
+              return;
+            }
+            try {
+              if (looksLikeMarkdown(text)) {
+                replaceSelectionWithContent(view, markdownToTiptapContent(view.state.schema as never, text));
+                return;
+              }
+            } catch {
+              // Fall through to plain text so a malformed Markdown clipboard never loses content.
+            }
+            view.dispatch(view.state.tr.insertText(text).scrollIntoView());
+          });
           return true;
         }
 
