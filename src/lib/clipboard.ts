@@ -1,3 +1,12 @@
+import { Clipboard } from "@capacitor/clipboard";
+
+import { isNativePlatform } from "./platform";
+
+export const normalizeClipboardText = (value: string): string =>
+  value
+    .replace(/\0/g, "")
+    .replace(/\r\n?|\u2028|\u2029/g, "\n");
+
 export const copyTextToClipboard = async (text: string): Promise<boolean> => {
   const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
   if (clipboard?.writeText) {
@@ -104,26 +113,40 @@ export const readClipboardImageFallback = async (): Promise<File | undefined> =>
   return undefined;
 };
 
-export const readClipboardTextFallback = async (): Promise<string | undefined> => {
-  try {
-    if (isNativePlatform()) {
-      const result = await Clipboard.read();
-      if ((result.type.startsWith("text/") || !result.type) && result.value) {
-        return result.value;
-      }
-    }
-  } catch {
-    // Native clipboard support is optional. The browser paste event remains the primary path.
+/** Read only the Capacitor clipboard. Browser permissions are handled separately. */
+export const readNativeClipboardText = async (): Promise<string | undefined> => {
+  if (!isNativePlatform()) {
+    return undefined;
   }
 
   try {
-    return (await navigator.clipboard?.readText?.()) || undefined;
+    const result = await Clipboard.read();
+    const type = (result.type ?? "").toLowerCase();
+    if ((type.startsWith("text/") || !type) && typeof result.value === "string" && result.value) {
+      return normalizeClipboardText(result.value);
+    }
+  } catch {
+    // Native clipboard support is optional. The DOM paste event remains the fallback.
+  }
+
+  return undefined;
+};
+
+export const readClipboardTextFallback = async (): Promise<string | undefined> => {
+  const nativeText = await readNativeClipboardText();
+  if (nativeText) {
+    return nativeText;
+  }
+
+  try {
+    if (typeof navigator === "undefined") {
+      return undefined;
+    }
+    const text = await navigator.clipboard?.readText?.();
+    return text ? normalizeClipboardText(text) : undefined;
   } catch {
     // Browser clipboard reads require permission and may fail outside the paste gesture.
   }
 
   return undefined;
 };
-import { Clipboard } from "@capacitor/clipboard";
-
-import { isNativePlatform } from "./platform";

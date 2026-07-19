@@ -3,6 +3,7 @@ import { defaultMarkdownParser, MarkdownParser } from "prosemirror-markdown";
 import type { Schema } from "@tiptap/pm/model";
 import type { JSONContent } from "@tiptap/core";
 
+import { normalizeClipboardText } from "./clipboard";
 import { newId } from "./entity";
 
 export const MAX_MARKDOWN_PASTE_LENGTH = 262144;
@@ -186,6 +187,28 @@ export const looksLikeMarkdown = (source: string): boolean =>
 export const selectMarkdownPasteSource = (
   markdown: string,
   plainText: string,
-): string | undefined => [markdown, plainText].find((candidate) =>
-  candidate.length <= MAX_MARKDOWN_PASTE_LENGTH && looksLikeMarkdown(candidate),
-);
+): string | undefined => selectMarkdownPasteSources([markdown, plainText])[0];
+
+export const selectMarkdownPasteSources = (
+  candidates: readonly (string | undefined)[],
+): string[] => {
+  const seen = new Set<string>();
+  const sources: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const normalized = normalizeClipboardText(candidate);
+    if (
+      !normalized ||
+      normalized.length > MAX_MARKDOWN_PASTE_LENGTH ||
+      !looksLikeMarkdown(normalized) ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+    seen.add(normalized);
+    sources.push(normalized);
+  }
+  return sources;
+};
