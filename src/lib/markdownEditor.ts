@@ -56,7 +56,21 @@ const mathBlockRule = (state: unknown, startLine: number, endLine: number, silen
   }
   const start = blockState.bMarks[startLine] + blockState.tShift[startLine];
   const end = blockState.eMarks[startLine];
-  if (blockState.src.slice(start, end).trim() !== "$$") {
+  const line = blockState.src.slice(start, end).trim();
+  const singleLineMatch = /^\$\$([\s\S]*?)\$\$$/.exec(line);
+  if (singleLineMatch?.[1].trim()) {
+    if (silent) {
+      return true;
+    }
+    const token = (blockState as unknown as { push: (type: string, tag: string, nesting: number) => { content: string; meta?: unknown; map?: number[] } })
+      .push("math_block", "math", 0);
+    token.content = singleLineMatch[1].trim();
+    token.meta = { formulaId: newId() };
+    token.map = [startLine, startLine + 1];
+    blockState.line = startLine + 1;
+    return true;
+  }
+  if (line !== "$$") {
     return false;
   }
   let nextLine = startLine + 1;
@@ -163,4 +177,4 @@ export const markdownToTiptapContent = (schema: Schema, source: string): JSONCon
 
 export const looksLikeMarkdown = (source: string): boolean =>
   /(^|\n)\s{0,3}(#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|```|~~~|\$\$)/.test(source) ||
-  /(?:\*\*|__|`{1,}|\$[^$\n]+\$)/.test(source);
+  /(?:\*\*|__|(?<!\\)\*(?!\s)[^*\n]+\*(?!\*)|(?<!\\)_(?!\s)[^_\n]+_(?!_)|`{1,}|\$[^$\n]+\$)/.test(source);

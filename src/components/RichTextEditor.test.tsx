@@ -55,6 +55,135 @@ describe("RichTextEditor", () => {
     expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h1>标题</h1>");
   });
 
+  it("prefers the actual Markdown source from a Windows clipboard and accepts single-line block math", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => {
+          if (type === "text/markdown") return "Copied rich text";
+          if (type === "text/plain") return "$\\lim_{x \\to 0^+} \\frac{f(x)}{ax^b} = 1$\n\n$$E=mc^2$$\n\n*斜体*";
+          return "";
+        },
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain('data-latex="\\lim_{x \\to 0^+} \\frac{f(x)}{ax^b} = 1"');
+    expect(html).toContain('data-latex="E=mc^2"');
+    expect(html).toContain("<em>斜体</em>");
+  });
+
+  it("immediately converts Markdown typed next to Chinese text", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef?.commands.insertContent("中文**粗体**", { applyInputRules: true });
+    });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("中文<strong>粗体</strong>"));
+
+    act(() => {
+      editorRef?.commands.insertContent("以及*斜体*", { applyInputRules: true });
+    });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("<em>斜体</em>"));
+  });
+
+  it("creates inline and block formulas from direct Markdown input", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef?.commands.insertContent("$x^2$", { applyInputRules: true });
+    });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-inline-math"));
+
+    act(() => {
+      editorRef?.commands.setContent("<p></p>");
+      editorRef?.commands.insertContent("$$ ", { applyInputRules: true });
+    });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-formula"));
+    expect(await screen.findByLabelText("块公式")).toBeInTheDocument();
+  });
+
+  it("creates a block formula on Enter and leaves Markdown literal inside code", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef?.commands.insertContent("$$");
+    });
+    fireEvent.keyDown(document.querySelector(".rich-editor")!, { key: "Enter" });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-formula"));
+
+    act(() => {
+      editorRef?.commands.setContent("<pre><code></code></pre>");
+      editorRef?.commands.focus("end");
+      editorRef?.commands.insertContent("$x$", { applyInputRules: true });
+    });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("$x$"));
+    expect(editorRef?.getHTML()).not.toContain("record-inline-math");
+  });
+
+  it("renders formulas in edit mode and opens a source input only when selected", async () => {
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value='<p>结论 <record-inline-math data-formula-id="f1" data-latex="x^2"></record-inline-math></p>'
+        onChange={onChange}
+      />,
+    );
+
+    let formula: Element | null = null;
+    await waitFor(() => {
+      formula = document.querySelector(".record-inline-math");
+      expect(formula).toBeInTheDocument();
+      expect(formula?.querySelector(".katex")).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("行内公式")).not.toBeInTheDocument();
+
+    fireEvent.click(formula!);
+    const input = await screen.findByLabelText("行内公式");
+    fireEvent.change(input, { target: { value: "y^2" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-latex="y^2"'));
+    expect(screen.queryByLabelText("行内公式")).not.toBeInTheDocument();
+  });
+
   it("converts Markdown lists, quote, code and inline marks with the Tiptap schema", async () => {
     const onChange = vi.fn();
     render(<RichTextEditor value="<p></p>" onChange={onChange} />);

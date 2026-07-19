@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { useMemo } from "react";
+import { NodeSelection } from "@tiptap/pm/state";
+import { type FocusEvent, useEffect, useMemo, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -47,15 +48,71 @@ const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor 
 const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps) => {
   const title = String(node.attrs.title ?? "");
   const latex = String(node.attrs.latex ?? "");
-  const html = katex.renderToString(latex || " ", { throwOnError: false, displayMode: true });
   const editable = editor.isEditable;
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(title);
+  const [draftLatex, setDraftLatex] = useState(latex);
+  const html = useMemo(() => katex.renderToString(latex || " ", { throwOnError: false, displayMode: true }), [latex]);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftTitle(title);
+      setDraftLatex(latex);
+    }
+  }, [editing, latex, title]);
+
+  useEffect(() => {
+    if (editable && node.attrs.editing) {
+      setEditing(true);
+    }
+  }, [editable, node.attrs.editing]);
+
+  const commit = () => {
+    updateAttributes({ title: draftTitle, latex: draftLatex, editing: false });
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    updateAttributes({ editing: false });
+    setDraftTitle(title);
+    setDraftLatex(latex);
+    setEditing(false);
+  };
+
+  const commitOnBlur = (event: FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof globalThis.Node && event.currentTarget.parentElement?.contains(nextTarget)) {
+      return;
+    }
+    commit();
+  };
 
   return (
-    <NodeViewWrapper className="record-inline-node formula-editor-card">
-      {editable ? (
+    <NodeViewWrapper className="record-inline-node formula-editor-card" contentEditable={false} onClick={() => {
+      if (editable && !editing) {
+        setEditing(true);
+      }
+    }}>
+      {editing ? (
         <>
-          <input value={title} placeholder="公式标题" onChange={(event) => updateAttributes({ title: event.target.value })} />
-          <textarea value={latex} onChange={(event) => updateAttributes({ latex: event.target.value })} />
+          <input value={draftTitle} placeholder="公式标题" onChange={(event) => setDraftTitle(event.target.value)} onBlur={commitOnBlur} />
+          <textarea
+            autoFocus
+            value={draftLatex}
+            aria-label="块公式"
+            onChange={(event) => setDraftLatex(event.target.value)}
+            onBlur={commitOnBlur}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancel();
+              }
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                commit();
+              }
+            }}
+          />
         </>
       ) : (
         title && <strong>{title}</strong>
@@ -74,14 +131,56 @@ const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewPr
       return "";
     }
   }, [latex]);
+  const editable = editor.isEditable;
+  const [editing, setEditing] = useState(false);
+  const [draftLatex, setDraftLatex] = useState(latex);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraftLatex(latex);
+    }
+  }, [editing, latex]);
+
+  useEffect(() => {
+    if (editable && node.attrs.editing) {
+      setEditing(true);
+    }
+  }, [editable, node.attrs.editing]);
+
+  const commit = () => {
+    updateAttributes({ latex: draftLatex, editing: false });
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    updateAttributes({ editing: false });
+    setDraftLatex(latex);
+    setEditing(false);
+  };
 
   return (
-    <NodeViewWrapper as="span" className="record-inline-math" contentEditable={false}>
-      {editor.isEditable ? (
+    <NodeViewWrapper as="span" className="record-inline-math" contentEditable={false} onClick={() => {
+      if (editable && !editing) {
+        setEditing(true);
+      }
+    }}>
+      {editing ? (
         <input
-          value={latex}
+          autoFocus
           aria-label="行内公式"
-          onChange={(event) => updateAttributes({ latex: event.target.value })}
+          value={draftLatex}
+          onChange={(event) => setDraftLatex(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              cancel();
+            }
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+              event.preventDefault();
+              commit();
+            }
+          }}
         />
       ) : html ? (
         <span dangerouslySetInnerHTML={{ __html: html }} />
@@ -162,6 +261,11 @@ export const RecordFormulaNode = Node.create({
         parseHTML: (element) => element.getAttribute("data-latex") ?? "T(n)=O(n\\log n)",
         renderHTML: (attributes) => ({ "data-latex": attributes.latex }),
       },
+      editing: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
     };
   },
 
@@ -175,6 +279,21 @@ export const RecordFormulaNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(RecordFormulaNodeView);
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      Enter: () => {
+        const { selection } = this.editor.state;
+        if (!(selection instanceof NodeSelection) || selection.node.type !== this.type) {
+          return false;
+        }
+        return this.editor.commands.command(({ tr }) => {
+          tr.setNodeMarkup(selection.from, undefined, { ...selection.node.attrs, editing: true });
+          return true;
+        });
+      },
+    };
   },
 });
 
@@ -198,6 +317,11 @@ export const RecordInlineMathNode = Node.create({
         parseHTML: (element) => element.getAttribute("data-latex") ?? "x^2",
         renderHTML: (attributes) => ({ "data-latex": attributes.latex }),
       },
+      editing: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
     };
   },
 
@@ -211,5 +335,20 @@ export const RecordInlineMathNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(RecordInlineMathNodeView);
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      Enter: () => {
+        const { selection } = this.editor.state;
+        if (!(selection instanceof NodeSelection) || selection.node.type !== this.type) {
+          return false;
+        }
+        return this.editor.commands.command(({ tr }) => {
+          tr.setNodeMarkup(selection.from, undefined, { ...selection.node.attrs, editing: true });
+          return true;
+        });
+      },
+    };
   },
 });

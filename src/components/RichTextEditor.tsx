@@ -29,6 +29,7 @@ import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosi
 import { createPortal } from "react-dom";
 import { clipboardImageFiles, readClipboardImageFallback } from "../lib/clipboard";
 import { looksLikeMarkdown, markdownToTiptapContent } from "../lib/markdownEditor";
+import { MarkdownTypingExtension } from "../lib/markdownInputRules";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -268,6 +269,7 @@ export const RichTextEditor = ({
       StarterKit.configure({
         codeBlock: false,
       }),
+      MarkdownTypingExtension,
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
       TaskItem.configure({ nested: true }),
@@ -300,8 +302,8 @@ export const RichTextEditor = ({
         const files = clipboardImageFiles(clipboardData);
         const markdown = clipboardData?.getData("text/markdown") || "";
         const plainText = clipboardData?.getData("text/plain") || "";
-        const source = markdown || plainText;
-        const shouldParseMarkdown = Boolean(markdown || looksLikeMarkdown(source));
+        const source = [markdown, plainText].find((value) => looksLikeMarkdown(value)) || plainText || markdown;
+        const shouldParseMarkdown = looksLikeMarkdown(source);
         const hasImageClipboardItem = Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
 
         const insertPastedAsset = async (file: File) => {
@@ -319,10 +321,15 @@ export const RichTextEditor = ({
         };
 
         if (shouldParseMarkdown) {
-          event.preventDefault();
-          replaceSelectionWithContent(view, markdownToTiptapContent(view.state.schema as never, source));
-          void Promise.all(files.map(insertPastedAsset));
-          return true;
+          try {
+            const content = markdownToTiptapContent(view.state.schema as never, source);
+            event.preventDefault();
+            replaceSelectionWithContent(view, content);
+            void Promise.all(files.map(insertPastedAsset));
+            return true;
+          } catch {
+            return false;
+          }
         }
 
         if (files.length > 0) {
