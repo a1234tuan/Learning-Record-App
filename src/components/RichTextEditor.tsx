@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
 import { Check, ChevronDown, Highlighter, List, ListOrdered } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -11,7 +12,7 @@ import { createLowlight } from "lowlight";
 import cpp from "highlight.js/lib/languages/cpp";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
-import { RecordAssetNode, RecordFormulaNode } from "./RecordEditorNodes";
+import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode } from "./RecordEditorNodes";
 import {
   RecordCollapseBlockNode,
   RecordComparisonTableNode,
@@ -26,6 +27,8 @@ import {
 } from "./RecordHighlightBlockNode";
 import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosition";
 import { createPortal } from "react-dom";
+import { clipboardImageFiles, readClipboardImageFallback } from "../lib/clipboard";
+import { looksLikeMarkdown, markdownToTiptapContent } from "../lib/markdownEditor";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -231,7 +234,17 @@ interface RichTextEditorProps {
   highlightedAssetId?: string;
   onAssetChanged?: () => void;
   onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
+  onPasteImage?: (file: File) => Promise<{ id: string; kind: "image"; title: string } | undefined> | { id: string; kind: "image"; title: string } | undefined;
 }
+
+const replaceSelectionWithContent = (
+  view: EditorView,
+  content: unknown[],
+) => {
+  const nodes = content.map((item) => view.state.schema.nodeFromJSON(item));
+  const transaction = view.state.tr.replaceSelection(Slice.maxOpen(Fragment.fromArray(nodes)));
+  view.dispatch(transaction.scrollIntoView());
+};
 
 export const RichTextEditor = ({
   value,
@@ -242,7 +255,13 @@ export const RichTextEditor = ({
   highlightedAssetId,
   onAssetChanged,
   onAssetTitleChange,
+  onPasteImage,
 }: RichTextEditorProps) => {
+  const onPasteImageRef = useRef(onPasteImage);
+  useEffect(() => {
+    onPasteImageRef.current = onPasteImage;
+  }, [onPasteImage]);
+
   const editor = useEditor({
     editable: !readOnly,
     extensions: [
@@ -254,6 +273,7 @@ export const RichTextEditor = ({
       TaskItem.configure({ nested: true }),
       RecordAssetNode.configure({ highlightedAssetId, onAssetChanged, onAssetTitleChange }),
       RecordFormulaNode,
+      RecordInlineMathNode,
       RecordStructureDiagramNode,
       RecordComparisonTableNode,
       RecordStickyBoardNode,
@@ -274,6 +294,58 @@ export const RichTextEditor = ({
           event.preventDefault();
           return true;
         },
+      },
+      handlePaste: (view, event) => {
+        const clipboardData = event.clipboardData;
+        const files = clipboardImageFiles(clipboardData);
+        const markdown = clipboardData?.getData("text/markdown") || "";
+        const plainText = clipboardData?.getData("text/plain") || "";
+        const source = markdown || plainText;
+        const shouldParseMarkdown = Boolean(markdown || looksLikeMarkdown(source));
+        const hasImageClipboardItem = Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
+
+        const insertPastedAsset = async (file: File) => {
+          const asset = await onPasteImageRef.current?.(file);
+          if (!asset || view.state.schema.nodeFromJSON === undefined) {
+            return;
+          }
+          replaceSelectionWithContent(view, [
+            {
+              type: "recordAsset",
+              attrs: { assetId: asset.id, kind: "image", title: asset.title },
+            },
+            { type: "paragraph" },
+          ]);
+        };
+
+        if (shouldParseMarkdown) {
+          event.preventDefault();
+          replaceSelectionWithContent(view, markdownToTiptapContent(view.state.schema as never, source));
+          void Promise.all(files.map(insertPastedAsset));
+          return true;
+        }
+
+        if (files.length > 0) {
+          event.preventDefault();
+          void Promise.all(files.map(insertPastedAsset));
+          return true;
+        }
+
+        const shouldReadClipboardImage = Boolean(
+          onPasteImageRef.current &&
+          !markdown &&
+          !plainText &&
+          ((clipboardData?.items?.length ?? 0) === 0 || hasImageClipboardItem),
+        );
+        if (shouldReadClipboardImage) {
+          void readClipboardImageFallback().then((file) => {
+            if (file) {
+              return insertPastedAsset(file);
+            }
+            return undefined;
+          });
+        }
+        return false;
       },
     },
     onUpdate: ({ editor }) => {
@@ -311,6 +383,22 @@ export const RichTextEditor = ({
           <button type="button" title="标题" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
             H
           </button>
+          <select
+            className="editor-heading-select"
+            aria-label="标题级别"
+            value={[1, 2, 3, 4, 5, 6].find((level) => editor.isActive("heading", { level })) ?? 0}
+            onChange={(event) => {
+              const level = Number(event.target.value);
+              if (level === 0) {
+                editor.chain().focus().setParagraph().run();
+                return;
+              }
+              editor.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 | 4 | 5 | 6 }).run();
+            }}
+          >
+            <option value={0}>正文</option>
+            {[1, 2, 3, 4, 5, 6].map((level) => <option key={level} value={level}>H{level}</option>)}
+          </select>
           <button
             type="button"
             className={editor.isActive("bulletList") ? "active" : ""}
@@ -329,7 +417,7 @@ export const RichTextEditor = ({
           >
             <ListOrdered size={16} />
           </button>
-          <button type="button" title="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
+          <button type="button" className={editor.isActive("blockquote") ? "active" : ""} title="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
             “”
           </button>
           <button type="button" title="代码" onClick={() => editor.chain().focus().toggleCodeBlock().run()}>

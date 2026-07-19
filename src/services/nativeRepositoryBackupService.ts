@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
+import { withRestoreLock } from "./restoreLockService";
 import { base64ToBlob, summarizeSnapshot } from "./backup";
 import { blobToBase64Chunks } from "./nativeFileWriter";
 import {
@@ -40,6 +41,10 @@ interface RepositoryManifestSnapshot {
   assetCount: number;
   totalAssetBytes: number;
 }
+
+type NativeRepositoryRestoreOptions = ImportOptions & {
+  onRestored?: () => Promise<void> | void;
+};
 
 interface RepositoryManifest {
   format: typeof REPOSITORY_MANIFEST_FORMAT;
@@ -462,34 +467,36 @@ const verifyRepositoryAssets = async (
 
 export const restoreNativeRepositoryBackup = async (
   store: StorageAdapter,
-  options: ImportOptions = {},
-): Promise<ImportSummary> => {
-  if (!canUseNativeAutoBackup()) {
-    throw new Error("Android 增量文件夹恢复只在 Android App 内可用。");
-  }
+  options: NativeRepositoryRestoreOptions = {},
+): Promise<ImportSummary> =>
+  withRestoreLock(async () => {
+    if (!canUseNativeAutoBackup()) {
+      throw new Error("Android 增量文件夹恢复只在 Android App 内可用。");
+    }
 
-  options.onProgress?.({ stage: "indexing", message: "正在检查自动备份仓库。" });
-  const { snapshot, assetPaths } = await loadLatestSnapshot();
-  await verifyRepositoryAssets(snapshot.assets, assetPaths);
-  const summary = snapshotSummary(snapshot);
-  if (!hasRecoverableData(snapshot)) {
-    throw new Error("自动备份仓库中没有可恢复的数据。");
-  }
+    options.onProgress?.({ stage: "indexing", message: "正在检查自动备份仓库。" });
+    const { snapshot, assetPaths } = await loadLatestSnapshot();
+    await verifyRepositoryAssets(snapshot.assets, assetPaths);
+    const summary = snapshotSummary(snapshot);
+    if (!hasRecoverableData(snapshot)) {
+      throw new Error("自动备份仓库中没有可恢复的数据。");
+    }
 
-  options.onProgress?.({ stage: "restoring", message: "仓库快照已通过校验，正在覆盖当前本地数据。" });
-  await store.restoreStreamableSnapshot(snapshot, async (meta, index, total) => {
-    options.onProgress?.({
-      stage: "assets",
-      message: `正在恢复资源 ${index + 1}/${total}。`,
-      current: index + 1,
-      total,
-    });
-    const blob = await readRepositoryBlob(assetPaths[meta.id] ?? assetPath(meta), meta.mimeType);
-    return metaToAsset(meta, blob);
-  }, options);
-  options.onProgress?.({ stage: "done", message: "自动备份仓库恢复完成。" });
-  return summary;
-};
+    options.onProgress?.({ stage: "restoring", message: "仓库快照已通过校验，正在覆盖当前本地数据。" });
+    await store.restoreStreamableSnapshot(snapshot, async (meta, index, total) => {
+      options.onProgress?.({
+        stage: "assets",
+        message: `正在恢复资源 ${index + 1}/${total}。`,
+        current: index + 1,
+        total,
+      });
+      const blob = await readRepositoryBlob(assetPaths[meta.id] ?? assetPath(meta), meta.mimeType);
+      return metaToAsset(meta, blob);
+    }, options);
+    options.onProgress?.({ stage: "done", message: "自动备份仓库恢复完成。" });
+    await options.onRestored?.();
+    return summary;
+  });
 
 export const diagnoseNativeRepositoryBackup = async () => {
   await ensureNativeBackupRepository(REPOSITORY_NAME);

@@ -12,6 +12,8 @@ import { describeOcrForAi } from "./ocrDiagnostics";
 const MAX_SELECTED_CHARS = 12_000;
 const LONG_CONTEXT_CHARS = 16_000;
 const MAX_CHUNK_CHARS = 2_400;
+const MAX_INDEXED_CONTEXT_CHARS = 1_000_000;
+const MAX_STORED_MARKDOWN_CHARS = 64_000;
 
 const normalizeText = (value: string): string =>
   value.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -353,6 +355,96 @@ export const buildAiContextPack = (
       includedImages,
       skippedImages,
     },
+    contextHash,
+  };
+};
+
+const yieldAiContext = async (): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    if (typeof window !== "undefined") {
+      window.setTimeout(resolve, 0);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+};
+
+export const buildAiContextPackAsync = async (
+  date: string,
+  blocks: Block[],
+  assets: Asset[],
+  query = "",
+  signal?: AbortSignal,
+): Promise<AiContextPack> => {
+  const records = blocks
+    .filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt && block.date === date)
+    .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt));
+  const allChunks: AiContextChunk[] = [];
+  const warnings = new Set<string>();
+  const skippedAssets = [] as AiContextPack["skippedAssets"];
+  const missingOcrAssetIds: string[] = [];
+  const markdownParts: string[] = [`# ${date} 学习日志`, ""];
+  let includedImages = 0;
+  let skippedImages = 0;
+  let indexedChars = 0;
+  let markdownChars = markdownParts.join("\n").length;
+
+  for (const record of records) {
+    if (signal?.aborted) {
+      throw new DOMException("AI context cancelled", "AbortError");
+    }
+    const partial = buildAiContextPack(date, [record], assets, "");
+    for (const chunk of partial.allChunks) {
+      if (indexedChars + chunk.content.length > MAX_INDEXED_CONTEXT_CHARS) {
+        warnings.add("当天内容较多，AI 上下文已按安全上限分批截取；原始记录未受影响。");
+        break;
+      }
+      allChunks.push({ ...chunk, order: allChunks.length });
+      indexedChars += chunk.content.length;
+    }
+    for (const warning of partial.warnings) warnings.add(warning);
+    skippedAssets.push(...partial.skippedAssets);
+    missingOcrAssetIds.push(...partial.missingOcrAssetIds);
+    includedImages += partial.ocrSummary?.includedImages ?? 0;
+    skippedImages += partial.ocrSummary?.skippedImages ?? 0;
+    if (markdownChars < MAX_STORED_MARKDOWN_CHARS) {
+      const remaining = MAX_STORED_MARKDOWN_CHARS - markdownChars;
+      const section = partial.markdown.slice(0, remaining);
+      markdownParts.push(section, "");
+      markdownChars += section.length + 1;
+      if (section.length < partial.markdown.length) {
+        warnings.add("AI Markdown 预览已按安全上限截取；AI 问答仍使用选中的语义分片。");
+      }
+    }
+    await yieldAiContext();
+  }
+
+  const totalChars = allChunks.reduce((sum, chunk) => sum + chunk.content.length, 0);
+  const selectedChunks = totalChars > LONG_CONTEXT_CHARS || query.trim()
+    ? selectRelevantChunks(allChunks, query)
+    : allChunks;
+  const summary = buildSummary(date, records, allChunks);
+  const warningList = Array.from(warnings);
+  const contextHash = hashAiContext([
+    date,
+    summary,
+    ...allChunks.map((chunk) => `${chunk.chunkId}:${chunk.content}`),
+    ...warningList,
+  ].join("\n"));
+
+  return {
+    date,
+    recordIds: records.map((record) => record.id),
+    markdown: markdownParts.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+    summary,
+    selectedChunks,
+    allChunks,
+    totalChunks: allChunks.length,
+    estimatedChars: selectedChunks.reduce((sum, chunk) => sum + chunk.content.length, 0),
+    warnings: warningList,
+    skippedAssets,
+    missingOcrAssetIds: Array.from(new Set(missingOcrAssetIds)),
+    ocrSummary: { includedImages, skippedImages },
     contextHash,
   };
 };

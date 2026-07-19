@@ -26,6 +26,7 @@ import {
   getNativeAudioRecordingStatus,
   stopNativeAudioRecording,
 } from "../services/nativeAudioRecorder";
+import { useRestoreInProgress } from "../services/restoreLockService";
 
 interface RecordEditorPageProps {
   record: RecordBlock;
@@ -124,6 +125,7 @@ export const RecordEditorPage = ({
   onRemoveReview,
 }: RecordEditorPageProps) => {
   const native = isNativePlatform();
+  const restoreLocked = useRestoreInProgress();
   const [editing, setEditingState] = useState(initialEditing);
   const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
@@ -149,6 +151,9 @@ export const RecordEditorPage = ({
 
   const setEditing = useCallback(
     (nextEditing: boolean) => {
+      if (nextEditing && restoreLocked) {
+        return;
+      }
       if (nextEditing) {
         ignoreEditorChangesRef.current = false;
         setSaveError(null);
@@ -157,12 +162,12 @@ export const RecordEditorPage = ({
       setEditingState(nextEditing);
       onEditingChange?.(nextEditing);
     },
-    [onEditingChange],
+    [onEditingChange, restoreLocked],
   );
 
   const flushDraft = useCallback(
     async (nextDraft = draftRef.current, options: { force?: boolean } = {}) => {
-      if ((!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+      if (restoreLocked || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
         return;
       }
 
@@ -182,13 +187,13 @@ export const RecordEditorPage = ({
       draftSaveQueueRef.current = task.catch(() => undefined);
       await task;
     },
-    [onSaveDraft, record],
+    [onSaveDraft, record, restoreLocked],
   );
 
   const scheduleDraftSave = useCallback(
     (nextDraft: RecordBlock) => {
       draftRef.current = nextDraft;
-      if (committingRef.current || ignoreEditorChangesRef.current || !hasDraftChanges(nextDraft, record)) {
+      if (restoreLocked || committingRef.current || ignoreEditorChangesRef.current || !hasDraftChanges(nextDraft, record)) {
         return;
       }
       if (saveTimerRef.current) {
@@ -199,7 +204,7 @@ export const RecordEditorPage = ({
         void flushDraft(nextDraft).catch(() => undefined);
       }, 350);
     },
-    [flushDraft, record],
+    [flushDraft, record, restoreLocked],
   );
 
   const cancelScheduledDraftSave = useCallback(() => {
@@ -240,6 +245,17 @@ export const RecordEditorPage = ({
     },
     [scheduleDraftSave],
   );
+
+  useEffect(() => {
+    if (!restoreLocked) {
+      return;
+    }
+    cancelScheduledDraftSave();
+    ignoreEditorChangesRef.current = true;
+    setMoreActionsOpen(false);
+    setEditingState(false);
+    onEditingChange?.(false);
+  }, [cancelScheduledDraftSave, onEditingChange, restoreLocked]);
 
   useEffect(() => {
     let cancelled = false;
@@ -299,7 +315,7 @@ export const RecordEditorPage = ({
   }, [cancelScheduledDraftSave, flushDraft]);
 
   const update = (patch: Partial<RecordBlock>) => {
-    if (ignoreEditorChangesRef.current) {
+    if (restoreLocked || ignoreEditorChangesRef.current) {
       return;
     }
     setCurrentDraft({ ...draftRef.current, ...patch, mistakeRefs: [] });
@@ -316,6 +332,9 @@ export const RecordEditorPage = ({
   }, []);
 
   const addAsset = useCallback((editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
+    if (restoreLocked) {
+      return Promise.resolve();
+    }
     const task = (async () => {
       const asset = await onAddAsset(file, kind, title);
       insertAfterCurrentBlock(editor, {
@@ -326,7 +345,18 @@ export const RecordEditorPage = ({
     })();
 
     return trackAssetTask(task);
-  }, [insertAfterCurrentBlock, onAddAsset, setCurrentDraft, trackAssetTask]);
+  }, [insertAfterCurrentBlock, onAddAsset, restoreLocked, setCurrentDraft, trackAssetTask]);
+
+  const uploadPastedImage = useCallback(async (file: File) => {
+    if (restoreLocked) {
+      return undefined;
+    }
+    const task = (async () => {
+      const asset = await onAddAsset(file, "image", file.name || "剪贴板图片");
+      return { id: asset.id, kind: "image" as const, title: (asset.title ?? file.name) || "剪贴板图片" };
+    })();
+    return trackAssetTask(task);
+  }, [onAddAsset, restoreLocked, trackAssetTask]);
 
   const pickNativeEditorImage = useCallback(async (editor: Editor) => {
     try {
@@ -346,8 +376,13 @@ export const RecordEditorPage = ({
     }
 
     const task = (async () => {
-      let file = await audioRecorderRef.current?.stopAndGetFile();
-      if (!file && canUseNativeAudioRecorder()) {
+      const recorder = audioRecorderRef.current;
+      const wasRecording = Boolean(recorder?.isRecording());
+      let file: File | null = null;
+      if (wasRecording) {
+        file = await recorder!.stopAndGetFile();
+      }
+      if (!file && wasRecording && canUseNativeAudioRecorder()) {
         const nativeStatus = await getNativeAudioRecordingStatus().catch(() => ({ recording: false }));
         if (nativeStatus.recording) {
           file = await stopNativeAudioRecording().catch(() => null);
@@ -380,18 +415,22 @@ export const RecordEditorPage = ({
     }
   }, [addAsset, flushDraft, onAddAsset, setCurrentDraft]);
 
-  const back = async () => {
+  const back = () => {
     if (leavingRef.current) {
       return;
     }
     leavingRef.current = true;
-    try {
-      await stopRecordingIntoDraft();
-      await flushDraft();
-      onBack();
-    } finally {
-      leavingRef.current = false;
-    }
+    void (async () => {
+      try {
+        await stopRecordingIntoDraft();
+        await flushDraft();
+      } catch {
+        // Returning must not depend on a recorder or storage operation completing.
+      } finally {
+        leavingRef.current = false;
+      }
+    })();
+    onBack();
   };
 
   useEffect(() => () => {
@@ -399,7 +438,7 @@ export const RecordEditorPage = ({
   }, [stopRecordingIntoDraft]);
 
   const save = async () => {
-    if (saving) {
+    if (saving || restoreLocked) {
       return;
     }
     setSaving(true);
@@ -442,6 +481,9 @@ export const RecordEditorPage = ({
   };
 
   const discardDraft = async () => {
+    if (restoreLocked) {
+      return;
+    }
     cancelScheduledDraftSave();
     await waitForDraftSaves();
     await onDeleteDraft(record.id);
@@ -454,6 +496,9 @@ export const RecordEditorPage = ({
   };
 
   const remove = async () => {
+    if (restoreLocked) {
+      return;
+    }
     const ok = window.confirm(`确定删除“${record.title}”吗？\n\n删除后会进入回收站，30 天内可以恢复。`);
     if (!ok) {
       return;
@@ -465,6 +510,9 @@ export const RecordEditorPage = ({
   };
 
   const toggleFavorite = async () => {
+    if (restoreLocked) {
+      return;
+    }
     await onToggleFavorite(record, !record.favorite);
   };
 
@@ -478,13 +526,17 @@ export const RecordEditorPage = ({
       : "加入复习";
 
   const addReview = async () => {
+    if (restoreLocked) {
+      return;
+    }
     await onAddToReview?.(record.id);
   };
 
   const closeMoreActions = () => setMoreActionsOpen(false);
 
   return (
-    <main className="page record-editor-page">
+    <main className={restoreLocked ? "page record-editor-page restore-locked" : "page record-editor-page"} aria-busy={restoreLocked}>
+      {restoreLocked && <p className="status-message draft-status">正在恢复备份，编辑已暂时锁定。</p>}
       <section className="record-editor-topbar">
         <button type="button" className="secondary-button" onClick={() => void back()}>
           <ArrowLeft size={18} />
@@ -650,8 +702,10 @@ export const RecordEditorPage = ({
           <RichTextEditor
             value={draft.contentHtml}
             onChange={(contentHtml) => update({ contentHtml })}
+            readOnly={restoreLocked}
             placeholder="像笔记页一样，把文字、思路、截图、公式和录音放进同一个记录块..."
             onAssetTitleChange={onAssetTitleChange}
+            onPasteImage={uploadPastedImage}
             renderInsertTools={(editor) => {
               editorRef.current = editor;
               return (

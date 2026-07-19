@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +58,7 @@ describe("SearchPage", () => {
     expect(screen.getByText("目标记录")).toBeInTheDocument();
   });
 
-  it("caps rendered results at 200 and asks the user to narrow the keyword", () => {
+  it("caps rendered results at 200 and asks the user to narrow the keyword", async () => {
     const blocks = Array.from({ length: 205 }, (_, index) =>
       record(`r${index}`, `结果 ${index + 1}`, "同一个关键词"),
     );
@@ -73,8 +73,8 @@ describe("SearchPage", () => {
       />,
     );
 
-    expect(screen.getByText("结果较多，仅显示前 200 条，请缩小关键词。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("结果较多，仅显示前 200 条，请缩小关键词。")).toBeInTheDocument());
     expect(screen.getByText("结果 200")).toBeInTheDocument();
-    expect(screen.queryByText("结果 201")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".search-result")).toHaveLength(200);
   });
 });

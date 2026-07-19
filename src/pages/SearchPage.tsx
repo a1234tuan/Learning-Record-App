@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Search } from "lucide-react";
 
-import type { Asset, Block, DayEntry } from "../types";
-import { searchAll } from "../lib/search";
+import type { Asset, Block, DayEntry, SearchResult } from "../types";
+import { searchAllAsync } from "../lib/search";
 
 interface SearchPageProps {
   entries: DayEntry[];
@@ -19,6 +19,8 @@ const SEARCH_RESULT_LIMIT = 200;
 
 export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBack, onOpenRecord }: SearchPageProps) => {
   const [deferredQuery, setDeferredQuery] = useState(query);
+  const [rawResults, setRawResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -29,12 +31,34 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBa
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  const rawResults = useMemo(
-    () => deferredQuery.trim()
-      ? searchAll(deferredQuery, entries, blocks, assets, SEARCH_RESULT_LIMIT + 1)
-      : [],
-    [assets, blocks, deferredQuery, entries],
-  );
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!deferredQuery.trim()) {
+      setRawResults([]);
+      setSearching(false);
+      return () => controller.abort();
+    }
+    setSearching(true);
+    void searchAllAsync(deferredQuery, entries, blocks, assets, SEARCH_RESULT_LIMIT + 1, controller.signal)
+      .then((nextResults) => {
+        if (!controller.signal.aborted) {
+          setRawResults(nextResults);
+        }
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setSearching(false);
+        }
+      });
+    return () => controller.abort();
+  }, [assets, blocks, deferredQuery, entries]);
+
   const results = rawResults.slice(0, SEARCH_RESULT_LIMIT);
   const hasMoreResults = rawResults.length > SEARCH_RESULT_LIMIT;
 
@@ -61,6 +85,7 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBa
         />
       </label>
       <section className="search-results">
+        {searching && <p className="status-message">正在搜索…</p>}
         {hasMoreResults && (
           <p className="status-message">结果较多，仅显示前 {SEARCH_RESULT_LIMIT} 条，请缩小关键词。</p>
         )}

@@ -102,7 +102,7 @@ describe("autoBackupService", () => {
     vi.useFakeTimers();
   });
 
-  it("does not auto-sync dirty changes during normal editing", async () => {
+  it("debounces automatic writes during normal editing", async () => {
     const store = makeStore();
     const adapter = makeAdapter();
 
@@ -110,17 +110,17 @@ describe("autoBackupService", () => {
     await markAutoBackupDirty("asset", adapter, store);
     await vi.advanceTimersByTimeAsync(600_000);
 
-    expect(adapter.writeLatest).not.toHaveBeenCalled();
+    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
   });
 
-  it("does not flush dirty changes when the app goes to the background", async () => {
+  it("flushes dirty changes when the app goes to the background", async () => {
     const store = makeStore();
     const adapter = makeAdapter();
 
     await markAutoBackupDirty("record", adapter, store);
-    await onAppBackgroundAutoBackup();
+    await onAppBackgroundAutoBackup(adapter, store);
 
-    expect(adapter.writeLatest).not.toHaveBeenCalled();
+    expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
   });
 
   it("manual flush writes immediately", async () => {

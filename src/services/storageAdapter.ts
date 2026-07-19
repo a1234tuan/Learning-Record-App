@@ -43,7 +43,7 @@ import {
   isLegacyDefaultAiPresetSet,
 } from "../db/defaults";
 import { addDaysISO, isoDateTimeToLocalDate, nowISO, todayISO } from "../lib/date";
-import { createBaseEntity, touch } from "../lib/entity";
+import { createBaseEntity, newId, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
@@ -63,6 +63,36 @@ import {
 const assetToMeta = (asset: Asset): BackupAssetMeta => {
   const { data: _data, ...meta } = asset;
   return meta;
+};
+
+const normalizeSnapshotRecords = (blocks: Block[]): Block[] =>
+  blocks.map((block) => block.type === "record"
+    ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] })
+    : block,
+  );
+
+const assertSnapshotIntegrity = (blocks: Block[], assets: Array<Pick<Asset, "id">>) => {
+  const assetIds = new Set<string>();
+  for (const asset of assets) {
+    if (assetIds.has(asset.id)) {
+      throw new Error(`备份数据不完整：资源 ID ${asset.id} 重复。`);
+    }
+    assetIds.add(asset.id);
+  }
+  for (const block of blocks) {
+    if (block.type !== "record") {
+      continue;
+    }
+    const synced = syncRecordRefsFromContent(block);
+    for (const ref of synced.assets) {
+      if (!assetIds.has(ref.id)) {
+        throw new Error(`备份数据不完整：记录“${block.title}”引用的资源 ${ref.id} 缺失。`);
+      }
+    }
+    if (synced.formulas.length !== block.formulas.length) {
+      throw new Error(`备份数据不一致：记录“${block.title}”的公式索引需要重新同步。`);
+    }
+  }
 };
 
 const isSuccessfulRecordReviewRating = (rating: RecordReviewRating): boolean => {
@@ -1078,32 +1108,27 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async createSnapshot(): Promise<StorageSnapshot> {
-    const [
-      entries,
-      blocks,
-      tags,
-      studySessions,
-      settings,
-      assets,
-      recordDrafts,
-      recordReviews,
-      recordReviewLogs,
-      recordReviewDayStats,
-    ] = await Promise.all([
-      db.entries.toArray(),
-      db.blocks.toArray(),
-      db.tags.toArray(),
-      db.studySessions.toArray(),
-      this.getSettings(),
-      db.assets.toArray(),
-      db.recordDrafts.toArray(),
-      db.recordReviews.toArray(),
-      db.recordReviewLogs.toArray(),
-      db.recordReviewDayStats.toArray(),
-    ]);
-    const cleanedBlocks: Block[] = blocks.map((block) =>
-      block.type === "record" ? { ...block, mistakeRefs: [] as string[] } : block,
+    const snapshot = await db.transaction(
+      "r",
+      [db.entries, db.blocks, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      async () => {
+        const [entries, blocks, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+          db.entries.toArray(),
+          db.blocks.toArray(),
+          db.tags.toArray(),
+          db.studySessions.toArray(),
+          db.settings.get("settings"),
+          db.assets.toArray(),
+          db.recordDrafts.toArray(),
+          db.recordReviews.toArray(),
+          db.recordReviewLogs.toArray(),
+          db.recordReviewDayStats.toArray(),
+        ]);
+        return { entries, blocks, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+      },
     );
+    const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
+    assertSnapshotIntegrity(cleanedBlocks, snapshot.assets);
 
     return {
       payload: {
@@ -1113,70 +1138,58 @@ export class DexieStorageAdapter implements StorageAdapter {
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
-            entries: entries.length,
+            entries: snapshot.entries.length,
             blocks: cleanedBlocks.length,
             mistakes: 0,
-            assets: assets.length,
-            tags: tags.length,
+            assets: snapshot.assets.length,
+            tags: snapshot.tags.length,
             reviews: 0,
-            studySessions: studySessions.length,
-            recordReviews: recordReviews.length,
-            recordReviewLogs: recordReviewLogs.length,
-            recordReviewDayStats: recordReviewDayStats.length,
+            studySessions: snapshot.studySessions.length,
+            recordReviews: snapshot.recordReviews.length,
+            recordReviewLogs: snapshot.recordReviewLogs.length,
+            recordReviewDayStats: snapshot.recordReviewDayStats.length,
           },
         },
-        entries,
+        entries: snapshot.entries,
         blocks: cleanedBlocks,
-        recordDrafts,
+        recordDrafts: snapshot.recordDrafts,
         mistakes: [],
-        tags,
+        tags: snapshot.tags,
         reviews: [],
-        recordReviews,
-        recordReviewLogs,
-        recordReviewDayStats,
-        studySessions,
-        settings: ensureSettingsSubjects({ ...settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        recordReviews: snapshot.recordReviews,
+        recordReviewLogs: snapshot.recordReviewLogs,
+        recordReviewDayStats: snapshot.recordReviewDayStats,
+        studySessions: snapshot.studySessions,
+        settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
       },
-      assets,
-      recordDrafts,
+      assets: snapshot.assets,
+      recordDrafts: snapshot.recordDrafts,
     };
   }
 
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
-    const collectAssetMetas = async () => {
-      const assetMetas: BackupAssetMeta[] = [];
-      await db.assets.each((asset) => {
-        assetMetas.push(assetToMeta(asset));
-      });
-      return assetMetas;
-    };
-
-    const [
-      entries,
-      blocks,
-      tags,
-      studySessions,
-      settings,
-      assets,
-      recordDrafts,
-      recordReviews,
-      recordReviewLogs,
-      recordReviewDayStats,
-    ] = await Promise.all([
-      db.entries.toArray(),
-      db.blocks.toArray(),
-      db.tags.toArray(),
-      db.studySessions.toArray(),
-      this.getSettings(),
-      collectAssetMetas(),
-      db.recordDrafts.toArray(),
-      db.recordReviews.toArray(),
-      db.recordReviewLogs.toArray(),
-      db.recordReviewDayStats.toArray(),
-    ]);
-    const cleanedBlocks: Block[] = blocks.map((block) =>
-      block.type === "record" ? { ...block, mistakeRefs: [] as string[] } : block,
+    const snapshot = await db.transaction(
+      "r",
+      [db.entries, db.blocks, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      async () => {
+        const [entries, blocks, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+          db.entries.toArray(),
+          db.blocks.toArray(),
+          db.tags.toArray(),
+          db.studySessions.toArray(),
+          db.settings.get("settings"),
+          db.assets.toArray(),
+          db.recordDrafts.toArray(),
+          db.recordReviews.toArray(),
+          db.recordReviewLogs.toArray(),
+          db.recordReviewDayStats.toArray(),
+        ]);
+        return { entries, blocks, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+      },
     );
+    const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
+    assertSnapshotIntegrity(cleanedBlocks, snapshot.assets);
+    const assets = snapshot.assets.map(assetToMeta);
 
     return {
       payload: {
@@ -1186,36 +1199,38 @@ export class DexieStorageAdapter implements StorageAdapter {
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
-            entries: entries.length,
+            entries: snapshot.entries.length,
             blocks: cleanedBlocks.length,
             mistakes: 0,
             assets: assets.length,
-            tags: tags.length,
+            tags: snapshot.tags.length,
             reviews: 0,
-            studySessions: studySessions.length,
-            recordReviews: recordReviews.length,
-            recordReviewLogs: recordReviewLogs.length,
-            recordReviewDayStats: recordReviewDayStats.length,
+            studySessions: snapshot.studySessions.length,
+            recordReviews: snapshot.recordReviews.length,
+            recordReviewLogs: snapshot.recordReviewLogs.length,
+            recordReviewDayStats: snapshot.recordReviewDayStats.length,
           },
         },
-        entries,
+        entries: snapshot.entries,
         blocks: cleanedBlocks,
-        recordDrafts,
+        recordDrafts: snapshot.recordDrafts,
         mistakes: [],
-        tags,
+        tags: snapshot.tags,
         reviews: [],
-        recordReviews,
-        recordReviewLogs,
-        recordReviewDayStats,
-        studySessions,
-        settings: ensureSettingsSubjects({ ...settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        recordReviews: snapshot.recordReviews,
+        recordReviewLogs: snapshot.recordReviewLogs,
+        recordReviewDayStats: snapshot.recordReviewDayStats,
+        studySessions: snapshot.studySessions,
+        settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
       },
       assets,
-      recordDrafts,
+      recordDrafts: snapshot.recordDrafts,
     };
   }
 
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
+    const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
+    assertSnapshotIntegrity(restoredBlocks, snapshot.assets);
     await db.transaction(
       "rw",
       [
@@ -1247,7 +1262,6 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.settings.clear(),
           db.assets.clear(),
         ]);
-        const restoredBlocks = migrateBlocksToRecords(snapshot.payload.blocks);
         const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
         await Promise.all([
           db.entries.bulkPut(snapshot.payload.entries),
@@ -1271,67 +1285,60 @@ export class DexieStorageAdapter implements StorageAdapter {
     readAsset: StreamedAssetReader,
     options: StreamingImportOptions = {},
   ): Promise<void> {
-    const restoredBlocks = migrateBlocksToRecords(snapshot.payload.blocks);
+    const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
+    assertSnapshotIntegrity(restoredBlocks, snapshot.assets);
     const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
-
-    await db.transaction(
-      "rw",
-      [
-        db.entries,
-        db.blocks,
-        db.recordDrafts,
-        db.recordReviews,
-        db.recordReviewLogs,
-        db.recordReviewDayStats,
-        db.mistakes,
-        db.tags,
-        db.reviews,
-        db.studySessions,
-        db.settings,
-        db.assets,
-      ],
-      async () => {
-        await Promise.all([
-          db.entries.clear(),
-          db.blocks.clear(),
-          db.recordDrafts.clear(),
-          db.recordReviews.clear(),
-          db.recordReviewLogs.clear(),
-          db.recordReviewDayStats.clear(),
-          db.mistakes.clear(),
-          db.tags.clear(),
-          db.reviews.clear(),
-          db.studySessions.clear(),
-          db.settings.clear(),
-          db.assets.clear(),
-        ]);
-        await Promise.all([
-          db.entries.bulkPut(snapshot.payload.entries),
-          db.blocks.bulkPut(restoredBlocks),
-          db.recordDrafts.bulkPut(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
-          db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
-          db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),
-          db.recordReviewDayStats.bulkPut(snapshot.payload.recordReviewDayStats ?? []),
-          db.tags.bulkPut(snapshot.payload.tags),
-          db.studySessions.bulkPut(snapshot.payload.studySessions),
-          db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
-        ]);
-      },
-    );
-    await this.migrateRecordReviewsToMixedSystem();
-
+    const sessionId = newId();
     const total = snapshot.assets.length;
-    for (const [index, meta] of snapshot.assets.entries()) {
-      options.onProgress?.({
-        stage: "assets",
-        message: `正在恢复资源 ${index + 1}/${total}。`,
-        current: index + 1,
-        total,
-      });
-      const asset = await readAsset(meta, index, total);
-      if (asset) {
-        await db.assets.put(asset);
+    try {
+      for (const [index, meta] of snapshot.assets.entries()) {
+        options.onProgress?.({
+          stage: "assets",
+          message: `正在校验资源 ${index + 1}/${total}。`,
+          current: index + 1,
+          total,
+        });
+        const asset = await readAsset(meta, index, total);
+        if (!asset) {
+          throw new Error(`备份数据不完整：无法读取资源 ${meta.fileName}。`);
+        }
+        await db.restoreStagingAssets.put({ stagingId: `${sessionId}:${meta.id}`, sessionId, asset });
       }
+
+      const staged = await db.restoreStagingAssets.where("sessionId").equals(sessionId).toArray();
+      if (staged.length !== snapshot.assets.length) {
+        throw new Error("备份资源暂存不完整，已取消恢复。");
+      }
+
+      options.onProgress?.({ stage: "restoring", message: "资源校验完成，正在一次性恢复数据。" });
+      await db.transaction(
+        "rw",
+        [db.entries, db.blocks, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.restoreStagingAssets],
+        async () => {
+          await Promise.all([
+            db.entries.clear(), db.blocks.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
+            db.recordReviewDayStats.clear(), db.mistakes.clear(), db.tags.clear(), db.reviews.clear(), db.studySessions.clear(),
+            db.settings.clear(), db.assets.clear(),
+          ]);
+          await Promise.all([
+            db.entries.bulkPut(snapshot.payload.entries),
+            db.blocks.bulkPut(restoredBlocks),
+            db.recordDrafts.bulkPut(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
+            db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
+            db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),
+            db.recordReviewDayStats.bulkPut(snapshot.payload.recordReviewDayStats ?? []),
+            db.tags.bulkPut(snapshot.payload.tags),
+            db.studySessions.bulkPut(snapshot.payload.studySessions),
+            db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
+            db.assets.bulkPut(staged.map((entry) => entry.asset)),
+            db.restoreStagingAssets.where("sessionId").equals(sessionId).delete(),
+          ]);
+        },
+      );
+      await this.migrateRecordReviewsToMixedSystem();
+    } catch (error) {
+      await db.restoreStagingAssets.where("sessionId").equals(sessionId).delete();
+      throw error;
     }
   }
 

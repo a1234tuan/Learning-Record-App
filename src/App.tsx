@@ -34,7 +34,7 @@ import { TrashPage } from "./pages/TrashPage";
 import { UsageGuidePage } from "./pages/UsageGuidePage";
 import { PageTransition } from "./components/PageTransition";
 import type { RecordBlock, Subject } from "./types";
-import { buildDayLogAiContext } from "./services/dayLogAiContextService";
+import { buildDayLogAiContextAsync } from "./services/dayLogAiContextService";
 import { createAiSessionForDate } from "./services/aiSessionService";
 import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
@@ -343,7 +343,7 @@ export const App = () => {
     : undefined;
 
   const openAiForDate = async (date: string) => {
-    const attachment = buildDayLogAiContext(date, app.blocks, app.assets);
+    const attachment = await buildDayLogAiContextAsync(date, app.blocks, app.assets);
     const session = await createAiSessionForDate(date, attachment);
     if (session) {
       setActiveAiSessionId(session.id);

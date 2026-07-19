@@ -3,6 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Asset, RecordBlock, RecordDraft, RecordReviewLog, RecordReviewState, SubjectConfig } from "../types";
 
+const nativeAudioMock = vi.hoisted(() => ({
+  canUseNativeAudioRecorder: vi.fn(() => false),
+  getNativeAudioRecordingStatus: vi.fn().mockResolvedValue({ recording: false }),
+  startNativeAudioRecording: vi.fn().mockResolvedValue(undefined),
+  stopNativeAudioRecording: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../services/nativeAudioRecorder", () => nativeAudioMock);
+
 const richEditorMock = vi.hoisted(() => {
   const state: {
     html: string;
@@ -186,6 +195,10 @@ const renderEditor = (overrides: Partial<React.ComponentProps<typeof RecordEdito
 afterEach(() => {
   vi.useRealTimers();
   richEditorMock.reset();
+  nativeAudioMock.canUseNativeAudioRecorder.mockReset().mockReturnValue(false);
+  nativeAudioMock.getNativeAudioRecordingStatus.mockReset().mockResolvedValue({ recording: false });
+  nativeAudioMock.startNativeAudioRecording.mockReset().mockResolvedValue(undefined);
+  nativeAudioMock.stopNativeAudioRecording.mockReset().mockResolvedValue(null);
 });
 
 describe("RecordEditorPage", () => {
@@ -214,6 +227,66 @@ describe("RecordEditorPage", () => {
       contentHtml: "<record-collapse-block><p>body</p></record-collapse-block>",
     }));
     expect(screen.getByRole("heading", { name: "Math note 1" })).toBeInTheDocument();
+  });
+
+  it("returns immediately while a draft save is still in flight", async () => {
+    const draftSave = deferred<RecordDraft>();
+    let savedDraft!: RecordDraft;
+    const onSaveDraft = vi.fn((nextDraft: RecordDraft) => {
+      savedDraft = nextDraft;
+      return draftSave.promise;
+    });
+    const onBack = vi.fn();
+    const { onGetDraft } = renderEditor({ onBack, onSaveDraft });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    act(() => {
+      richEditorMock.html = "<p>queued draft</p>";
+      richEditorMock.props.onChange(richEditorMock.html);
+    });
+    await waitFor(() => expect(onSaveDraft).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      draftSave.resolve(savedDraft);
+      await draftSave.promise;
+    });
+  });
+
+  it("does not query the native recorder when leaving preview", async () => {
+    nativeAudioMock.canUseNativeAudioRecorder.mockReturnValue(true);
+    const onBack = vi.fn();
+    const { onGetDraft } = renderEditor({ initialEditing: false, onBack });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(nativeAudioMock.getNativeAudioRecordingStatus).not.toHaveBeenCalled();
+  });
+
+  it("stops an active native recording after navigation starts", async () => {
+    const recordingFile = new File(["audio"], "recording.m4a", { type: "audio/mp4" });
+    nativeAudioMock.canUseNativeAudioRecorder.mockReturnValue(true);
+    nativeAudioMock.getNativeAudioRecordingStatus.mockResolvedValue({ recording: true });
+    nativeAudioMock.stopNativeAudioRecording.mockResolvedValue(recordingFile);
+    const onBack = vi.fn();
+    const onAddAsset = vi.fn().mockResolvedValue(asset);
+    const { onGetDraft } = renderEditor({ onBack, onAddAsset });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止录音" })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(nativeAudioMock.stopNativeAudioRecording).toHaveBeenCalledTimes(1));
+    expect(onAddAsset).toHaveBeenCalledWith(recordingFile, "audio", "录音");
   });
 
   it("waits for an in-flight draft save before deleting the draft and entering preview", async () => {

@@ -19,6 +19,12 @@ import type {
   Tag,
 } from "../types";
 
+export interface RestoreStagingAsset {
+  stagingId: string;
+  sessionId: string;
+  asset: Asset;
+}
+
 export class StudyJournalDatabase extends Dexie {
   aiAttachments!: Table<AiChatAttachment, string>;
   aiSessions!: Table<AiChatSession, string>;
@@ -36,6 +42,7 @@ export class StudyJournalDatabase extends Dexie {
   assets!: Table<Asset, string>;
   studySessions!: Table<StudySession, string>;
   settings!: Table<AppSettings, string>;
+  restoreStagingAssets!: Table<RestoreStagingAsset, string>;
 
   constructor() {
     super("study-journal-408");
@@ -108,6 +115,25 @@ export class StudyJournalDatabase extends Dexie {
       aiMessages: "id, sessionId, role, createdAt, updatedAt",
       aiAttachments: "id, sessionId, messageId, createdAt, updatedAt",
       aiSecrets: "id",
+    });
+    this.version(6).stores({
+      entries: "id, date, updatedAt, pinned, favorite",
+      blocks: "id, date, type, order, updatedAt",
+      recordDrafts: "id, recordId, updatedAt",
+      recordReviews: "id, recordId, status, nextReviewDate, lastReviewDate, updatedAt, [status+nextReviewDate]",
+      recordReviewLogs: "id, recordId, reviewedAt, rating",
+      recordReviewDayStats: "id, date, updatedAt, completedAt",
+      mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
+      reviews: "id, mistakeId, dueAt, completedAt, stage",
+      tags: "id, &name, parent",
+      assets: "id, kind, fileName, updatedAt",
+      studySessions: "id, date, subject, blockId",
+      settings: "id",
+      aiSessions: "id, sourceDate, updatedAt, createdAt",
+      aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiAttachments: "id, sessionId, messageId, createdAt, updatedAt",
+      aiSecrets: "id",
+      restoreStagingAssets: "stagingId, sessionId, asset.id",
     });
   }
 }

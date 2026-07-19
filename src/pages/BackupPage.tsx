@@ -177,6 +177,7 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
       setImportStatus({ state: "parsing", title: "检查自动备份仓库", detail: "正在校验 manifest、snapshot 和资源文件。" });
       try {
         const summary = await restoreNativeRepositoryBackup(storage, {
+          onRestored,
           onProgress: (progress) => {
             if (progress.stage === "restoring" && activeSummary) {
               setImportStatus({
@@ -210,7 +211,6 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
           detail: `${formatImportSummary(summary)} 备份版本 v${summary.version}。`,
           summary,
         });
-        await onRestored();
       } catch (error) {
         const detail = error instanceof Error ? error.message : "自动备份仓库恢复失败。";
         setImportStatus({ state: "error", title: "仓库恢复失败", detail });

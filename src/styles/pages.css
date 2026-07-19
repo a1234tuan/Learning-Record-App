@@ -1492,6 +1492,13 @@
   overflow-wrap: anywhere;
 }
 
+.rich-editor blockquote {
+  border-inline-start-color: var(--color-primary);
+  background-color: var(--color-surface-muted) !important;
+  background-image: none !important;
+  color: var(--color-text, var(--text));
+}
+
 .rich-editor::selection,
 .rich-editor ::selection {
   background: rgba(45, 107, 90, 0.32) !important;

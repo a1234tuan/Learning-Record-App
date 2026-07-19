@@ -6,6 +6,9 @@ import { storage } from "./storageAdapter";
 const DEFAULT_DEBOUNCE_MS = 600_000;
 
 let runningPromise: Promise<AppSettings> | undefined;
+let dirtyTimer: number | undefined;
+let dirtyGeneration = 0;
+let suspended = false;
 
 const withAutoBackupDefaults = (settings: AppSettings): AppSettings => ({
   ...settings,
@@ -96,6 +99,9 @@ export const flushAutoBackupNow = async (
   store: StorageAdapter = storage,
 ): Promise<AppSettings> => {
   void reason;
+  if (suspended) {
+    return withAutoBackupDefaults(await store.getSettings());
+  }
   if (runningPromise) {
     return runningPromise;
   }
@@ -171,8 +177,42 @@ export const markAutoBackupDirty = async (
   store: StorageAdapter = storage,
 ): Promise<void> => {
   void reason;
-  void adapter;
-  void store;
+  if (suspended) {
+    return;
+  }
+  if (typeof store.getSettings !== "function") {
+    return;
+  }
+  const settings = withAutoBackupDefaults(await store.getSettings());
+  if (!settings.autoBackup?.enabled) {
+    return;
+  }
+  dirtyGeneration += 1;
+  const generation = dirtyGeneration;
+  if (dirtyTimer !== undefined) {
+    window.clearTimeout(dirtyTimer);
+  }
+  dirtyTimer = window.setTimeout(() => {
+    dirtyTimer = undefined;
+    if (!suspended && generation === dirtyGeneration) {
+      void flushAutoBackupNow("dirty", adapter, store);
+    }
+  }, Math.max(1_000, settings.autoBackup.debounceMs ?? DEFAULT_DEBOUNCE_MS));
 };
 
-export const onAppBackgroundAutoBackup = async (): Promise<void> => undefined;
+export const setAutoBackupSuspended = (value: boolean): void => {
+  suspended = value;
+  if (value && dirtyTimer !== undefined) {
+    window.clearTimeout(dirtyTimer);
+    dirtyTimer = undefined;
+  }
+};
+
+export const onAppBackgroundAutoBackup = async (
+  adapter: AutoBackupAdapter = autoBackupAdapter,
+  store: StorageAdapter = storage,
+): Promise<void> => {
+  if (!suspended) {
+    await flushAutoBackupNow("background", adapter, store);
+  }
+};

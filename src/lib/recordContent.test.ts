@@ -80,6 +80,19 @@ describe("recordContent", () => {
     expect(refs.formulas).toEqual([{ id: "f1", title: "复杂度", latex: "T(n)=O(n)" }]);
   });
 
+  it("counts inline Markdown formulas as formula nodes and keeps them searchable", () => {
+    const synced = syncRecordRefsFromContent({
+      ...record,
+      assets: [],
+      formulas: [],
+      contentHtml: '<p>勾股定理 <record-inline-math data-formula-id="inline-1" data-latex="a^2+b^2=c^2"></record-inline-math></p>',
+    });
+
+    expect(synced.formulas).toEqual([{ id: "inline-1", latex: "a^2+b^2=c^2", title: undefined }]);
+    expect(recordToPlainText(synced)).toContain("$a^2+b^2=c^2$");
+    expect(recordToLinearMarkdown(synced)).toContain("$a^2+b^2=c^2$");
+  });
+
   it("syncs record indexes from linear content", () => {
     const synced = syncRecordRefsFromContent({
       ...record,

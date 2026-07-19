@@ -49,9 +49,7 @@ export const createKnowledgeRecords = (snapshot: StorageSnapshot): KnowledgeReco
       title: record.title,
       contentText: recordToPlainText(record, assetList),
       contentMarkdown: recordToLinearMarkdown(record, assetList),
-      formulas: nodes
-        .filter((node) => node.kind === "formula")
-        .map((node) => node.formula.latex),
+      formulas: record.formulas.map((formula) => formula.latex),
       assetTexts: nodes
         .filter((node) => node.kind === "asset")
         .map((node) => assetLabel(node.asset, node.ref.title)),

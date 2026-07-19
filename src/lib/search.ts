@@ -3,6 +3,29 @@ import { recordToPlainText } from "./recordContent";
 
 const normalize = (value: string): string => value.toLocaleLowerCase("zh-CN");
 const DEFAULT_SEARCH_LIMIT = Number.POSITIVE_INFINITY;
+const RECORD_TEXT_CACHE_LIMIT = 256;
+const SEARCH_BATCH_SIZE = 24;
+
+const recordTextCache = new Map<string, string>();
+
+const cacheRecordText = (key: string, value: string): string => {
+  recordTextCache.delete(key);
+  recordTextCache.set(key, value);
+  if (recordTextCache.size > RECORD_TEXT_CACHE_LIMIT) {
+    const oldest = recordTextCache.keys().next().value;
+    if (oldest) {
+      recordTextCache.delete(oldest);
+    }
+  }
+  return value;
+};
+
+const recordTextCacheKey = (record: RecordBlock, assetMap: Map<string, Asset>): string =>
+  [
+    record.id,
+    record.updatedAt,
+    ...record.assets.map((ref) => `${ref.id}:${assetMap.get(ref.id)?.updatedAt ?? "missing"}`),
+  ].join("|");
 
 const excerpt = (text: string, query: string): string => {
   const normalizedText = normalize(text);
@@ -26,16 +49,21 @@ const blockToTextWithAssetMap = (block: Block, assetMap: Map<string, Asset>): st
   };
   switch (block.type) {
     case "record":
+      const cacheKey = recordTextCacheKey(block, assetMap);
+      const cached = recordTextCache.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
       const recordAssets = block.assets
         .map((asset) => assetMap.get(asset.id))
         .filter((asset): asset is Asset => Boolean(asset));
-      return [
+      return cacheRecordText(cacheKey, [
         block.title,
         block.subject,
         recordToPlainText(block, recordAssets),
         block.assets.map((asset) => `${asset.title} ${assetTitle(asset.id)}`).join(" "),
         block.formulas.map((formula) => `${formula.title ?? ""} ${formula.latex}`).join(" "),
-      ].join(" ");
+      ].join(" "));
     case "richText":
       return block.content.replace(/<[^>]+>/g, " ");
     case "code":
@@ -138,6 +166,86 @@ export const searchAll = (
         return results;
       }
     }
+  }
+
+  return results;
+};
+
+const yieldSearch = async (): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      (window as Window & { requestIdleCallback: (callback: () => void) => number }).requestIdleCallback(() => resolve());
+      return;
+    }
+    globalThis.setTimeout(resolve, 0);
+  });
+};
+
+export const searchAllAsync = async (
+  query: string,
+  entries: DayEntry[],
+  blocks: Block[],
+  assets: Asset[] = [],
+  limit = DEFAULT_SEARCH_LIMIT,
+  signal?: AbortSignal,
+): Promise<SearchResult[]> => {
+  const normalizedQuery = normalize(query.trim());
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const maxResults = Number.isFinite(limit) ? Math.max(0, limit) : DEFAULT_SEARCH_LIMIT;
+  const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
+  const results: SearchResult[] = [];
+  const isFull = () => results.length >= maxResults;
+  const assertActive = () => {
+    if (signal?.aborted) {
+      throw new DOMException("Search cancelled", "AbortError");
+    }
+  };
+
+  for (const [index, entry] of entries.entries()) {
+    assertActive();
+    const text = `${entry.title} ${entry.summary ?? ""} ${entry.tags.join(" ")}`;
+    if (normalize(text).includes(normalizedQuery)) {
+      results.push({ id: entry.id, type: "entry", title: entry.title, excerpt: excerpt(text, query), date: entry.date, tags: entry.tags, matchSource: "entry" });
+      if (isFull()) return results;
+    }
+    if (index > 0 && index % SEARCH_BATCH_SIZE === 0) await yieldSearch();
+  }
+
+  for (const [index, block] of blocks.entries()) {
+    assertActive();
+    const contentText = blockToTextWithAssetMap(block, assetMap);
+    const assetMetaText = block.type === "record" ? recordAssetText(block, assetMap, "meta") : "";
+    const assetOcrText = block.type === "record" ? recordAssetText(block, assetMap, "ocr") : "";
+    const hitContent = normalize(contentText).includes(normalizedQuery);
+    const hitAssetMeta = normalize(assetMetaText).includes(normalizedQuery);
+    const hitAssetOcr = normalize(assetOcrText).includes(normalizedQuery);
+    if (hitContent || hitAssetMeta || hitAssetOcr) {
+      const matchSource = hitAssetOcr ? "assetOcr" : hitAssetMeta ? "assetMeta" : "content";
+      const matchedAsset = block.type === "record" && matchSource !== "content"
+        ? block.assets.find((ref) => {
+          const asset = assetMap.get(ref.id);
+          const text = matchSource === "assetOcr" ? asset?.ocrText ?? "" : `${ref.title} ${asset?.title ?? ""} ${asset?.fileName ?? ""}`;
+          return normalize(text).includes(normalizedQuery);
+        })
+        : undefined;
+      const text = matchSource === "assetOcr" ? assetOcrText : matchSource === "assetMeta" ? assetMetaText : contentText;
+      results.push({
+        id: block.id,
+        type: "block",
+        title: block.type === "record" ? block.title : `${block.date} 的记录`,
+        excerpt: excerpt(text, query),
+        date: block.date,
+        tags: block.type === "record" ? [block.subject] : [],
+        recordId: block.type === "record" ? block.id : undefined,
+        assetId: matchedAsset?.id,
+        matchSource,
+      });
+      if (isFull()) return results;
+    }
+    if (index > 0 && index % SEARCH_BATCH_SIZE === 0) await yieldSearch();
   }
 
   return results;

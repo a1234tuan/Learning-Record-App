@@ -22,7 +22,7 @@ import { createBaseEntity } from "../lib/entity";
 import { isNativePlatform } from "../lib/platform";
 import { storage } from "../services/storageAdapter";
 import { buildSessionMemorySummary, sendChatCompletion } from "../services/aiClientService";
-import { buildAiContextPack } from "../services/aiContextService";
+import { buildAiContextPackAsync } from "../services/aiContextService";
 import { createAiImageAttachment, runLocalOcrForAiAttachment } from "../services/aiChatAttachmentService";
 import { createAiSessionForDate, createAiSessionFromExistingAttachment, titleFromFirstPrompt } from "../services/aiSessionService";
 import { DEFAULT_AI_MEMORY_TURNS, getCurrentAiProvider } from "../lib/aiProviders";
@@ -178,7 +178,7 @@ export const AiChatPage = ({
       return;
     }
     const nextSession = session.sourceDate
-      ? await createAiSessionForDate(session.sourceDate, buildAiContextPack(session.sourceDate, blocks, assets))
+      ? await createAiSessionForDate(session.sourceDate, await buildAiContextPackAsync(session.sourceDate, blocks, assets))
       : await createAiSessionFromExistingAttachment(session);
     if (nextSession) {
       setHistoryOpen(false);
@@ -282,9 +282,9 @@ export const AiChatPage = ({
     const effectivePrompt = prompt || "请根据我上传的图片内容进行回答或批改。";
     const titleSession = await updateTitleFromFirstPrompt(effectivePrompt, session, messages.length);
     const freshAttachment = titleSession.sourceDate
-      ? buildAiContextPack(titleSession.sourceDate, blocks, assets, effectivePrompt)
+      ? await buildAiContextPackAsync(titleSession.sourceDate, blocks, assets, effectivePrompt)
       : titleSession.attachment
-        ? buildAiContextPack(titleSession.attachment.date, blocks, assets, effectivePrompt)
+        ? await buildAiContextPackAsync(titleSession.attachment.date, blocks, assets, effectivePrompt)
         : undefined;
     const contextSession = freshAttachment && freshAttachment.contextHash !== titleSession.lastContextHash
       ? await storage.saveAiSession?.({

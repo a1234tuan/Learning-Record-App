@@ -4,7 +4,7 @@ import { structureBlockMarkdownFromElement, structureBlockPlainTextFromElement }
 export type LinearNode =
   | { kind: "text"; text: string }
   | { kind: "asset"; ref: RecordAssetRef; asset?: Asset; ocrText?: string }
-  | { kind: "formula"; formula: RecordFormula }
+  | { kind: "formula"; formula: RecordFormula; inline: boolean }
   | { kind: "highlight"; text: string; markdown: string }
   | { kind: "structure"; text: string; markdown: string };
 
@@ -34,6 +34,9 @@ const decodeHtml = (value: string): string => {
 
 const stripHtml = (html: string): string =>
   html
+    .replace(/<record-inline-math\b[^>]*data-latex=(?:"([^"]*)"|'([^']*)')[^>]*>(?:<\/record-inline-math>)?/gi, (_match, doubleQuoted, singleQuoted) =>
+      `$${decodeHtml(doubleQuoted ?? singleQuoted ?? "")}$`,
+    )
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
@@ -49,7 +52,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
+  /<record-(asset|formula|inline-math|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -81,7 +84,7 @@ export const extractRecordRefsFromContent = (
     title: node.getAttribute("data-title") ?? "资源",
   })).filter((asset) => Boolean(asset.id));
 
-  const formulas: RecordFormula[] = Array.from(doc.querySelectorAll("record-formula")).map((node) => ({
+  const formulas: RecordFormula[] = Array.from(doc.querySelectorAll("record-formula, record-inline-math")).map((node) => ({
     id: node.getAttribute("data-formula-id") ?? "",
     title: node.getAttribute("data-title") || undefined,
     latex: node.getAttribute("data-latex") ?? "",
@@ -149,7 +152,7 @@ const collapseElementText = (element: Element, assetMap: Map<string, Asset>): st
   const bodyText = decodeHtml(stripHtml(element.innerHTML));
   const structures = Array.from(element.querySelectorAll("record-structure-diagram, record-comparison-table, record-sticky-board"))
     .map(structureBlockPlainTextFromElement);
-  const formulas = Array.from(element.querySelectorAll("record-formula")).map((node) =>
+  const formulas = Array.from(element.querySelectorAll("record-formula, record-inline-math")).map((node) =>
     [node.getAttribute("data-title"), node.getAttribute("data-latex")].filter(Boolean).join("\n"),
   );
   const assets = Array.from(element.querySelectorAll("record-asset")).map((node) => {
@@ -216,9 +219,10 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
         });
         continue;
       }
-      if (tag === "record-formula") {
+      if (tag === "record-formula" || tag === "record-inline-math") {
         nodes.push({
           kind: "formula",
+          inline: tag === "record-inline-math",
           formula: {
             id: element.getAttribute("data-formula-id") ?? "",
             title: element.getAttribute("data-title") || undefined,
@@ -271,7 +275,8 @@ export const recordToPlainText = (record: RecordBlock, assets: Asset[] = []): st
         return node.text;
       }
       if (node.kind === "formula") {
-        return [node.formula.title, node.formula.latex].filter(Boolean).join("\n");
+        const formula = [node.formula.title, node.formula.latex].filter(Boolean).join("\n");
+        return node.inline ? `$${formula}$` : formula;
       }
       if (node.kind === "structure") {
         return node.text;
@@ -296,6 +301,9 @@ export const recordToLinearMarkdown = (record: RecordBlock, assets: Asset[] = []
         return node.text;
       }
       if (node.kind === "formula") {
+        if (node.inline) {
+          return `$${node.formula.latex}$`;
+        }
         return [
           node.formula.title ? `### ${node.formula.title}` : "",
           `$$\n${node.formula.latex}\n$$`,

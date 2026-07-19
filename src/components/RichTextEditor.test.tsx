@@ -35,6 +35,63 @@ describe("RichTextEditor", () => {
 
     expect(screen.getByRole("button", { name: "有序列表" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
+  });
+
+  it("converts pasted Markdown with formulas into editor nodes", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    const editor = document.querySelector(".rich-editor")!;
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? "# 标题\n\n行内 $x^2$\n\n$$\ny=x\n$$" : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-formula");
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h1>标题</h1>");
+  });
+
+  it("converts Markdown lists, quote, code and inline marks with the Tiptap schema", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    const editor = document.querySelector(".rich-editor")!;
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain"
+          ? [
+            "### 第三级标题",
+            "",
+            "> 引用内容",
+            "",
+            "- 无序项",
+            "",
+            "3. 有序项",
+            "",
+            "**加粗**和*斜体*以及`行内代码`",
+            "",
+            "```javascript",
+            "const total = 1;",
+            "```",
+          ].join("\n")
+          : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>第三级标题</h3>"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain("<blockquote><p>引用内容</p></blockquote>");
+    expect(html).toContain("<ul><li><p>无序项</p></li></ul>");
+    expect(html).toContain('<ol start="3"><li><p>有序项</p></li></ol>');
+    expect(html).toContain("<strong>加粗</strong>");
+    expect(html).toContain("<em>斜体</em>");
+    expect(html).toContain("<code>行内代码</code>");
+    expect(html).toContain('language-javascript');
   });
 
   it("inserts a highlight block from the toolbar", async () => {

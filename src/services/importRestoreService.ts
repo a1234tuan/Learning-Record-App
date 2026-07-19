@@ -1,6 +1,7 @@
 import type { ImportOptions, ImportSummary, StorageAdapter, SyncAdapter } from "../types";
 import { summarizeSnapshot } from "./backup";
 import { flushAutoBackupNow } from "./autoBackupService";
+import { withRestoreLock } from "./restoreLockService";
 import { storage } from "./storageAdapter";
 
 interface ImportAndRestoreOptions extends ImportOptions {
@@ -35,12 +36,18 @@ export const importAndRestoreSnapshot = async ({
   onAutoBackupError,
   ...options
 }: ImportAndRestoreOptions): Promise<ImportSummary | undefined> => {
-  const summary = await restoreImportedSnapshot(storage, adapter, options);
+  const summary = await withRestoreLock(async () => {
+    const restored = await restoreImportedSnapshot(storage, adapter, options);
+    if (!restored) {
+      return undefined;
+    }
+    onSummary?.(restored);
+    await onRestored();
+    return restored;
+  });
   if (!summary) {
     return undefined;
   }
-  onSummary?.(summary);
-  await onRestored();
   void flushAutoBackupNow("restore").catch((error: unknown) => {
     onAutoBackupError?.(error instanceof Error ? error.message : String(error));
   });

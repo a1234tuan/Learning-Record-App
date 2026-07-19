@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Asset, RecordBlock } from "../types";
-import { buildAiContextPack, selectRelevantChunks } from "./aiContextService";
+import { buildAiContextPack, buildAiContextPackAsync, selectRelevantChunks } from "./aiContextService";
 
 const stamp = "2026-06-22T00:00:00.000Z";
 
@@ -88,5 +88,17 @@ describe("aiContextService", () => {
 
     expect(pack.allChunks.length).toBeGreaterThan(pack.selectedChunks.length);
     expect(pack.selectedChunks.map((chunk) => chunk.content).join("\n")).toContain("B树命中内容");
+  });
+
+  it("builds the same formula-aware context asynchronously", async () => {
+    const pack = await buildAiContextPackAsync(
+      "2026-06-22",
+      [record({ contentHtml: '<p>行内 <record-inline-math data-formula-id="inline" data-latex="x^2"></record-inline-math></p>' })],
+      [],
+      "x^2",
+    );
+
+    expect(pack.selectedChunks.map((chunk) => chunk.content).join("\n")).toContain("$x^2$");
+    expect(pack.contextHash).toBeTruthy();
   });
 });

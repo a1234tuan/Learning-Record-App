@@ -32,6 +32,16 @@ const expectNoContentWidthSizing = (css: string, selector: string) => {
 };
 
 describe("highlight block styles", () => {
+  it("gives editor blockquotes a visible background independent of background images", () => {
+    const base = cssBlockFor(stylesCss, ".rich-editor blockquote");
+    const override = cssBlockFor(pagesCss, ".rich-editor blockquote");
+
+    expect(base).toContain("background-color: var(--surface-2)");
+    expect(base).toContain("background-image: none");
+    expect(base).toContain("border-inline-start");
+    expect(override).toContain("background-color: var(--color-surface-muted) !important");
+    expect(override).toContain("background-image: none !important");
+  });
   it("uses stable theme tokens for highlight backgrounds in light and dark themes", () => {
     for (const tone of tones) {
       expect(themeCss).toContain(`--highlight-${tone}-bg:`);

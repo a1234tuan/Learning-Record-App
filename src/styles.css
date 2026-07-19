@@ -598,6 +598,17 @@ button:disabled {
   background: transparent;
 }
 
+.editor-heading-select {
+  min-width: 58px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
 .rich-editor.ProseMirror,
 .rich-editor > *,
 .rich-editor .ProseMirror,
@@ -622,9 +633,52 @@ button:disabled {
 
 .rich-editor h1,
 .rich-editor h2,
-.rich-editor h3 {
+.rich-editor h3,
+.rich-editor h4,
+.rich-editor h5,
+.rich-editor h6 {
   margin: 0.8em 0 0.35em;
   letter-spacing: 0;
+}
+
+.rich-editor blockquote {
+  box-sizing: border-box;
+  margin: 0.8em 0;
+  padding: 0.7em 0.9em;
+  border-inline-start: 3px solid var(--primary);
+  border-radius: 0 8px 8px 0;
+  background-color: var(--surface-2);
+  background-image: none;
+  color: var(--muted);
+}
+
+.rich-editor blockquote > :first-child {
+  margin-top: 0;
+}
+
+.rich-editor blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.record-inline-math {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  margin: 0 0.12em;
+  padding: 0.08em 0.28em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface-2) 75%, transparent);
+  vertical-align: baseline;
+}
+
+.record-inline-math input {
+  width: min(18rem, 52vw);
+  min-width: 4rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
 }
 
 .rich-editor pre {

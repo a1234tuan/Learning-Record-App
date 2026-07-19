@@ -1,5 +1,6 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
+import { useMemo } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -60,6 +61,33 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
         title && <strong>{title}</strong>
       )}
       <div className="formula-preview" dangerouslySetInnerHTML={{ __html: html }} />
+    </NodeViewWrapper>
+  );
+};
+
+const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewProps) => {
+  const latex = String(node.attrs.latex ?? "");
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(latex || " ", { throwOnError: false, displayMode: false });
+    } catch {
+      return "";
+    }
+  }, [latex]);
+
+  return (
+    <NodeViewWrapper as="span" className="record-inline-math" contentEditable={false}>
+      {editor.isEditable ? (
+        <input
+          value={latex}
+          aria-label="行内公式"
+          onChange={(event) => updateAttributes({ latex: event.target.value })}
+        />
+      ) : html ? (
+        <span dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <code>{latex}</code>
+      )}
     </NodeViewWrapper>
   );
 };
@@ -147,5 +175,41 @@ export const RecordFormulaNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(RecordFormulaNodeView);
+  },
+});
+
+export const RecordInlineMathNode = Node.create({
+  name: "recordInlineMath",
+  inline: true,
+  group: "inline",
+  atom: true,
+  selectable: true,
+  draggable: false,
+
+  addAttributes() {
+    return {
+      formulaId: {
+        default: "",
+        parseHTML: (element) => element.getAttribute("data-formula-id") ?? "",
+        renderHTML: (attributes) => ({ "data-formula-id": attributes.formulaId }),
+      },
+      latex: {
+        default: "x^2",
+        parseHTML: (element) => element.getAttribute("data-latex") ?? "x^2",
+        renderHTML: (attributes) => ({ "data-latex": attributes.latex }),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "record-inline-math" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["record-inline-math", mergeAttributes(HTMLAttributes)];
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(RecordInlineMathNodeView);
   },
 });
