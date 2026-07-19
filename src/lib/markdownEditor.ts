@@ -5,6 +5,8 @@ import type { JSONContent } from "@tiptap/core";
 
 import { newId } from "./entity";
 
+export const MAX_MARKDOWN_PASTE_LENGTH = 262144;
+
 type MarkdownState = {
   src: string;
   pos: number;
@@ -175,6 +177,15 @@ export const markdownToTiptapContent = (schema: Schema, source: string): JSONCon
   return document.content.toJSON() as JSONContent[];
 };
 
+const markdownBlockPattern = /(^|\n)[ \t]{0,3}(?:#{1,6}(?=\s)|>\s|(?:[-+*]|\d+[.)])\s|```|~~~|\$\$|(?:-{3,}|_{3,}|\*{3,})[ \t]*$)/m;
+const markdownInlinePattern = /(?<!\\)(?:\*\*(?!\s)[^*\n]+?(?<!\\)\*\*(?!\*)|__(?!\s)[^_\n]+?(?<!\\)__(?!_)|\*(?![\s*])[^*\n]+?(?<!\\)\*(?!\*)|_(?![\s_])[^_\n]+?(?<!\\)_(?!_)|`[^`\n]+`|\[[^\]\n]+\]\([^\)\n]+\)|\$[^$\n]+\$)/;
+
 export const looksLikeMarkdown = (source: string): boolean =>
-  /(^|\n)\s{0,3}(#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|```|~~~|\$\$)/.test(source) ||
-  /(?:\*\*|__|(?<!\\)\*(?!\s)[^*\n]+\*(?!\*)|(?<!\\)_(?!\s)[^_\n]+_(?!_)|`{1,}|\$[^$\n]+\$)/.test(source);
+  markdownBlockPattern.test(source) || markdownInlinePattern.test(source);
+
+export const selectMarkdownPasteSource = (
+  markdown: string,
+  plainText: string,
+): string | undefined => [markdown, plainText].find((candidate) =>
+  candidate.length <= MAX_MARKDOWN_PASTE_LENGTH && looksLikeMarkdown(candidate),
+);

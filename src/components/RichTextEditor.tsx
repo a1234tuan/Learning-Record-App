@@ -28,8 +28,9 @@ import {
 import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosition";
 import { createPortal } from "react-dom";
 import { clipboardImageFiles, readClipboardImageFallback, readClipboardTextFallback } from "../lib/clipboard";
-import { looksLikeMarkdown, markdownToTiptapContent } from "../lib/markdownEditor";
+import { markdownToTiptapContent, selectMarkdownPasteSource } from "../lib/markdownEditor";
 import { MarkdownTypingExtension } from "../lib/markdownInputRules";
+import { MarkdownLinkMark } from "../lib/markdownLinkMark";
 import { isNativePlatform } from "../lib/platform";
 
 const lowlight = createLowlight();
@@ -39,6 +40,17 @@ lowlight.register("python", python);
 
 const HIGHLIGHT_MENU_WIDTH = 188;
 const HIGHLIGHT_MENU_ESTIMATED_HEIGHT = 142;
+
+const parseMarkdownPaste = (view: EditorView, source: string | undefined): unknown[] | undefined => {
+  if (!source) {
+    return undefined;
+  }
+  try {
+    return markdownToTiptapContent(view.state.schema as never, source);
+  } catch {
+    return undefined;
+  }
+};
 
 const findActiveHighlightBlock = (editor: Editor): { pos: number; node: ProseMirrorNode } | null => {
   const { selection } = editor.state;
@@ -270,6 +282,7 @@ export const RichTextEditor = ({
       StarterKit.configure({
         codeBlock: false,
       }),
+      MarkdownLinkMark,
       MarkdownTypingExtension,
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
@@ -303,8 +316,9 @@ export const RichTextEditor = ({
         const files = clipboardImageFiles(clipboardData);
         const markdown = clipboardData?.getData("text/markdown") || "";
         const plainText = clipboardData?.getData("text/plain") || "";
-        const source = [markdown, plainText].find((value) => looksLikeMarkdown(value)) || plainText || markdown;
-        const shouldParseMarkdown = looksLikeMarkdown(source);
+        const htmlText = clipboardData?.getData("text/html") || "";
+        const source = selectMarkdownPasteSource(markdown, plainText);
+        const parsedMarkdown = parseMarkdownPaste(view, source);
         const hasImageClipboardItem = Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
 
         const insertPastedAsset = async (file: File) => {
@@ -321,21 +335,21 @@ export const RichTextEditor = ({
           ]);
         };
 
-        if (shouldParseMarkdown) {
-          try {
-            const content = markdownToTiptapContent(view.state.schema as never, source);
-            event.preventDefault();
-            replaceSelectionWithContent(view, content);
-            void Promise.all(files.map(insertPastedAsset));
-            return true;
-          } catch {
-            return false;
-          }
+        if (parsedMarkdown) {
+          event.preventDefault();
+          replaceSelectionWithContent(view, parsedMarkdown);
+          void Promise.all(files.map(insertPastedAsset));
+          return true;
         }
 
         if (files.length > 0) {
-          event.preventDefault();
           void Promise.all(files.map(insertPastedAsset));
+          // Keep the browser's native text/HTML paste when Markdown parsing was
+          // skipped or failed, then add the image assets without losing content.
+          if (markdown || plainText || htmlText) {
+            return false;
+          }
+          event.preventDefault();
           return true;
         }
 
@@ -349,13 +363,10 @@ export const RichTextEditor = ({
               }
               return;
             }
-            try {
-              if (looksLikeMarkdown(text)) {
-                replaceSelectionWithContent(view, markdownToTiptapContent(view.state.schema as never, text));
-                return;
-              }
-            } catch {
-              // Fall through to plain text so a malformed Markdown clipboard never loses content.
+            const content = parseMarkdownPaste(view, selectMarkdownPasteSource(text, text));
+            if (content) {
+              replaceSelectionWithContent(view, content);
+              return;
             }
             view.dispatch(view.state.tr.insertText(text).scrollIntoView());
           });

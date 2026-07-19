@@ -8,7 +8,21 @@ import {
   createDefaultStructureDiagram,
   serializeStructureData,
 } from "../lib/recordStructureBlocks";
+import { readClipboardTextFallback } from "../lib/clipboard";
+import { isNativePlatform } from "../lib/platform";
 import { RichTextEditor } from "./RichTextEditor";
+
+vi.mock("../lib/platform", () => ({
+  isNativePlatform: vi.fn(() => false),
+}));
+
+vi.mock("../lib/clipboard", async () => {
+  const actual = await vi.importActual<typeof import("../lib/clipboard")>("../lib/clipboard");
+  return {
+    ...actual,
+    readClipboardTextFallback: vi.fn(),
+  };
+});
 
 vi.mock("./AssetPreview", () => ({
   AssetPreview: () => <article className="asset-card asset-card-view compact-image-card" data-testid="asset-preview" />,
@@ -75,6 +89,178 @@ describe("RichTextEditor", () => {
     expect(html).toContain('data-latex="\\lim_{x \\to 0^+} \\frac{f(x)}{ax^b} = 1"');
     expect(html).toContain('data-latex="E=mc^2"');
     expect(html).toContain("<em>斜体</em>");
+  });
+
+  it("parses a standalone multiline block formula paste", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? "$$\n\\int_0^1 x^2 dx\n$$" : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-formula"));
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-latex="\\int_0^1 x^2 dx"');
+  });
+
+  it("parses a complete plain-text Markdown paste with links and a horizontal rule", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain"
+          ? [
+            "# Markdown 标题",
+            "",
+            "> 引用内容",
+            "",
+            "- 列表项",
+            "",
+            "**粗体**、*斜体*、`代码`和[链接](https://example.com)",
+            "",
+            "---",
+            "",
+            "行内公式 $x^2$",
+          ].join("\n")
+          : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h1>Markdown 标题</h1>"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain("<blockquote><p>引用内容</p></blockquote>");
+    expect(html).toContain("<ul><li><p>列表项</p></li></ul>");
+    expect(html).toContain("<strong>粗体</strong>");
+    expect(html).toContain("<em>斜体</em>");
+    expect(html).toContain("<code>代码</code>");
+    expect(html).toContain('<a href="https://example.com"');
+    expect(html).toContain("<hr>");
+    expect(html).toContain("record-inline-math");
+  });
+
+  it("prefers Markdown source when both clipboard text formats contain markers", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/markdown" ? "## Markdown source" : "**Plain source**",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h2>Markdown source</h2>"));
+    expect(onChange.mock.calls.at(-1)?.[0]).not.toContain("Plain source");
+  });
+
+  it("leaves ordinary plain text unchanged when it has no Markdown markers", () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? "普通文本 1 + 1 = 2" : "",
+        items: [],
+      },
+    });
+
+    expect(editorRef?.getHTML()).toBe("<p>普通文本 1 + 1 = 2</p>");
+    expect(editorRef?.getHTML()).not.toContain("<h1>");
+    expect(editorRef?.getHTML()).not.toContain("record-inline-math");
+  });
+
+  it("parses Markdown from the native Android clipboard when DOM data is empty", async () => {
+    const onChange = vi.fn();
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue("# Android Markdown\n\n**粗体**和$x^2$");
+
+    try {
+      render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+      fireEvent.paste(document.querySelector(".rich-editor")!, {
+        clipboardData: {
+          getData: () => "",
+          items: [],
+        },
+      });
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h1>Android Markdown</h1>"));
+      expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("falls back without parsing unsupported or oversized Markdown", () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    const editor = document.querySelector(".rich-editor")!;
+    const paste = (text: string) => fireEvent.paste(editor, {
+      clipboardData: { getData: (type: string) => type === "text/plain" ? text : "", items: [] },
+    });
+
+    paste("# 标题\n~~不支持删除线~~");
+    paste(`# 超大内容\n${"x".repeat(262144)}`);
+
+    const html = editorRef?.getHTML() ?? "";
+    expect(html).toContain("# 标题");
+    expect(html).toContain("# 超大内容");
+    expect(html).not.toContain("<h1>");
+    expect(html).not.toContain("record-inline-math");
+  });
+
+  it("keeps text when an image is pasted with Markdown that cannot be parsed", async () => {
+    const onChange = vi.fn();
+    const onPasteImage = vi.fn().mockResolvedValue({ id: "asset-1", kind: "image", title: "截图" });
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={onChange}
+        onPasteImage={onPasteImage}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? "# 保留原文\n~~不支持删除线~~" : "",
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+      },
+    });
+
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("# 保留原文"));
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-asset"));
+    expect(onPasteImage).toHaveBeenCalledWith(image);
   });
 
   it("immediately converts Markdown typed next to Chinese text", async () => {
