@@ -323,6 +323,50 @@ describe("RichTextEditor", () => {
     }
   });
 
+  it("coalesces segmented Android IME commits before parsing Markdown", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const chunks = [
+      "---\r\n\r\n### 整体规律总结\r\n\r\n",
+      "- **破折号插入**：主语后的同位语。\r\n",
+      "  - **被动不定式**：need **to be** encouraged",
+    ];
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(chunks.join(""));
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      for (const chunk of chunks) {
+        fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+        act(() => {
+          editorRef?.commands.insertContent(chunk);
+        });
+        fireEvent(editor, nativeInputEvent("input", "insertText"));
+      }
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>整体规律总结</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<hr>");
+      expect(html).toContain("<ul>");
+      expect(html).toContain("<strong>破折号插入</strong>");
+      expect(html).not.toContain("### 整体规律总结");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
   it("keeps raw Android input when it does not match the native clipboard", async () => {
     let editorRef: Editor | undefined;
     vi.mocked(isNativePlatform).mockReturnValue(true);

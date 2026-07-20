@@ -90,10 +90,14 @@ type ClipboardSnapshot = {
   hasImageClipboardItem: boolean;
 };
 
-type NativeInputCandidate = {
+const ANDROID_IME_PASTE_DEBOUNCE_MS = 120;
+const ANDROID_IME_PASTE_GUARD_MS = 750;
+
+type NativeInputPasteSession = {
   id: number;
   from: number;
   isPaste: boolean;
+  revision: number;
 };
 
 const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
@@ -377,10 +381,11 @@ export const RichTextEditor = ({
   const onPasteImageRef = useRef(onPasteImage);
   const pasteRequestRef = useRef(0);
   const mountedRef = useRef(true);
-  const nativeInputCandidateRef = useRef<NativeInputCandidate | undefined>();
+  const nativeInputSessionRef = useRef<NativeInputPasteSession | undefined>();
   const nativeInputSequenceRef = useRef(0);
   const nativeTypingTransformSuppressedRef = useRef(false);
   const nativeInputGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const nativeInputDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
@@ -388,6 +393,9 @@ export const RichTextEditor = ({
     mountedRef.current = false;
     if (nativeInputGuardTimeoutRef.current) {
       clearTimeout(nativeInputGuardTimeoutRef.current);
+    }
+    if (nativeInputDebounceTimeoutRef.current) {
+      clearTimeout(nativeInputDebounceTimeoutRef.current);
     }
   }, []);
 
@@ -424,7 +432,7 @@ export const RichTextEditor = ({
     view: EditorView,
     clipboard: ClipboardSnapshot,
     bookmark = view.state.selection.getBookmark(),
-    inputCandidate?: NativeInputCandidate,
+    inputSession?: NativeInputPasteSession,
   ) => {
     const requestId = ++pasteRequestRef.current;
     const initialDoc = view.state.doc;
@@ -441,7 +449,7 @@ export const RichTextEditor = ({
 
     // Some Android WebViews report beforeinput as cancelable but still commit
     // the text. The input fallback will replace that raw range as one unit.
-    if (inputCandidate && view.state.doc !== initialDoc) {
+    if (inputSession && view.state.doc !== initialDoc) {
       return;
     }
 
@@ -467,8 +475,8 @@ export const RichTextEditor = ({
       }
     }
 
-    if (inputCandidate) {
-      releaseNativeInputCandidate(inputCandidate, false, view);
+    if (inputSession) {
+      releaseNativeInputSession(inputSession, false, view);
     }
 
     if (clipboard.files.length > 0) {
@@ -486,57 +494,76 @@ export const RichTextEditor = ({
     }
   };
 
-  const releaseNativeInputCandidate = (candidate: NativeInputCandidate, replayTypingTransform: boolean, view: EditorView) => {
-    if (nativeInputCandidateRef.current?.id !== candidate.id) {
+  const releaseNativeInputSession = (session: NativeInputPasteSession, replayTypingTransform: boolean, view: EditorView) => {
+    if (nativeInputSessionRef.current?.id !== session.id) {
       return;
     }
-    nativeInputCandidateRef.current = undefined;
+    nativeInputSessionRef.current = undefined;
     nativeTypingTransformSuppressedRef.current = false;
     if (nativeInputGuardTimeoutRef.current) {
       clearTimeout(nativeInputGuardTimeoutRef.current);
       nativeInputGuardTimeoutRef.current = undefined;
+    }
+    if (nativeInputDebounceTimeoutRef.current) {
+      clearTimeout(nativeInputDebounceTimeoutRef.current);
+      nativeInputDebounceTimeoutRef.current = undefined;
     }
     if (replayTypingTransform) {
       applyComposedMarkdownTransform(view);
     }
   };
 
-  const captureNativeInputCandidate = (view: EditorView, isPaste = false): NativeInputCandidate | undefined => {
+  const captureNativeInputSession = (view: EditorView, isPaste = false): NativeInputPasteSession | undefined => {
     if (!(view.state.selection instanceof TextSelection)) {
       return undefined;
     }
-    const candidate = {
+    const current = nativeInputSessionRef.current;
+    if (current && view.state.selection.from >= current.from) {
+      current.isPaste ||= isPaste;
+      current.revision += 1;
+      return current;
+    }
+    if (current) {
+      releaseNativeInputSession(current, true, view);
+    }
+    const session: NativeInputPasteSession = {
       id: ++nativeInputSequenceRef.current,
       from: view.state.selection.from,
       isPaste,
+      revision: 0,
     };
-    nativeInputCandidateRef.current = candidate;
+    nativeInputSessionRef.current = session;
     nativeTypingTransformSuppressedRef.current = true;
     if (nativeInputGuardTimeoutRef.current) {
       clearTimeout(nativeInputGuardTimeoutRef.current);
     }
     nativeInputGuardTimeoutRef.current = setTimeout(() => {
-      releaseNativeInputCandidate(candidate, true, view);
-    }, 750);
-    return candidate;
+      releaseNativeInputSession(session, true, view);
+    }, ANDROID_IME_PASTE_GUARD_MS);
+    return session;
   };
 
-  const finalizeNativeInputCandidate = (view: EditorView, candidate: NativeInputCandidate) => {
-    setTimeout(() => {
+  const finalizeNativeInputSession = (view: EditorView, session: NativeInputPasteSession) => {
+    const revision = ++session.revision;
+    if (nativeInputDebounceTimeoutRef.current) {
+      clearTimeout(nativeInputDebounceTimeoutRef.current);
+    }
+    nativeInputDebounceTimeoutRef.current = setTimeout(() => {
+      nativeInputDebounceTimeoutRef.current = undefined;
       void (async () => {
-        if (!mountedRef.current || nativeInputCandidateRef.current?.id !== candidate.id) {
+        if (!mountedRef.current || nativeInputSessionRef.current?.id !== session.id || session.revision !== revision) {
           return;
         }
 
         const to = view.state.selection.from;
-        if (to < candidate.from) {
-          releaseNativeInputCandidate(candidate, true, view);
+        if (to < session.from) {
+          releaseNativeInputSession(session, true, view);
           return;
         }
-        const insertedText = normalizeClipboardText(view.state.doc.textBetween(candidate.from, to, "\n"));
+        const insertedText = normalizeClipboardText(view.state.doc.textBetween(session.from, to, "\n"));
         const insertedMarkdown = selectMarkdownPasteSources([insertedText])[0];
         if (!insertedMarkdown) {
-          releaseNativeInputCandidate(candidate, false, view);
+          releaseNativeInputSession(session, false, view);
           return;
         }
 
@@ -550,7 +577,8 @@ export const RichTextEditor = ({
         if (
           !mountedRef.current ||
           requestId !== pasteRequestRef.current ||
-          nativeInputCandidateRef.current?.id !== candidate.id
+          nativeInputSessionRef.current?.id !== session.id ||
+          session.revision !== revision
         ) {
           return;
         }
@@ -558,14 +586,14 @@ export const RichTextEditor = ({
         const nativeMarkdown = selectMarkdownPasteSources([nativeText])[0];
         const parsedMarkdown = nativeMarkdown ? parseMarkdownPaste(view, nativeMarkdown) : undefined;
         if (!nativeMarkdown || !parsedMarkdown || !clipboardTextsMatch(insertedMarkdown, nativeMarkdown)) {
-          releaseNativeInputCandidate(candidate, true, view);
+          releaseNativeInputSession(session, true, view);
           return;
         }
 
-        replaceRangeWithContent(view, parsedMarkdown, candidate.from, to);
-        releaseNativeInputCandidate(candidate, false, view);
+        replaceRangeWithContent(view, parsedMarkdown, session.from, to);
+        releaseNativeInputSession(session, false, view);
       })();
-    }, 0);
+    }, ANDROID_IME_PASTE_DEBOUNCE_MS);
   };
 
   const editor = useEditor({
@@ -614,16 +642,16 @@ export const RichTextEditor = ({
           }
           if (inputEvent.inputType === "insertFromPaste" || inputEvent.inputType === "insertFromPasteAsPlainText") {
             if (event.cancelable) {
-              const candidate = captureNativeInputCandidate(view, true);
+              const session = captureNativeInputSession(view, true);
               event.preventDefault();
-              void processNativePaste(view, snapshotClipboardData(inputEvent.dataTransfer), undefined, candidate);
+              void processNativePaste(view, snapshotClipboardData(inputEvent.dataTransfer), undefined, session);
               return true;
             }
-            captureNativeInputCandidate(view, true);
+            captureNativeInputSession(view, true);
             return false;
           }
           if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertReplacementText") {
-            captureNativeInputCandidate(view);
+            captureNativeInputSession(view);
           }
           return false;
         },
@@ -631,9 +659,9 @@ export const RichTextEditor = ({
           if (!isNativePlatform() || (event as InputEvent).isComposing) {
             return false;
           }
-          const candidate = nativeInputCandidateRef.current;
-          if (candidate) {
-            finalizeNativeInputCandidate(view, candidate);
+          const session = nativeInputSessionRef.current;
+          if (session) {
+            finalizeNativeInputSession(view, session);
           }
           return false;
         },
@@ -641,8 +669,12 @@ export const RichTextEditor = ({
       handlePaste: (view, event) => {
         if (isNativePlatform()) {
           event.preventDefault();
-          const candidate = nativeInputCandidateRef.current?.isPaste ? nativeInputCandidateRef.current : undefined;
-          void processNativePaste(view, snapshotClipboardData(event.clipboardData), undefined, candidate);
+          const activeSession = nativeInputSessionRef.current;
+          const session = activeSession?.isPaste ? activeSession : undefined;
+          if (activeSession && !activeSession.isPaste) {
+            releaseNativeInputSession(activeSession, false, view);
+          }
+          void processNativePaste(view, snapshotClipboardData(event.clipboardData), undefined, session);
           return true;
         }
 
