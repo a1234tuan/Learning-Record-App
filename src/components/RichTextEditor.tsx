@@ -12,6 +12,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { createLowlight } from "lowlight";
 import cpp from "highlight.js/lib/languages/cpp";
+import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
 import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode } from "./RecordEditorNodes";
@@ -39,6 +40,7 @@ import {
 import {
   MAX_MARKDOWN_PASTE_LENGTH,
   markdownToTiptapContent,
+  normalizeCodeLanguage,
   selectMarkdownPasteSources,
 } from "../lib/markdownEditor";
 import { applyComposedMarkdownTransform, MarkdownTypingExtension } from "../lib/markdownInputRules";
@@ -47,11 +49,19 @@ import { isNativePlatform } from "../lib/platform";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
+lowlight.register("java", java);
 lowlight.register("javascript", javascript);
 lowlight.register("python", python);
 
 const HIGHLIGHT_MENU_WIDTH = 188;
 const HIGHLIGHT_MENU_ESTIMATED_HEIGHT = 142;
+const codeLanguageOptions = [
+  { value: "", label: "纯文本" },
+  { value: "cpp", label: "C++" },
+  { value: "java", label: "Java" },
+  { value: "python", label: "Python" },
+  { value: "javascript", label: "JavaScript" },
+];
 
 const parseMarkdownPaste = (view: EditorView, source: string | undefined): unknown[] | undefined => {
   if (!source) {
@@ -846,6 +856,8 @@ export const RichTextEditor = ({
     return null;
   }
 
+  const codeLanguage = normalizeCodeLanguage(String(editor.getAttributes("codeBlock").language ?? "")) ?? "";
+
   return (
     <div className={readOnly ? "editor-shell read-only" : "editor-shell"}>
       {!readOnly && (
@@ -896,9 +908,25 @@ export const RichTextEditor = ({
           <button type="button" className={editor.isActive("blockquote") ? "active" : ""} title="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
             “”
           </button>
-          <button type="button" title="代码" onClick={() => editor.chain().focus().toggleCodeBlock().run()}>
+          <button type="button" className={editor.isActive("codeBlock") ? "active" : ""} title="代码块" aria-label="代码块" onClick={() => editor.chain().focus().toggleCodeBlock().run()}>
             &lt;/&gt;
           </button>
+          <select
+            className="editor-code-language-select"
+            aria-label="代码块语言"
+            value={codeLanguage}
+            onChange={(event) => {
+              const language = normalizeCodeLanguage(event.target.value);
+              const codeBlockLanguage = language ?? "plaintext";
+              if (editor.isActive("codeBlock")) {
+                editor.chain().focus().updateAttributes("codeBlock", { language: codeBlockLanguage }).run();
+                return;
+              }
+              editor.chain().focus().setCodeBlock({ language: codeBlockLanguage }).run();
+            }}
+          >
+            {codeLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
           <HighlightInsertMenu editor={editor} />
           {renderInsertTools?.(editor)}
         </div>

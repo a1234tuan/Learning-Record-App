@@ -5,6 +5,7 @@ import type { JSONContent } from "@tiptap/core";
 
 import { normalizeClipboardText } from "./clipboard";
 import { newId } from "./entity";
+import { createComparisonColumn, createComparisonRow, serializeStructureData } from "./recordStructureBlocks";
 
 export const MAX_MARKDOWN_PASTE_LENGTH = 262144;
 
@@ -12,6 +13,47 @@ type MarkdownState = {
   src: string;
   pos: number;
   max: number;
+};
+
+type MarkdownBlockState = {
+  bMarks: number[];
+  eMarks: number[];
+  tShift: number[];
+  src: string;
+  lineMax: number;
+  line: number;
+};
+
+export const normalizeCodeLanguage = (language: string | null | undefined): string | null => {
+  const normalized = language?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "plain":
+    case "plaintext":
+    case "text":
+      return null;
+    case "c++":
+    case "cc":
+    case "cpp":
+    case "cxx":
+      return "cpp";
+    case "java":
+      return "java";
+    case "py":
+    case "python":
+      return "python";
+    case "js":
+    case "javascript":
+    case "node":
+    case "nodejs":
+    case "ts":
+    case "typescript":
+      return "javascript";
+    default:
+      return normalized;
+  }
 };
 
 const findUnescapedDollar = (source: string, start: number): number => {
@@ -44,15 +86,8 @@ const mathInlineRule = (state: MarkdownState, silent: boolean): boolean => {
 };
 
 const mathBlockRule = (state: unknown, startLine: number, endLine: number, silent: boolean): boolean => {
-  const blockState = state as {
-    bMarks: number[];
-    eMarks: number[];
-    tShift: number[];
-    sCount: number[];
-    src: string;
-    lineMax: number;
+  const blockState = state as MarkdownBlockState & {
     getLines: (begin: number, end: number, indent: number, keepLastLF: boolean) => string;
-    line: number;
   };
   if (startLine >= blockState.lineMax) {
     return false;
@@ -98,11 +133,113 @@ const mathBlockRule = (state: unknown, startLine: number, endLine: number, silen
   return true;
 };
 
+const tableLine = (state: MarkdownBlockState, line: number): string => {
+  const start = state.bMarks[line] + state.tShift[line];
+  return state.src.slice(start, state.eMarks[line]);
+};
+
+const splitTableRow = (source: string): string[] | undefined => {
+  let row = source.trim();
+  if (!row.includes("|")) {
+    return undefined;
+  }
+  if (row.startsWith("|")) {
+    row = row.slice(1);
+  }
+  if (row.endsWith("|")) {
+    row = row.slice(0, -1);
+  }
+
+  const cells: string[] = [];
+  let cell = "";
+  let codeDelimiterLength = 0;
+  for (let index = 0; index < row.length; index += 1) {
+    const character = row[index];
+    if (character === "\\" && row[index + 1] === "|") {
+      cell += "\\|";
+      index += 1;
+      continue;
+    }
+    if (character === "`") {
+      let runEnd = index + 1;
+      while (row[runEnd] === "`") {
+        runEnd += 1;
+      }
+      const runLength = runEnd - index;
+      if (codeDelimiterLength === 0) {
+        codeDelimiterLength = runLength;
+      } else if (codeDelimiterLength === runLength) {
+        codeDelimiterLength = 0;
+      }
+      cell += row.slice(index, runEnd);
+      index = runEnd - 1;
+      continue;
+    }
+    if (character === "|" && codeDelimiterLength === 0) {
+      cells.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    cell += character;
+  }
+  cells.push(cell.trim());
+  return cells;
+};
+
+const isTableSeparator = (cells: readonly string[]): boolean =>
+  cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+
+const markdownTableRule = (state: unknown, startLine: number, endLine: number, silent: boolean): boolean => {
+  const blockState = state as MarkdownBlockState & {
+    push: (type: string, tag: string, nesting: number) => { meta?: unknown; map?: number[] };
+  };
+  if (startLine + 1 >= endLine || startLine >= blockState.lineMax) {
+    return false;
+  }
+  const headers = splitTableRow(tableLine(blockState, startLine));
+  const separator = splitTableRow(tableLine(blockState, startLine + 1));
+  if (!headers || !separator || headers.length !== separator.length || !isTableSeparator(separator)) {
+    return false;
+  }
+
+  let nextLine = startLine + 2;
+  const rows: string[][] = [];
+  while (nextLine < endLine) {
+    const row = splitTableRow(tableLine(blockState, nextLine));
+    if (!row || row.length !== headers.length) {
+      break;
+    }
+    rows.push(row);
+    nextLine += 1;
+  }
+  if (silent) {
+    return true;
+  }
+
+  const columns = headers.map((label) => createComparisonColumn(label));
+  const dataRows = rows.map((cells) => {
+    const row = createComparisonRow(columns);
+    for (const [index, column] of columns.entries()) {
+      row.cells[column.id] = cells[index] ?? "";
+    }
+    return row;
+  });
+  const token = blockState.push("markdown_table", "table", 0);
+  token.meta = {
+    data: serializeStructureData({ title: "", columns, rows: dataRows }),
+  };
+  token.map = [startLine, nextLine];
+  blockState.line = nextLine;
+  return true;
+};
+
 const createMarkdownIt = (): MarkdownIt => {
   const markdown = new MarkdownIt({ html: false, breaks: false, linkify: false, typographer: false });
   markdown.disable("image");
+  markdown.disable("table");
   markdown.inline.ruler.before("escape", "math_inline", mathInlineRule as never);
-  markdown.block.ruler.before("fence", "math_block", mathBlockRule as never);
+  markdown.block.ruler.before("fence", "math_block", mathBlockRule as never, { alt: ["paragraph", "reference", "blockquote", "list"] });
+  markdown.block.ruler.before("fence", "markdown_table", markdownTableRule as never, { alt: ["paragraph", "reference"] });
   return markdown;
 };
 
@@ -134,7 +271,7 @@ const markdownTokens = {
     ...defaultMarkdownParser.tokens.fence,
     block: "codeBlock",
     getAttrs: (token: { info?: string }) => ({
-      language: token.info?.trim().split(/\s+/)[0] || null,
+      language: normalizeCodeLanguage(token.info?.trim().split(/\s+/)[0]),
     }),
   },
   hr: {
@@ -170,6 +307,14 @@ const markdownTokens = {
       latex: token.content,
     }),
   },
+  markdown_table: {
+    node: "recordComparisonTable",
+    noCloseToken: true,
+    getAttrs: (token: { meta?: { data?: string } }) => ({
+      data: token.meta?.data ?? serializeStructureData({ title: "", columns: [], rows: [] }),
+      format: "markdown",
+    }),
+  },
 };
 
 export const markdownToTiptapContent = (schema: Schema, source: string): JSONContent[] => {
@@ -179,10 +324,11 @@ export const markdownToTiptapContent = (schema: Schema, source: string): JSONCon
 };
 
 const markdownBlockPattern = /(^|\n)[ \t]{0,3}(?:#{1,6}(?=\s)|>\s|(?:[-+*]|\d+[.)])\s|```|~~~|\$\$|(?:-{3,}|_{3,}|\*{3,})[ \t]*$)/m;
+const markdownTablePattern = /(^|\n)[ \t]*\|?[^|\n]+(?:\|[^|\n]+)+\|?[ \t]*\n[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*(?:\n|$)/m;
 const markdownInlinePattern = /(?<!\\)(?:\*\*(?!\s)[^*\n]+?(?<!\\)\*\*(?!\*)|__(?!\s)[^_\n]+?(?<!\\)__(?!_)|\*(?![\s*])[^*\n]+?(?<!\\)\*(?!\*)|_(?![\s_])[^_\n]+?(?<!\\)_(?!_)|`[^`\n]+`|\[[^\]\n]+\]\([^\)\n]+\)|\$[^$\n]+\$)/;
 
 export const looksLikeMarkdown = (source: string): boolean =>
-  markdownBlockPattern.test(source) || markdownInlinePattern.test(source);
+  markdownBlockPattern.test(source) || markdownTablePattern.test(source) || markdownInlinePattern.test(source);
 
 export const selectMarkdownPasteSource = (
   markdown: string,

@@ -66,6 +66,7 @@ describe("RichTextEditor", () => {
     expect(screen.getByRole("button", { name: "有序列表" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
   });
 
   it("converts pasted Markdown with formulas into editor nodes", async () => {
@@ -120,6 +121,139 @@ describe("RichTextEditor", () => {
 
     await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-formula"));
     expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-latex="\\int_0^1 x^2 dx"');
+  });
+
+  it("renders the provided mixed Markdown block-formula sample as separate formula nodes", async () => {
+    const onChange = vi.fn();
+    const source = [
+      "#### **块级公式（独立成行）**",
+      "",
+      "一元二次方程求根公式：",
+      "$$",
+      "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+      "$$",
+      "",
+      "正态分布概率密度函数：",
+      "$$",
+      "f(x) = \\frac{1}{\\sigma \\sqrt{2\\pi}} \\exp\\left(-\\frac{(x-\\mu)^2}{2\\sigma^2}\\right)",
+      "$$",
+    ].join("\n");
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? source : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h4><strong>块级公式（独立成行）</strong></h4>"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect((html.match(/<record-formula\b/g) ?? [])).toHaveLength(2);
+    expect(html).toContain('data-latex="x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}"');
+    expect(html).not.toContain("$$");
+  });
+
+  it("renders mixed block formulas from the Android native Markdown path", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const source = ["#### 块公式", "", "说明", "$$", "x = y^2", "$$", "", "$$", "z = x + y", "$$"].join("\r\n");
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(source);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent(source);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h4>块公式</h4>"));
+      expect((onChange.mock.calls.at(-1)?.[0].match(/<record-formula\b/g) ?? [])).toHaveLength(2);
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it.each([
+    ["c++", "int main() { return 0; }", "language-cpp"],
+    ["java", "public class Main {}", "language-java"],
+    ["python", "def main():\n    return 0", "language-python"],
+  ])("parses and highlights %s code fences", async (language, code, expectedClass) => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? `\`\`\`${language}\n${code}\n\`\`\`` : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain(expectedClass));
+    await waitFor(() => expect(document.querySelector(".rich-editor pre .hljs-keyword, .rich-editor pre .hljs-type")).toBeInTheDocument());
+  });
+
+  it("creates a language-specific code block from the toolbar selector", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("combobox", { name: "代码块语言" }), { target: { value: "java" } });
+    await waitFor(() => expect(editorRef?.getHTML()).toContain('language-java'));
+  });
+
+  it("converts a Markdown table into a fixed-first-column comparison table with inline formatting", async () => {
+    const onChange = vi.fn();
+    const source = [
+      "名称 | 代码 | 说明 | 链接",
+      "| --- | --- | --- | --- |",
+      "| `vector<int>` | **粗体** 和 *斜体* | a \\| b | [OpenAI](https://openai.com) |",
+      "| 很长很长很长很长很长的第一列 | `printf(\"hello\")` | 普通文本 | [文档](https://example.com) |",
+    ].join("\n");
+    const editorView = render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? source : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-format="markdown"'));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain("record-comparison-table");
+    editorView.unmount();
+
+    render(<RichTextEditor value={html} onChange={vi.fn()} readOnly />);
+    await waitFor(() => expect(document.querySelector(".comparison-fixed-panel")).toBeInTheDocument());
+    expect(document.querySelectorAll(".comparison-table-right-scroll")).toHaveLength(1);
+    expect(document.querySelector(".comparison-markdown-cell code")).toHaveTextContent("vector<int>");
+    expect(document.querySelector(".comparison-markdown-cell strong")).toHaveTextContent("粗体");
+    expect(document.querySelector(".comparison-markdown-cell em")).toHaveTextContent("斜体");
+    expect(document.querySelector('.comparison-markdown-cell a[href="https://openai.com"]')).toBeInTheDocument();
+    expect(document.querySelector(".comparison-table-view")).toHaveTextContent("a | b");
   });
 
   it("parses a complete plain-text Markdown paste with links and a horizontal rule", async () => {

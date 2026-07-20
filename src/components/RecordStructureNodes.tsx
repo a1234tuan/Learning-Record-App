@@ -3,6 +3,7 @@ import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewP
 import { Fragment } from "@tiptap/pm/model";
 import { ChevronDown, ChevronRight, Copy, GitBranch, Plus, Trash2, ArrowDown, ArrowUp } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import MarkdownIt from "markdown-it";
 
 import {
   createBlankStructureNode,
@@ -31,6 +32,20 @@ const nodeData = (node: NodeViewProps["node"]): string => String(node.attrs.data
 
 const commitData = (updateAttributes: UpdateAttributes, data: unknown) => {
   updateAttributes({ data: serializeStructureData(data) });
+};
+
+const comparisonCellMarkdown = new MarkdownIt({ html: false, breaks: false, linkify: false, typographer: false });
+comparisonCellMarkdown.disable("image");
+
+const renderComparisonCell = (value: string | undefined, markdown: boolean) => {
+  const content = value?.trim() ?? "";
+  if (!content) {
+    return <span className="empty-cell">—</span>;
+  }
+  if (!markdown) {
+    return content;
+  }
+  return <span className="comparison-markdown-cell" dangerouslySetInnerHTML={{ __html: comparisonCellMarkdown.renderInline(content) }} />;
 };
 
 const nodeRange = ({ editor, getPos, node }: Pick<NodeViewProps, "editor" | "getPos" | "node">) => {
@@ -335,6 +350,7 @@ const StructureDiagramNodeView = (props: NodeViewProps) => {
 const ComparisonTableNodeView = (props: NodeViewProps) => {
   const rawData = nodeData(props.node);
   const data = parseComparisonTableData(rawData);
+  const markdownCells = props.node.attrs.format === "markdown";
   const editable = props.editor.isEditable;
   const fixedCellRefs = useRef<Array<HTMLDivElement | null>>([]);
   const scrollRowRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -497,7 +513,7 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
         </>
       ) : (
         <>
-          <h3>{data.title}</h3>
+          {data.title && <h3>{data.title}</h3>}
           <div className="comparison-table-scroll">
             <div
               className={`comparison-table-view comparison-panel-view${scrollColumns.length === 0 ? " single-column" : ""}`}
@@ -511,10 +527,10 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
                   ref={(node) => setFixedCellRef(0, node)}
                   style={rowStyle(0)}
                 >
-                  {firstColumn?.label ?? "概念"}
+                  {renderComparisonCell(firstColumn?.label ?? "概念", markdownCells)}
                 </div>
                 {data.rows.map((row, rowIndex) => {
-                  const firstValue = firstColumn ? row.cells[firstColumn.id]?.trim() : "";
+                  const firstValue = firstColumn ? row.cells[firstColumn.id] : "";
                   return (
                     <div
                       key={row.id}
@@ -523,7 +539,7 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
                       ref={(node) => setFixedCellRef(rowIndex + 1, node)}
                       style={rowStyle(rowIndex + 1)}
                     >
-                      {firstValue || <span className="empty-cell">—</span>}
+                      {renderComparisonCell(firstValue, markdownCells)}
                     </div>
                   );
                 })}
@@ -540,7 +556,7 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
                       >
                         {scrollColumns.map((column) => (
                           <div key={column.id} className="comparison-grid-cell comparison-grid-head" role="columnheader">
-                            {column.label}
+                            {renderComparisonCell(column.label, markdownCells)}
                           </div>
                         ))}
                       </div>
@@ -553,10 +569,10 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
                           style={rowStyle(rowIndex + 1)}
                         >
                           {scrollColumns.map((column) => {
-                            const value = row.cells[column.id]?.trim();
+                            const value = row.cells[column.id];
                             return (
                               <div key={column.id} className="comparison-grid-cell" role="cell">
-                                {value || <span className="empty-cell">—</span>}
+                                {renderComparisonCell(value, markdownCells)}
                               </div>
                             );
                           })}
@@ -746,6 +762,11 @@ export const RecordComparisonTableNode = Node.create({
         default: serializeStructureData(createDefaultComparisonTable()),
         parseHTML: (element) => element.getAttribute("data-json") ?? "",
         renderHTML: (attributes) => ({ "data-json": attributes.data }),
+      },
+      format: {
+        default: "plain",
+        parseHTML: (element) => element.getAttribute("data-format") === "markdown" ? "markdown" : "plain",
+        renderHTML: (attributes) => attributes.format === "markdown" ? { "data-format": "markdown" } : {},
       },
     };
   },

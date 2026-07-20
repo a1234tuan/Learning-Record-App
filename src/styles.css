@@ -598,7 +598,8 @@ button:disabled {
   background: transparent;
 }
 
-.editor-heading-select {
+.editor-heading-select,
+.editor-code-language-select {
   min-width: 58px;
   height: 32px;
   border: 1px solid var(--border);
@@ -682,11 +683,68 @@ button:disabled {
 }
 
 .rich-editor pre {
+  box-sizing: border-box;
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 84%, #8d969d 16%);
+  color: var(--text);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9em;
+  line-height: 1.55;
+  tab-size: 2;
   max-width: 100%;
   max-inline-size: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.rich-editor pre code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.rich-editor pre .hljs-comment,
+.rich-editor pre .hljs-quote {
+  color: color-mix(in srgb, var(--muted) 84%, #73808a 16%);
+  font-style: italic;
+}
+
+.rich-editor pre .hljs-keyword,
+.rich-editor pre .hljs-selector-tag,
+.rich-editor pre .hljs-literal,
+.rich-editor pre .hljs-type {
+  color: #8d3f68;
+}
+
+.rich-editor pre .hljs-string,
+.rich-editor pre .hljs-attr,
+.rich-editor pre .hljs-template-variable {
+  color: #286b45;
+}
+
+.rich-editor pre .hljs-number,
+.rich-editor pre .hljs-symbol,
+.rich-editor pre .hljs-bullet {
+  color: #8b5d14;
+}
+
+.rich-editor pre .hljs-title,
+.rich-editor pre .hljs-title.function_,
+.rich-editor pre .hljs-function .hljs-title {
+  color: #245f8c;
+}
+
+.rich-editor pre .hljs-params,
+.rich-editor pre .hljs-variable,
+.rich-editor pre .hljs-property {
+  color: #5e4d86;
 }
 
 .record-inline-node {
@@ -3986,6 +4044,28 @@ button:disabled {
   background: var(--surface);
   overflow-wrap: anywhere;
   text-align: left;
+}
+
+.comparison-markdown-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.comparison-markdown-cell code {
+  padding: 0.08em 0.28em;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface-2) 76%, #76818b 24%);
+  color: var(--text);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.comparison-markdown-cell a {
+  color: var(--primary-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .comparison-grid-head {
