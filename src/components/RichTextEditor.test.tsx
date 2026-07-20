@@ -489,7 +489,96 @@ describe("RichTextEditor", () => {
     }
   });
 
-  it("abandons an Android IME session when the selection moves before the clipboard matches", async () => {
+  it.each([3, 5, 7])("renders Android IME Markdown when the cursor lands %i characters before the end", async (offset) => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const source = [
+      "---",
+      "",
+      "### 异常选区标题",
+      "",
+      "> **引用粗体**",
+      "",
+      "- 列表项",
+    ].join("\r\n");
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(source);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent(source);
+        editorRef?.commands.setTextSelection(editorRef!.state.doc.content.size - offset);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>异常选区标题</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<hr>");
+      expect(html).toContain("<blockquote><p><strong>引用粗体</strong></p></blockquote>");
+      expect(html).toContain("<ul>");
+      expect(html).not.toContain("### 异常选区标题");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("uses the clipboard Markdown source when an Android IME inserts extra empty lines", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const source = ["### 标题", "", "- **第一项**", "- 第二项"].join("\r\n");
+    const committedText = ["### 标题", "", "", "", "- **第一项**", "", "- 第二项"].join("\r\n");
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(source);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent(committedText);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>标题</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<ul>");
+      expect(html).toContain("<strong>第一项</strong>");
+      expect(html).not.toContain("<p></p>");
+      expect(html).not.toContain("### 标题");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it.each([
+    ["pointer", (editor: Element) => fireEvent.pointerDown(editor)],
+    ["navigation key", (editor: Element) => fireEvent.keyDown(editor, { key: "ArrowLeft" })],
+  ])("keeps raw Android IME text after a user %s cancels the session", async (_kind, cancelSession) => {
     let editorRef: Editor | undefined;
     vi.mocked(isNativePlatform).mockReturnValue(true);
     vi.mocked(readClipboardTextFallback).mockResolvedValue("**候选文本**");
@@ -512,9 +601,7 @@ describe("RichTextEditor", () => {
         editorRef?.commands.insertContent("**候选文本**");
       });
       fireEvent(editor, nativeInputEvent("input", "insertText"));
-      act(() => {
-        editorRef?.commands.setTextSelection(1);
-      });
+      cancelSession(editor);
 
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 170));

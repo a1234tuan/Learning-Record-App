@@ -92,11 +92,28 @@ type ClipboardSnapshot = {
 
 const ANDROID_IME_PASTE_DEBOUNCE_MS = 120;
 const ANDROID_IME_PASTE_GUARD_MS = 2_000;
+const ANDROID_IME_SESSION_CANCEL_KEYS = new Set([
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "Backspace",
+  "Delete",
+  "End",
+  "Home",
+  "PageDown",
+  "PageUp",
+]);
+
+type ChangedDocumentRange = {
+  from: number;
+  to: number;
+};
 
 type NativeInputPasteSession = {
   id: number;
-  from: number;
-  to: number;
+  initialDoc: ProseMirrorNode;
+  changedRange?: ChangedDocumentRange;
   isPaste: boolean;
   revision: number;
   expectedMarkdown: string | null | undefined;
@@ -118,6 +135,30 @@ const isClipboardTextPrefix = (partial: string, full: string): boolean => {
   const normalizedPartial = normalizeClipboardText(partial);
   const normalizedFull = normalizeClipboardText(full);
   return clipboardTextsMatch(normalizedPartial, normalizedFull) || normalizedFull.startsWith(normalizedPartial);
+};
+
+const withoutEmptyLines = (value: string): string =>
+  normalizeClipboardText(value)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+const clipboardTextsMatchWithImeLineBreaks = (left: string, right: string): boolean =>
+  clipboardTextsMatch(left, right) || clipboardTextsMatch(withoutEmptyLines(left), withoutEmptyLines(right));
+
+const isClipboardTextPrefixWithImeLineBreaks = (partial: string, full: string): boolean =>
+  isClipboardTextPrefix(partial, full) || isClipboardTextPrefix(withoutEmptyLines(partial), withoutEmptyLines(full));
+
+const findChangedDocumentRange = (
+  initialDoc: ProseMirrorNode,
+  currentDoc: ProseMirrorNode,
+): ChangedDocumentRange | undefined => {
+  const from = initialDoc.content.findDiffStart(currentDoc.content);
+  const end = initialDoc.content.findDiffEnd(currentDoc.content);
+  if (from === null || !end || end.b < from) {
+    return undefined;
+  }
+  return { from, to: end.b };
 };
 
 const parseClipboardSlice = (
@@ -393,6 +434,8 @@ export const RichTextEditor = ({
   const nativeInputSessionRef = useRef<NativeInputPasteSession | undefined>();
   const nativeInputSequenceRef = useRef(0);
   const nativeTypingTransformSuppressedRef = useRef(false);
+  const nativeTypingTransformSkipOnceRef = useRef(false);
+  const nativeTypingTransformSkipTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const nativeInputGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const nativeInputDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   useEffect(() => {
@@ -405,6 +448,9 @@ export const RichTextEditor = ({
     }
     if (nativeInputDebounceTimeoutRef.current) {
       clearTimeout(nativeInputDebounceTimeoutRef.current);
+    }
+    if (nativeTypingTransformSkipTimeoutRef.current) {
+      clearTimeout(nativeTypingTransformSkipTimeoutRef.current);
     }
   }, []);
 
@@ -519,7 +565,16 @@ export const RichTextEditor = ({
     }
     if (replayTypingTransform) {
       applyComposedMarkdownTransform(view);
+      return;
     }
+    nativeTypingTransformSkipOnceRef.current = true;
+    if (nativeTypingTransformSkipTimeoutRef.current) {
+      clearTimeout(nativeTypingTransformSkipTimeoutRef.current);
+    }
+    nativeTypingTransformSkipTimeoutRef.current = setTimeout(() => {
+      nativeTypingTransformSkipOnceRef.current = false;
+      nativeTypingTransformSkipTimeoutRef.current = undefined;
+    }, 0);
   };
 
   const captureNativeInputSession = (view: EditorView, isPaste = false): NativeInputPasteSession | undefined => {
@@ -527,7 +582,7 @@ export const RichTextEditor = ({
       return undefined;
     }
     const current = nativeInputSessionRef.current;
-    if (current && view.state.selection.empty && view.state.selection.from === current.to) {
+    if (current) {
       current.isPaste ||= isPaste;
       current.revision += 1;
       return current;
@@ -537,8 +592,7 @@ export const RichTextEditor = ({
     }
     const session: NativeInputPasteSession = {
       id: ++nativeInputSequenceRef.current,
-      from: view.state.selection.from,
-      to: view.state.selection.from,
+      initialDoc: view.state.doc,
       isPaste,
       revision: 0,
       expectedMarkdown: undefined,
@@ -556,11 +610,6 @@ export const RichTextEditor = ({
   };
 
   const finalizeNativeInputSession = (view: EditorView, session: NativeInputPasteSession) => {
-    if (!(view.state.selection instanceof TextSelection) || !view.state.selection.empty || view.state.selection.from < session.from) {
-      releaseNativeInputSession(session, false, view);
-      return;
-    }
-    session.to = view.state.selection.from;
     const revision = ++session.revision;
     if (nativeInputDebounceTimeoutRef.current) {
       clearTimeout(nativeInputDebounceTimeoutRef.current);
@@ -576,14 +625,11 @@ export const RichTextEditor = ({
           return;
         }
 
-        if (
-          !(view.state.selection instanceof TextSelection) ||
-          !view.state.selection.empty ||
-          view.state.selection.from !== session.to
-        ) {
-          releaseNativeInputSession(session, false, view);
+        const changedRange = findChangedDocumentRange(session.initialDoc, view.state.doc);
+        if (!changedRange) {
           return;
         }
+        session.changedRange = changedRange;
 
         if (session.expectedMarkdown === undefined) {
           if (session.clipboardReadPending) {
@@ -611,13 +657,13 @@ export const RichTextEditor = ({
           return;
         }
 
-        const insertedText = normalizeClipboardText(view.state.doc.textBetween(session.from, session.to, "\n"));
-        if (!isClipboardTextPrefix(insertedText, expectedMarkdown)) {
+        const insertedText = normalizeClipboardText(view.state.doc.textBetween(changedRange.from, changedRange.to, "\n"));
+        if (!isClipboardTextPrefixWithImeLineBreaks(insertedText, expectedMarkdown)) {
           releaseNativeInputSession(session, true, view);
           return;
         }
 
-        if (!clipboardTextsMatch(insertedText, expectedMarkdown)) {
+        if (!clipboardTextsMatchWithImeLineBreaks(insertedText, expectedMarkdown)) {
           return;
         }
 
@@ -626,7 +672,7 @@ export const RichTextEditor = ({
           releaseNativeInputSession(session, true, view);
           return;
         }
-        replaceRangeWithContent(view, parsedMarkdown, session.from, session.to);
+        replaceRangeWithContent(view, parsedMarkdown, changedRange.from, changedRange.to);
         releaseNativeInputSession(session, false, view);
       })();
     }, ANDROID_IME_PASTE_DEBOUNCE_MS);
@@ -640,7 +686,7 @@ export const RichTextEditor = ({
       }),
       MarkdownLinkMark,
       MarkdownTypingExtension.configure({
-        shouldSkipInputTransform: () => nativeTypingTransformSuppressedRef.current,
+        shouldSkipInputTransform: () => nativeTypingTransformSuppressedRef.current || nativeTypingTransformSkipOnceRef.current,
       }),
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
@@ -667,6 +713,33 @@ export const RichTextEditor = ({
         dragstart: (_view, event) => {
           event.preventDefault();
           return true;
+        },
+        pointerdown: (view) => {
+          if (isNativePlatform()) {
+            const session = nativeInputSessionRef.current;
+            if (session) {
+              releaseNativeInputSession(session, false, view);
+            }
+          }
+          return false;
+        },
+        touchstart: (view) => {
+          if (isNativePlatform()) {
+            const session = nativeInputSessionRef.current;
+            if (session) {
+              releaseNativeInputSession(session, false, view);
+            }
+          }
+          return false;
+        },
+        keydown: (view, event) => {
+          if (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key)) {
+            const session = nativeInputSessionRef.current;
+            if (session) {
+              releaseNativeInputSession(session, false, view);
+            }
+          }
+          return false;
         },
         beforeinput: (view, event) => {
           if (!isNativePlatform()) {
