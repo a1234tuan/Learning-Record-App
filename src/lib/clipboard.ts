@@ -59,15 +59,26 @@ const extensionForMime = (mimeType: string): string => {
   }
 };
 
+const MAX_NATIVE_CLIPBOARD_IMAGE_BYTES = 16 * 1024 * 1024;
+
 const fileFromDataUrl = (value: string, fileName = "clipboard-image"): File | undefined => {
   const match = /^data:([^;,]+)?(?:;base64)?,(.*)$/s.exec(value);
   if (!match) {
     return undefined;
   }
   const mimeType = match[1] || "image/png";
+  const payload = match[2].replace(/\s/g, "");
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  const estimatedBytes = Math.floor((payload.length * 3) / 4) - padding;
+  if (estimatedBytes > MAX_NATIVE_CLIPBOARD_IMAGE_BYTES) {
+    return undefined;
+  }
   try {
-    const decoded = atob(match[2]);
+    const decoded = atob(payload);
     const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+    if (bytes.byteLength > MAX_NATIVE_CLIPBOARD_IMAGE_BYTES) {
+      return undefined;
+    }
     return new File([bytes], `${fileName}.${extensionForMime(mimeType)}`, { type: mimeType });
   } catch {
     return undefined;
@@ -132,10 +143,12 @@ export const readNativeClipboardText = async (): Promise<string | undefined> => 
   return undefined;
 };
 
-export const readClipboardTextFallback = async (): Promise<string | undefined> => {
-  const nativeText = await readNativeClipboardText();
-  if (nativeText) {
-    return nativeText;
+export const readClipboardTextFallback = async (options: { skipNative?: boolean } = {}): Promise<string | undefined> => {
+  if (!options.skipNative) {
+    const nativeText = await readNativeClipboardText();
+    if (nativeText) {
+      return nativeText;
+    }
   }
 
   try {

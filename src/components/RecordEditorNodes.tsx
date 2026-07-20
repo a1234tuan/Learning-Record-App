@@ -8,6 +8,34 @@ import "katex/dist/katex.min.css";
 import type { RecordAssetRef } from "../types";
 import { AssetPreview } from "./AssetPreview";
 
+const KATEX_CACHE_LIMIT = 256;
+const katexHtmlCache = new Map<string, string>();
+
+const renderKaTeX = (latex: string, displayMode: boolean): string => {
+  const key = `${displayMode ? "block" : "inline"}:${latex}`;
+  const cached = katexHtmlCache.get(key);
+  if (cached !== undefined) {
+    katexHtmlCache.delete(key);
+    katexHtmlCache.set(key, cached);
+    return cached;
+  }
+
+  let html = "";
+  try {
+    html = katex.renderToString(latex || " ", { throwOnError: false, displayMode });
+  } catch {
+    html = "";
+  }
+  katexHtmlCache.set(key, html);
+  if (katexHtmlCache.size > KATEX_CACHE_LIMIT) {
+    const oldestKey = katexHtmlCache.keys().next().value;
+    if (oldestKey) {
+      katexHtmlCache.delete(oldestKey);
+    }
+  }
+  return html;
+};
+
 type RecordAssetNodeOptions = {
   onAssetChanged?: () => void;
   onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
@@ -52,7 +80,7 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
   const [draftLatex, setDraftLatex] = useState(latex);
-  const html = useMemo(() => katex.renderToString(latex || " ", { throwOnError: false, displayMode: true }), [latex]);
+  const html = useMemo(() => renderKaTeX(latex, true), [latex]);
 
   useEffect(() => {
     if (!editing) {
@@ -124,13 +152,7 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
 
 const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewProps) => {
   const latex = String(node.attrs.latex ?? "");
-  const html = useMemo(() => {
-    try {
-      return katex.renderToString(latex || " ", { throwOnError: false, displayMode: false });
-    } catch {
-      return "";
-    }
-  }, [latex]);
+  const html = useMemo(() => renderKaTeX(latex, false), [latex]);
   const editable = editor.isEditable;
   const [editing, setEditing] = useState(false);
   const [draftLatex, setDraftLatex] = useState(latex);

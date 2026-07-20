@@ -130,9 +130,13 @@ export const RecordEditorPage = ({
   const [draft, setDraft] = useState<RecordBlock>(() => cloneRecord(record));
   const [saving, setSaving] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(true);
+  const interactionLocked = restoreLocked || draftLoading;
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const recordIdRef = useRef(record.id);
   const draftRef = useRef<RecordBlock>(cloneRecord(record));
+  const draftLoadingRef = useRef(true);
+  const draftLoadSequenceRef = useRef(0);
   const initialEditingRef = useRef(initialEditing);
   const editorRef = useRef<Editor | null>(null);
   const audioRecorderRef = useRef<AudioRecorderHandle | null>(null);
@@ -151,7 +155,7 @@ export const RecordEditorPage = ({
 
   const setEditing = useCallback(
     (nextEditing: boolean) => {
-      if (nextEditing && restoreLocked) {
+      if (nextEditing && (restoreLocked || draftLoadingRef.current)) {
         return;
       }
       if (nextEditing) {
@@ -167,12 +171,12 @@ export const RecordEditorPage = ({
 
   const flushDraft = useCallback(
     async (nextDraft = draftRef.current, options: { force?: boolean } = {}) => {
-      if (restoreLocked || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+      if (restoreLocked || draftLoadingRef.current || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
         return;
       }
 
       const task = draftSaveQueueRef.current.then(async () => {
-        if ((!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+        if (draftLoadingRef.current || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
           return;
         }
         await onSaveDraft({
@@ -193,7 +197,7 @@ export const RecordEditorPage = ({
   const scheduleDraftSave = useCallback(
     (nextDraft: RecordBlock) => {
       draftRef.current = nextDraft;
-      if (restoreLocked || committingRef.current || ignoreEditorChangesRef.current || !hasDraftChanges(nextDraft, record)) {
+      if (draftLoadingRef.current || restoreLocked || committingRef.current || ignoreEditorChangesRef.current || !hasDraftChanges(nextDraft, record)) {
         return;
       }
       if (saveTimerRef.current) {
@@ -238,7 +242,7 @@ export const RecordEditorPage = ({
       const cleanDraft = syncEditableRecord(nextDraft);
       draftRef.current = cleanDraft;
       setDraft(cleanDraft);
-      if (options.autosave !== false) {
+      if (options.autosave !== false && !draftLoadingRef.current) {
         scheduleDraftSave(cleanDraft);
       }
       return cleanDraft;
@@ -259,27 +263,45 @@ export const RecordEditorPage = ({
 
   useEffect(() => {
     let cancelled = false;
+    const loadingRecord = record;
+    const loadSequence = ++draftLoadSequenceRef.current;
+    const loadingRecordId = loadingRecord.id;
+    draftLoadingRef.current = true;
+    setDraftLoading(true);
+    cancelScheduledDraftSave();
+    ignoreEditorChangesRef.current = true;
+    recordIdRef.current = loadingRecordId;
+    setDraftRestored(false);
+    setMoreActionsOpen(false);
+    setEditingState(false);
+    onEditingChange?.(false);
+
     const loadDraft = async () => {
       const loadStartedDuringCommit = committingRef.current;
-      if (recordIdRef.current !== record.id) {
-        recordIdRef.current = record.id;
-        setDraftRestored(false);
+      let storedDraft: RecordDraft | undefined;
+      try {
+        storedDraft = await onGetDraft(loadingRecordId);
+      } catch {
+        storedDraft = undefined;
       }
-      const storedDraft = await onGetDraft(record.id);
-      if (cancelled) {
+      if (cancelled || loadSequence !== draftLoadSequenceRef.current || recordIdRef.current !== loadingRecordId) {
         return;
       }
-      if (!loadStartedDuringCommit && !committingRef.current && storedDraft && storedDraft.updatedAt > record.updatedAt) {
+      if (!loadStartedDuringCommit && !committingRef.current && storedDraft && storedDraft.updatedAt > loadingRecord.updatedAt) {
         const restored = cloneRecord(storedDraft.draft);
         setDraft(restored);
         draftRef.current = restored;
+        draftLoadingRef.current = false;
+        setDraftLoading(false);
         setEditing(true);
         setDraftRestored(true);
         return;
       }
-      const clean = cloneRecord(record);
+      const clean = cloneRecord(loadingRecord);
       setDraft(clean);
       draftRef.current = clean;
+      draftLoadingRef.current = false;
+      setDraftLoading(false);
       if (loadStartedDuringCommit || committingRef.current) {
         setDraftRestored(false);
         return;
@@ -292,8 +314,11 @@ export const RecordEditorPage = ({
 
     return () => {
       cancelled = true;
+      if (loadSequence === draftLoadSequenceRef.current) {
+        draftLoadingRef.current = true;
+      }
     };
-  }, [onGetDraft, record, setEditing]);
+  }, [cancelScheduledDraftSave, onGetDraft, onEditingChange, record.id, setEditing]);
 
   useEffect(() => {
     const flushOnHide = () => {
@@ -310,12 +335,14 @@ export const RecordEditorPage = ({
       document.removeEventListener("visibilitychange", flushOnHide);
       window.removeEventListener("pagehide", flushOnPageHide);
       cancelScheduledDraftSave();
-      void flushDraft().catch(() => undefined);
+      if (!draftLoadingRef.current) {
+        void flushDraft().catch(() => undefined);
+      }
     };
   }, [cancelScheduledDraftSave, flushDraft]);
 
   const update = (patch: Partial<RecordBlock>) => {
-    if (restoreLocked || ignoreEditorChangesRef.current) {
+    if (draftLoadingRef.current || restoreLocked || ignoreEditorChangesRef.current) {
       return;
     }
     setCurrentDraft({ ...draftRef.current, ...patch, mistakeRefs: [] });
@@ -332,11 +359,15 @@ export const RecordEditorPage = ({
   }, []);
 
   const addAsset = useCallback((editor: Editor, file: File, kind: Asset["kind"], title = file.name) => {
-    if (restoreLocked) {
+    if (restoreLocked || draftLoadingRef.current) {
       return Promise.resolve();
     }
+    const targetRecordId = record.id;
     const task = (async () => {
       const asset = await onAddAsset(file, kind, title);
+      if (draftLoadingRef.current || recordIdRef.current !== targetRecordId) {
+        return;
+      }
       insertAfterCurrentBlock(editor, {
         type: "recordAsset",
         attrs: { assetId: asset.id, title: asset.title ?? title, kind },
@@ -345,18 +376,22 @@ export const RecordEditorPage = ({
     })();
 
     return trackAssetTask(task);
-  }, [insertAfterCurrentBlock, onAddAsset, restoreLocked, setCurrentDraft, trackAssetTask]);
+  }, [insertAfterCurrentBlock, onAddAsset, record.id, restoreLocked, setCurrentDraft, trackAssetTask]);
 
   const uploadPastedImage = useCallback(async (file: File) => {
-    if (restoreLocked) {
+    if (restoreLocked || draftLoadingRef.current) {
       return undefined;
     }
+    const targetRecordId = record.id;
     const task = (async () => {
       const asset = await onAddAsset(file, "image", file.name || "剪贴板图片");
+      if (draftLoadingRef.current || recordIdRef.current !== targetRecordId) {
+        return undefined;
+      }
       return { id: asset.id, kind: "image" as const, title: (asset.title ?? file.name) || "剪贴板图片" };
     })();
     return trackAssetTask(task);
-  }, [onAddAsset, restoreLocked, trackAssetTask]);
+  }, [onAddAsset, record.id, restoreLocked, trackAssetTask]);
 
   const pickNativeEditorImage = useCallback(async (editor: Editor) => {
     try {
@@ -438,7 +473,7 @@ export const RecordEditorPage = ({
   }, [stopRecordingIntoDraft]);
 
   const save = async () => {
-    if (saving || restoreLocked) {
+    if (saving || interactionLocked) {
       return;
     }
     setSaving(true);
@@ -481,7 +516,7 @@ export const RecordEditorPage = ({
   };
 
   const discardDraft = async () => {
-    if (restoreLocked) {
+    if (interactionLocked) {
       return;
     }
     cancelScheduledDraftSave();
@@ -535,17 +570,18 @@ export const RecordEditorPage = ({
   const closeMoreActions = () => setMoreActionsOpen(false);
 
   return (
-    <main className={restoreLocked ? "page record-editor-page restore-locked" : "page record-editor-page"} aria-busy={restoreLocked}>
-      {restoreLocked && <p className="status-message draft-status">正在恢复备份，编辑已暂时锁定。</p>}
+    <main className={interactionLocked ? "page record-editor-page restore-locked" : "page record-editor-page"} aria-busy={interactionLocked}>
+      {draftLoading && <p className="status-message draft-status">正在读取草稿，编辑已暂时锁定。</p>}
+      {!draftLoading && restoreLocked && <p className="status-message draft-status">正在恢复备份，编辑已暂时锁定。</p>}
       <section className="record-editor-topbar">
-        <button type="button" className="secondary-button" onClick={() => void back()}>
+        <button type="button" className="secondary-button" onClick={() => void back()} disabled={draftLoading}>
           <ArrowLeft size={18} />
           返回
         </button>
         {editing ? (
           <div className="record-action-row">
             {draftRestored && (
-              <button type="button" className="secondary-button collapsible-action" onClick={() => void discardDraft()} disabled={saving}>
+              <button type="button" className="secondary-button collapsible-action" onClick={() => void discardDraft()} disabled={saving || interactionLocked}>
                 <RotateCcw size={17} />
                 丢弃草稿
               </button>
@@ -559,7 +595,7 @@ export const RecordEditorPage = ({
                     void addReview();
                   }
                 }}
-                disabled={saving}
+                disabled={saving || interactionLocked}
               >
                 <CalendarCheck size={17} />
                 {reviewButtonText}
@@ -569,12 +605,12 @@ export const RecordEditorPage = ({
               type="button"
               className={`icon-button collapsible-action ${record.favorite ? "active" : ""}`}
               onClick={() => void toggleFavorite()}
-              disabled={saving}
+              disabled={saving || interactionLocked}
               aria-label={record.favorite ? "取消收藏" : "收藏记录"}
             >
               <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
             </button>
-            <button type="button" className="icon-button danger collapsible-action" onClick={() => void remove()} disabled={saving} aria-label="删除记录">
+            <button type="button" className="icon-button danger collapsible-action" onClick={() => void remove()} disabled={saving || interactionLocked} aria-label="删除记录">
               <Trash2 size={18} />
             </button>
             <div className="record-more-actions">
@@ -584,14 +620,14 @@ export const RecordEditorPage = ({
                 aria-label={moreActionsOpen ? "收起更多操作" : "更多操作"}
                 aria-expanded={moreActionsOpen}
                 onClick={() => setMoreActionsOpen((open) => !open)}
-                disabled={saving}
+                disabled={saving || interactionLocked}
               >
                 <MoreHorizontal size={18} />
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
                   {draftRestored && (
-                    <button type="button" onClick={() => void discardDraft().finally(closeMoreActions)} disabled={saving}>
+                    <button type="button" onClick={() => void discardDraft().finally(closeMoreActions)} disabled={saving || interactionLocked}>
                       <RotateCcw size={16} />
                       丢弃草稿
                     </button>
@@ -604,24 +640,24 @@ export const RecordEditorPage = ({
                           void addReview().finally(closeMoreActions);
                         }
                       }}
-                      disabled={saving || reviewState?.status === "active"}
+                      disabled={saving || interactionLocked || reviewState?.status === "active"}
                     >
                       <CalendarCheck size={16} />
                       {reviewButtonText}
                     </button>
                   )}
-                  <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving}>
+                   <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving || interactionLocked}>
                     <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
                     {record.favorite ? "取消收藏" : "收藏记录"}
                   </button>
-                  <button type="button" className="danger" onClick={() => void remove().finally(closeMoreActions)} disabled={saving}>
+                   <button type="button" className="danger" onClick={() => void remove().finally(closeMoreActions)} disabled={saving || interactionLocked}>
                     <Trash2 size={16} />
                     删除记录
                   </button>
                 </div>
               )}
             </div>
-            <button type="button" className="primary-button" onClick={() => void save()} disabled={saving}>
+            <button type="button" className="primary-button" onClick={() => void save()} disabled={saving || interactionLocked}>
               <Save size={17} />
               {saving ? "保存中" : "保存"}
             </button>
@@ -683,7 +719,7 @@ export const RecordEditorPage = ({
                 </div>
               )}
             </div>
-            <button type="button" className="primary-button" onClick={() => setEditing(true)}>
+            <button type="button" className="primary-button" onClick={() => setEditing(true)} disabled={interactionLocked}>
               <Edit3 size={17} />
               编辑
             </button>
@@ -696,13 +732,13 @@ export const RecordEditorPage = ({
           {draftRestored && <p className="status-message draft-status">已恢复未保存草稿，点击保存后才会写入正式记录。</p>}
           {saveError && <p className="status-message draft-status">{saveError}</p>}
           <section className="record-editor-head">
-            <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" />
-            <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} />
+            <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" disabled={interactionLocked} />
+            <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} disabled={interactionLocked} />
           </section>
           <RichTextEditor
             value={draft.contentHtml}
             onChange={(contentHtml) => update({ contentHtml })}
-            readOnly={restoreLocked}
+            readOnly={interactionLocked}
             placeholder="像笔记页一样，把文字、思路、截图、公式和录音放进同一个记录块..."
             onAssetTitleChange={onAssetTitleChange}
             onPasteImage={uploadPastedImage}

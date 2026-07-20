@@ -75,14 +75,25 @@ const parseMarkdownPaste = (view: EditorView, source: string | undefined): unkno
   }
 };
 
-const parseFirstMarkdownPaste = (view: EditorView, sources: readonly (string | undefined)[]): unknown[] | undefined => {
-  for (const source of selectMarkdownPasteSources(sources)) {
-    const parsed = parseMarkdownPaste(view, source);
-    if (parsed) {
-      return parsed;
+const parseMarkdownPasteScheduled = async (
+  view: EditorView,
+  source: string,
+  cancelled: () => boolean = () => false,
+): Promise<unknown[] | undefined> => {
+  if (source.length > 64 * 1024) {
+    await new Promise<void>((resolve) => {
+      const idle = (window as Window & { requestIdleCallback?: (callback: () => void) => number }).requestIdleCallback;
+      if (idle) {
+        idle(resolve);
+      } else {
+        window.setTimeout(resolve, 0);
+      }
+    });
+    if (cancelled()) {
+      return undefined;
     }
   }
-  return undefined;
+  return cancelled() ? undefined : parseMarkdownPaste(view, source);
 };
 
 type InternalClipboardParser = (
@@ -129,6 +140,12 @@ type NativeInputPasteSession = {
   revision: number;
   expectedMarkdown: string | null | undefined;
   clipboardReadPending: boolean;
+};
+
+type PasteAnchor = {
+  requestId: number;
+  doc: ProseMirrorNode;
+  bookmark: SelectionBookmark;
 };
 
 const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
@@ -409,9 +426,33 @@ const replaceRangeWithContent = (
   to: number,
 ) => {
   const nodes = content.map((item) => view.state.schema.nodeFromJSON(item));
-  const transaction = view.state.tr
-    .setSelection(TextSelection.create(view.state.doc, from, to))
-    .replaceSelection(Slice.maxOpen(Fragment.fromArray(nodes)));
+  const docSize = view.state.doc.content.size;
+  const rawFrom = Math.max(0, Math.min(from, docSize));
+  const rawTo = Math.max(rawFrom, Math.min(to, docSize));
+  let safeFrom = rawFrom;
+  let safeTo = rawTo;
+  try {
+    const $from = view.state.doc.resolve(rawFrom);
+    const $to = view.state.doc.resolve(rawTo);
+    const sharedDepth = $from.sharedDepth(rawTo);
+    if ($from.depth > sharedDepth) {
+      safeFrom = $from.before(sharedDepth + 1);
+    }
+    if ($to.depth > sharedDepth) {
+      safeTo = $to.after(sharedDepth + 1);
+    }
+  } catch {
+    // Keep the clamped diff range when a native editor reports an invalid end.
+  }
+  const replacement = Slice.maxOpen(Fragment.fromArray(nodes));
+  const transaction = view.state.tr.replace(safeFrom, safeTo, replacement);
+  try {
+    const cursor = Math.max(1, Math.min(transaction.doc.content.size, safeFrom + replacement.size));
+    transaction.setSelection(TextSelection.near(transaction.doc.resolve(cursor), -1));
+  } catch {
+    // A block-only replacement can leave no inline endpoint. ProseMirror's
+    // mapped selection remains the safest fallback in that case.
+  }
   view.dispatch(transaction.scrollIntoView());
 };
 
@@ -441,6 +482,7 @@ export const RichTextEditor = ({
 }: RichTextEditorProps) => {
   const onPasteImageRef = useRef(onPasteImage);
   const pasteRequestRef = useRef(0);
+  const pasteAnchorRef = useRef<PasteAnchor | undefined>();
   const mountedRef = useRef(true);
   const nativeInputSessionRef = useRef<NativeInputPasteSession | undefined>();
   const nativeInputSequenceRef = useRef(0);
@@ -454,6 +496,8 @@ export const RichTextEditor = ({
   }, [onPasteImage]);
   useEffect(() => () => {
     mountedRef.current = false;
+    pasteRequestRef.current += 1;
+    pasteAnchorRef.current = undefined;
     if (nativeInputGuardTimeoutRef.current) {
       clearTimeout(nativeInputGuardTimeoutRef.current);
     }
@@ -465,12 +509,47 @@ export const RichTextEditor = ({
     }
   }, []);
 
-  const insertPastedAsset = async (view: EditorView, file: File, requestId?: number) => {
+  const beginPasteOperation = (view: EditorView): PasteAnchor => {
+    const requestId = ++pasteRequestRef.current;
+    const anchor: PasteAnchor = {
+      requestId,
+      doc: view.state.doc,
+      bookmark: view.state.selection.getBookmark(),
+    };
+    pasteAnchorRef.current = anchor;
+    return anchor;
+  };
+
+  const isPasteAnchorCurrent = (view: EditorView, anchor: PasteAnchor): boolean => {
+    if (!mountedRef.current || pasteAnchorRef.current?.requestId !== anchor.requestId || view.state.doc !== anchor.doc) {
+      return false;
+    }
+    try {
+      const expected = anchor.bookmark.resolve(view.state.doc);
+      return view.state.selection.from === expected.from && view.state.selection.to === expected.to;
+    } catch {
+      return false;
+    }
+  };
+
+  const cancelPendingPaste = (view?: EditorView) => {
+    pasteRequestRef.current += 1;
+    pasteAnchorRef.current = undefined;
+    const session = nativeInputSessionRef.current;
+    if (session && view) {
+      releaseNativeInputSession(session, false, view);
+    }
+  };
+
+  const insertPastedAsset = async (view: EditorView, file: File, anchor?: PasteAnchor) => {
+    if (anchor && !isPasteAnchorCurrent(view, anchor)) {
+      return;
+    }
     const asset = await onPasteImageRef.current?.(file);
     if (
       !asset ||
       !mountedRef.current ||
-      (requestId !== undefined && requestId !== pasteRequestRef.current)
+      (anchor && !isPasteAnchorCurrent(view, anchor))
     ) {
       return;
     }
@@ -480,27 +559,49 @@ export const RichTextEditor = ({
         attrs: { assetId: asset.id, kind: "image", title: asset.title },
       },
       { type: "paragraph" },
-    ]);
+    ], anchor?.bookmark);
+    if (anchor) {
+      const nextAnchor: PasteAnchor = {
+        requestId: anchor.requestId,
+        doc: view.state.doc,
+        bookmark: view.state.selection.getBookmark(),
+      };
+      pasteAnchorRef.current = nextAnchor;
+    }
   };
 
-  const insertPastedAssets = async (view: EditorView, files: readonly File[], requestId?: number) => {
+  const insertPastedAssets = async (view: EditorView, files: readonly File[], anchor?: PasteAnchor) => {
     for (const file of files) {
-      await insertPastedAsset(view, file, requestId);
+      await insertPastedAsset(view, file, anchor);
+      if (anchor) {
+        const currentAnchor = pasteAnchorRef.current;
+        if (!currentAnchor || currentAnchor.requestId !== anchor.requestId) {
+          return;
+        }
+        anchor = currentAnchor;
+      }
     }
   };
 
   const readNativeText = async (): Promise<string | undefined> => {
-    const nativeText = await readNativeClipboardText();
-    return nativeText || readClipboardTextFallback();
+    let timeout: number | undefined;
+    const nativeText = await new Promise<string | undefined>((resolve) => {
+      timeout = window.setTimeout(() => resolve(undefined), 1_500);
+      void readNativeClipboardText().then(resolve, () => resolve(undefined));
+    });
+    if (timeout) {
+      window.clearTimeout(timeout);
+    }
+    return nativeText || readClipboardTextFallback({ skipNative: true });
   };
 
   const processNativePaste = async (
     view: EditorView,
     clipboard: ClipboardSnapshot,
-    bookmark = view.state.selection.getBookmark(),
     inputSession?: NativeInputPasteSession,
   ) => {
-    const requestId = ++pasteRequestRef.current;
+    const anchor = beginPasteOperation(view);
+    const requestId = anchor.requestId;
     const initialDoc = view.state.doc;
     let nativeText: string | undefined;
     try {
@@ -509,7 +610,7 @@ export const RichTextEditor = ({
       nativeText = undefined;
     }
 
-    if (!mountedRef.current || requestId !== pasteRequestRef.current) {
+    if (!isPasteAnchorCurrent(view, anchor)) {
       return;
     }
 
@@ -519,8 +620,17 @@ export const RichTextEditor = ({
       return;
     }
 
-    const targetBookmark = view.state.doc === initialDoc ? bookmark : undefined;
-    const parsedMarkdown = parseFirstMarkdownPaste(view, [nativeText, clipboard.markdown, clipboard.plainText]);
+    const targetBookmark = view.state.doc === initialDoc ? anchor.bookmark : undefined;
+    if (!targetBookmark) {
+      return;
+    }
+    const markdownSource = selectMarkdownPasteSources([nativeText, clipboard.markdown, clipboard.plainText])[0];
+    const parsedMarkdown = markdownSource
+      ? await parseMarkdownPasteScheduled(view, markdownSource, () => !isPasteAnchorCurrent(view, anchor))
+      : undefined;
+    if (!isPasteAnchorCurrent(view, anchor)) {
+      return;
+    }
     if (parsedMarkdown) {
       replaceSelectionWithContent(view, parsedMarkdown, targetBookmark);
     } else {
@@ -545,8 +655,15 @@ export const RichTextEditor = ({
       releaseNativeInputSession(inputSession, false, view);
     }
 
+    const assetAnchor: PasteAnchor = {
+      requestId,
+      doc: view.state.doc,
+      bookmark: view.state.selection.getBookmark(),
+    };
+    pasteAnchorRef.current = assetAnchor;
+
     if (clipboard.files.length > 0) {
-      await insertPastedAssets(view, clipboard.files, requestId);
+      await insertPastedAssets(view, clipboard.files, assetAnchor);
       return;
     }
     if (
@@ -554,8 +671,8 @@ export const RichTextEditor = ({
       (clipboard.hasImageClipboardItem || (!nativeText && !clipboard.plainText && !clipboard.htmlText))
     ) {
       const image = await readClipboardImageFallback();
-      if (image && mountedRef.current && requestId === pasteRequestRef.current) {
-        await insertPastedAsset(view, image, requestId);
+      if (image && isPasteAnchorCurrent(view, assetAnchor)) {
+        await insertPastedAsset(view, image, assetAnchor);
       }
     }
   };
@@ -597,9 +714,6 @@ export const RichTextEditor = ({
       current.isPaste ||= isPaste;
       current.revision += 1;
       return current;
-    }
-    if (current) {
-      releaseNativeInputSession(current, false, view);
     }
     const session: NativeInputPasteSession = {
       id: ++nativeInputSequenceRef.current,
@@ -678,7 +792,14 @@ export const RichTextEditor = ({
           return;
         }
 
-        const parsedMarkdown = parseMarkdownPaste(view, expectedMarkdown);
+        const parsedMarkdown = await parseMarkdownPasteScheduled(
+          view,
+          expectedMarkdown,
+          () => nativeInputSessionRef.current?.id !== session.id || session.revision !== revision,
+        );
+        if (nativeInputSessionRef.current?.id !== session.id || session.revision !== revision) {
+          return;
+        }
         if (!parsedMarkdown) {
           releaseNativeInputSession(session, true, view);
           return;
@@ -727,37 +848,27 @@ export const RichTextEditor = ({
           return true;
         },
         pointerdown: (view) => {
-          if (isNativePlatform()) {
-            const session = nativeInputSessionRef.current;
-            if (session) {
-              releaseNativeInputSession(session, false, view);
-            }
-          }
+          cancelPendingPaste(view);
           return false;
         },
         touchstart: (view) => {
-          if (isNativePlatform()) {
-            const session = nativeInputSessionRef.current;
-            if (session) {
-              releaseNativeInputSession(session, false, view);
-            }
-          }
+          cancelPendingPaste(view);
           return false;
         },
         keydown: (view, event) => {
-          if (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key)) {
-            const session = nativeInputSessionRef.current;
-            if (session) {
-              releaseNativeInputSession(session, false, view);
-            }
+          if (pasteAnchorRef.current || (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key))) {
+            cancelPendingPaste(view);
           }
           return false;
         },
         beforeinput: (view, event) => {
+          const inputEvent = event as InputEvent;
           if (!isNativePlatform()) {
+            if (pasteAnchorRef.current && inputEvent.inputType !== "insertFromPaste" && inputEvent.inputType !== "insertFromPasteAsPlainText") {
+              cancelPendingPaste(view);
+            }
             return false;
           }
-          const inputEvent = event as InputEvent;
           if (inputEvent.isComposing || view.composing) {
             return false;
           }
@@ -765,13 +876,16 @@ export const RichTextEditor = ({
             if (event.cancelable) {
               const session = captureNativeInputSession(view, true);
               event.preventDefault();
-              void processNativePaste(view, snapshotClipboardData(inputEvent.dataTransfer), undefined, session);
+              void processNativePaste(view, snapshotClipboardData(inputEvent.dataTransfer), session);
               return true;
             }
             captureNativeInputSession(view, true);
             return false;
           }
           if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertReplacementText") {
+            if (pasteAnchorRef.current) {
+              cancelPendingPaste(view);
+            }
             captureNativeInputSession(view);
           }
           return false;
@@ -781,6 +895,10 @@ export const RichTextEditor = ({
             return false;
           }
           const session = nativeInputSessionRef.current;
+          const pendingPaste = pasteAnchorRef.current;
+          if (pendingPaste && view.state.doc !== pendingPaste.doc && !session) {
+            cancelPendingPaste(view);
+          }
           if (session) {
             finalizeNativeInputSession(view, session);
           }
@@ -795,26 +913,86 @@ export const RichTextEditor = ({
           if (activeSession && !activeSession.isPaste) {
             releaseNativeInputSession(activeSession, false, view);
           }
-          void processNativePaste(view, snapshotClipboardData(event.clipboardData), undefined, session);
+          void processNativePaste(view, snapshotClipboardData(event.clipboardData), session);
           return true;
         }
 
         const clipboard = snapshotClipboardData(event.clipboardData);
-        const parsedMarkdown = parseFirstMarkdownPaste(view, [clipboard.markdown, clipboard.plainText]);
-        if (parsedMarkdown) {
+        const markdownSource = selectMarkdownPasteSources([clipboard.markdown, clipboard.plainText])[0];
+        if (markdownSource) {
           event.preventDefault();
-          replaceSelectionWithContent(view, parsedMarkdown);
-          void insertPastedAssets(view, clipboard.files);
+          if (markdownSource.length <= 64 * 1024) {
+            const parsedMarkdown = parseMarkdownPaste(view, markdownSource);
+            if (parsedMarkdown) {
+              replaceSelectionWithContent(view, parsedMarkdown);
+            } else {
+              view.dispatch(view.state.tr.insertText(normalizeClipboardText(markdownSource)).scrollIntoView());
+            }
+            const anchor: PasteAnchor = {
+              requestId: ++pasteRequestRef.current,
+              doc: view.state.doc,
+              bookmark: view.state.selection.getBookmark(),
+            };
+            pasteAnchorRef.current = anchor;
+            void insertPastedAssets(view, clipboard.files, anchor);
+            return true;
+          }
+          const initialDoc = view.state.doc;
+          const anchor = beginPasteOperation(view);
+          const rawTransaction = view.state.tr;
+          rawTransaction.setSelection(anchor.bookmark.resolve(view.state.doc));
+          rawTransaction.insertText(normalizeClipboardText(markdownSource));
+          view.dispatch(rawTransaction.scrollIntoView());
+          const rawRange = findChangedDocumentRange(initialDoc, view.state.doc);
+          if (!rawRange) {
+            return true;
+          }
+          const rawAnchor: PasteAnchor = {
+            requestId: anchor.requestId,
+            doc: view.state.doc,
+            bookmark: view.state.selection.getBookmark(),
+          };
+          pasteAnchorRef.current = rawAnchor;
+          void (async () => {
+            const parsedMarkdown = await parseMarkdownPasteScheduled(view, markdownSource, () => !isPasteAnchorCurrent(view, rawAnchor));
+            if (!isPasteAnchorCurrent(view, rawAnchor)) {
+              return;
+            }
+            if (parsedMarkdown) {
+              replaceRangeWithContent(view, parsedMarkdown, rawRange.from, rawRange.to);
+            }
+            const assetAnchor: PasteAnchor = {
+              requestId: rawAnchor.requestId,
+              doc: view.state.doc,
+              bookmark: view.state.selection.getBookmark(),
+            };
+            pasteAnchorRef.current = assetAnchor;
+            await insertPastedAssets(view, clipboard.files, assetAnchor);
+          })();
           return true;
         }
 
         if (clipboard.files.length > 0) {
-          void insertPastedAssets(view, clipboard.files);
+          const hasTextOrHtml = Boolean(clipboard.markdown || clipboard.plainText || clipboard.htmlText);
+          const anchor = beginPasteOperation(view);
           // Keep the browser's native text/HTML paste when Markdown parsing was
-          // skipped or failed, then add the image assets without losing content.
-          if (clipboard.markdown || clipboard.plainText || clipboard.htmlText) {
+          // skipped or failed, then anchor image insertion after that paste.
+          if (hasTextOrHtml) {
+            window.setTimeout(() => {
+              if (pasteRequestRef.current !== anchor.requestId || !mountedRef.current) {
+                return;
+              }
+              const postPasteAnchor: PasteAnchor = {
+                requestId: anchor.requestId,
+                doc: view.state.doc,
+                bookmark: view.state.selection.getBookmark(),
+              };
+              pasteAnchorRef.current = postPasteAnchor;
+              void insertPastedAssets(view, clipboard.files, postPasteAnchor);
+            }, 0);
             return false;
           }
+          void insertPastedAssets(view, clipboard.files, anchor);
           event.preventDefault();
           return true;
         }
@@ -826,9 +1004,10 @@ export const RichTextEditor = ({
           ((event.clipboardData?.items?.length ?? 0) === 0 || clipboard.hasImageClipboardItem),
         );
         if (shouldReadClipboardImage) {
+          const anchor = beginPasteOperation(view);
           void readClipboardImageFallback().then((file) => {
-            if (file) {
-              return insertPastedAsset(view, file);
+            if (file && isPasteAnchorCurrent(view, anchor)) {
+              return insertPastedAsset(view, file, anchor);
             }
             return undefined;
           });

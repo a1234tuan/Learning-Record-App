@@ -33,6 +33,11 @@ type AutomaticParagraphMeta = {
   addedParagraphs: readonly AutomaticTrailingParagraph[];
 };
 
+type ChangedRange = {
+  from: number;
+  to: number;
+};
+
 const trailingEditableParagraphKey = new PluginKey<TrailingEditableParagraphState>("trailingEditableParagraph");
 
 const isEmptyParagraph = (node: ProseMirrorNode | null | undefined): boolean =>
@@ -41,38 +46,76 @@ const isEmptyParagraph = (node: ProseMirrorNode | null | undefined): boolean =>
 const needsTrailingParagraph = (node: ProseMirrorNode): boolean =>
   managedContainerNames.has(node.type.name) && !isEmptyParagraph(node.lastChild);
 
-const collectMissingContainerTails = (doc: ProseMirrorNode): ContainerTail[] => {
+const collectMissingContainerTails = (doc: ProseMirrorNode, ranges?: readonly ChangedRange[]): ContainerTail[] => {
   const tails: ContainerTail[] = [];
-  doc.descendants((node, pos) => {
+  const candidates = new Map<string, ContainerTail>();
+  const addCandidate = (node: ProseMirrorNode, pos: number) => {
     if (needsTrailingParagraph(node)) {
-      tails.push({ node, pos });
+      candidates.set(`${node.type.name}:${pos}`, { node, pos });
     }
-  });
+  };
+
+  if (!ranges) {
+    doc.descendants((node, pos) => addCandidate(node, pos));
+  } else {
+    ranges.forEach(({ from, to }) => {
+      const start = Math.max(0, Math.min(from, doc.content.size));
+      const end = Math.max(start, Math.min(to, doc.content.size));
+      doc.nodesBetween(start, Math.max(start, end), (node, pos) => {
+        addCandidate(node, pos);
+        return true;
+      });
+
+      const resolved = doc.resolve(start);
+      for (let depth = 0; depth <= resolved.depth; depth += 1) {
+        const node = resolved.node(depth);
+        addCandidate(node, depth === 0 ? -1 : resolved.before(depth));
+      }
+    });
+  }
+
+  candidates.forEach((tail) => tails.push(tail));
   return tails;
 };
 
-const collectTrailingParagraphs = (doc: ProseMirrorNode): TrailingParagraph[] => {
-  const paragraphs: TrailingParagraph[] = [];
-  const collect = (node: ProseMirrorNode, pos: number) => {
-    if (!managedContainerNames.has(node.type.name) || !isEmptyParagraph(node.lastChild)) {
-      return;
+const changedRangesFrom = (transactions: readonly Transaction[]): ChangedRange[] => {
+  const ranges: ChangedRange[] = [];
+  transactions.forEach((transaction) => {
+    transaction.mapping.maps.forEach((map) => {
+      map.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
+        ranges.push({ from: newStart, to: newEnd });
+      });
+    });
+  });
+  return ranges;
+};
+
+const findTrailingParagraphAt = (
+  doc: ProseMirrorNode,
+  position: number,
+  containerName: string,
+): TrailingParagraph | undefined => {
+  const safePosition = Math.max(0, Math.min(position, doc.content.size));
+  const resolved = doc.resolve(Math.min(doc.content.size, safePosition + 1));
+  for (let depth = resolved.depth; depth >= 0; depth -= 1) {
+    const node = resolved.node(depth);
+    if (node.type.name !== containerName || !isEmptyParagraph(node.lastChild)) {
+      continue;
     }
     const lastChild = node.lastChild!;
-    const paragraphPos = pos < 0
+    const containerPos = depth === 0 ? -1 : resolved.before(depth);
+    const paragraphPos = depth === 0
       ? node.content.size - lastChild.nodeSize
-      : pos + node.nodeSize - 1 - lastChild.nodeSize;
-    paragraphs.push({
-      containerName: node.type.name,
-      containerPos: pos,
+      : containerPos + node.nodeSize - 1 - lastChild.nodeSize;
+    return {
+      containerName,
+      containerPos,
       node: lastChild,
       pos: paragraphPos,
       previous: node.childCount > 1 ? node.child(node.childCount - 2) : null,
-    });
-  };
-
-  doc.descendants((node, pos) => collect(node, pos));
-  collect(doc, -1);
-  return paragraphs;
+    };
+  }
+  return undefined;
 };
 
 const automaticParagraphsFrom = (tr: Transaction): readonly AutomaticTrailingParagraph[] =>
@@ -84,14 +127,19 @@ const toAutomaticParagraph = (paragraph: TrailingParagraph): AutomaticTrailingPa
   paragraphPos: paragraph.pos,
 });
 
-const appendTrailingParagraphs = (tr: Transaction, schema: Schema): readonly AutomaticTrailingParagraph[] | undefined => {
+const appendTrailingParagraphs = (
+  tr: Transaction,
+  schema: Schema,
+  transactions?: readonly Transaction[],
+): readonly AutomaticTrailingParagraph[] | undefined => {
   const paragraph = schema.nodes.paragraph;
   if (!paragraph) {
     return undefined;
   }
 
-  const missingTails = collectMissingContainerTails(tr.doc);
-  if (needsTrailingParagraph(tr.doc)) {
+  const changedRanges = transactions ? changedRangesFrom(transactions) : undefined;
+  const missingTails = collectMissingContainerTails(tr.doc, changedRanges);
+  if (needsTrailingParagraph(tr.doc) && (!changedRanges || changedRanges.length === 0)) {
     // The document is not included by descendants(), so normalize it separately.
     missingTails.push({ node: tr.doc, pos: -1 });
   }
@@ -122,9 +170,12 @@ const removeRestoredAutomaticParagraphs = (tr: Transaction, state: TrailingEdita
   if (!state || state.automaticParagraphs.length === 0) {
     return false;
   }
-  const automaticPositions = new Set(state.automaticParagraphs.map((paragraph) => paragraph.paragraphPos));
-  const restored = collectTrailingParagraphs(tr.doc)
-    .filter((paragraph) => automaticPositions.has(paragraph.pos) && isEmptyParagraph(paragraph.previous))
+  const restored = state.automaticParagraphs
+    .map((automatic) => {
+      const mappedContainerPos = automatic.containerPos < 0 ? -1 : tr.mapping.map(automatic.containerPos, 1);
+      return findTrailingParagraphAt(tr.doc, mappedContainerPos < 0 ? tr.doc.content.size : mappedContainerPos, automatic.containerName);
+    })
+    .filter((paragraph): paragraph is TrailingParagraph => Boolean(paragraph && isEmptyParagraph(paragraph.previous)))
     .sort((left, right) => right.pos - left.pos);
   if (restored.length === 0) {
     return false;
@@ -172,9 +223,8 @@ export const TrailingEditableParagraph = Extension.create({
             if (tr.getMeta("preventUpdate")) {
               return { automaticParagraphs: [] };
             }
-            const trailingParagraphs = collectTrailingParagraphs(newState.doc);
             const findCurrentParagraph = (paragraphPos: number, containerName: string) =>
-              trailingParagraphs.find((paragraph) => paragraph.pos === paragraphPos && paragraph.containerName === containerName);
+              findTrailingParagraphAt(newState.doc, paragraphPos, containerName);
             const mapped = value.automaticParagraphs
               .map((automatic) => {
                 const mappedParagraph = findCurrentParagraph(tr.mapping.map(automatic.paragraphPos, 1), automatic.containerName);
@@ -185,8 +235,10 @@ export const TrailingEditableParagraph = Extension.create({
                   return undefined;
                 }
                 const mappedContainerPos = automatic.containerPos < 0 ? -1 : tr.mapping.map(automatic.containerPos, 1);
-                const restoredParagraph = trailingParagraphs.find((paragraph) =>
-                  paragraph.containerName === automatic.containerName && paragraph.containerPos === mappedContainerPos,
+                const restoredParagraph = findTrailingParagraphAt(
+                  newState.doc,
+                  mappedContainerPos < 0 ? newState.doc.content.size : mappedContainerPos,
+                  automatic.containerName,
                 );
                 return restoredParagraph ? toAutomaticParagraph(restoredParagraph) : undefined;
               })
@@ -211,7 +263,7 @@ export const TrailingEditableParagraph = Extension.create({
           if (transactions.some(isHistoryTransaction) && removeRestoredAutomaticParagraphs(tr, trailingEditableParagraphKey.getState(newState))) {
             return tr;
           }
-          return appendTrailingParagraphs(tr, newState.schema) ? tr : null;
+          return appendTrailingParagraphs(tr, newState.schema, transactions) ? tr : null;
         },
       }),
     ];

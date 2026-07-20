@@ -811,6 +811,29 @@ describe("RichTextEditor", () => {
     expect(html).not.toContain("record-inline-math");
   });
 
+  it("defers medium Markdown parsing while preserving the raw paste until replacement", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const source = `# 空闲解析标题\n\n${"内容".repeat(35_000)}`;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: { getData: (type: string) => type === "text/plain" ? source : "", items: [] },
+    });
+
+    expect(editorRef?.getHTML()).toContain("# 空闲解析标题");
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("<h1>空闲解析标题</h1>"));
+  });
+
   it("keeps text when an image is pasted with Markdown that cannot be parsed", async () => {
     const onChange = vi.fn();
     const onPasteImage = vi.fn().mockResolvedValue({ id: "asset-1", kind: "image", title: "截图" });
@@ -838,6 +861,40 @@ describe("RichTextEditor", () => {
     await waitFor(() => expect(editorRef?.getHTML()).toContain("# 保留原文"));
     await waitFor(() => expect(editorRef?.getHTML()).toContain("record-asset"));
     expect(onPasteImage).toHaveBeenCalledWith(image);
+  });
+
+  it("does not insert an asynchronously uploaded paste image after the user continues editing", async () => {
+    const imageUpload = new Promise<{ id: string; kind: "image"; title: string }>((resolve) => {
+      setTimeout(() => resolve({ id: "asset-late", kind: "image", title: "延迟图片" }), 0);
+    });
+    const onPasteImage = vi.fn(() => imageUpload);
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        onPasteImage={onPasteImage}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    const image = new File(["image"], "late.png", { type: "image/png" });
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: () => "",
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+      },
+    });
+    act(() => {
+      editorRef?.commands.insertContent("用户继续输入");
+    });
+
+    await imageUpload;
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("用户继续输入"));
+    expect(editorRef?.getHTML()).not.toContain("asset-late");
   });
 
   it("immediately converts Markdown typed next to Chinese text", async () => {

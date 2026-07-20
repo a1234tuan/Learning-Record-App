@@ -229,6 +229,28 @@ describe("RecordEditorPage", () => {
     expect(screen.getByRole("heading", { name: "Math note 1" })).toBeInTheDocument();
   });
 
+  it("does not write an initialization change before an asynchronous draft has loaded", async () => {
+    vi.useFakeTimers();
+    const draftLoad = deferred<RecordDraft | undefined>();
+    const onGetDraft = vi.fn(() => draftLoad.promise);
+    const onSaveDraft = vi.fn(async (draft: RecordDraft) => draft);
+    const { saveButton } = renderEditor({ onGetDraft, onSaveDraft });
+
+    expect(screen.getByText("正在读取草稿，编辑已暂时锁定。")).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    act(() => {
+      richEditorMock.props?.onChange?.("<p>初始化补空行</p>");
+      vi.advanceTimersByTime(500);
+    });
+    expect(onSaveDraft).not.toHaveBeenCalled();
+
+    await act(async () => {
+      draftLoad.resolve(undefined);
+      await draftLoad.promise;
+    });
+    expect(onSaveDraft).not.toHaveBeenCalled();
+  });
+
   it("returns immediately while a draft save is still in flight", async () => {
     const draftSave = deferred<RecordDraft>();
     let savedDraft!: RecordDraft;

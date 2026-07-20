@@ -8,9 +8,10 @@ interface SubjectPickerProps {
   subjects: SubjectConfig[];
   onChange: (subject: Subject) => void;
   onAddSubject?: (name: string) => Promise<void>;
+  disabled?: boolean;
 }
 
-export const SubjectPicker = ({ value, subjects, onChange, onAddSubject }: SubjectPickerProps) => {
+export const SubjectPicker = ({ value, subjects, onChange, onAddSubject, disabled = false }: SubjectPickerProps) => {
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
   const activeSubjects = subjects.filter((subject) => !subject.archivedAt).sort((a, b) => a.order - b.order);
@@ -39,6 +40,7 @@ export const SubjectPicker = ({ value, subjects, onChange, onAddSubject }: Subje
             type="button"
             className={value === subject.name ? "active" : ""}
             onClick={() => onChange(subject.name)}
+            disabled={disabled}
           >
             {subject.name}
           </button>
@@ -57,8 +59,9 @@ export const SubjectPicker = ({ value, subjects, onChange, onAddSubject }: Subje
             }}
             placeholder="新增学科"
             aria-label="新增学科"
+            disabled={disabled}
           />
-          <button type="button" className="secondary-button" onClick={() => void add()} disabled={!draft.trim()}>
+          <button type="button" className="secondary-button" onClick={() => void add()} disabled={disabled || !draft.trim()}>
             <Plus size={16} />
             添加
           </button>
