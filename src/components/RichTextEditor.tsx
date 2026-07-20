@@ -91,13 +91,16 @@ type ClipboardSnapshot = {
 };
 
 const ANDROID_IME_PASTE_DEBOUNCE_MS = 120;
-const ANDROID_IME_PASTE_GUARD_MS = 750;
+const ANDROID_IME_PASTE_GUARD_MS = 2_000;
 
 type NativeInputPasteSession = {
   id: number;
   from: number;
+  to: number;
   isPaste: boolean;
   revision: number;
+  expectedMarkdown: string | null | undefined;
+  clipboardReadPending: boolean;
 };
 
 const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
@@ -110,6 +113,12 @@ const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): 
 
 const clipboardTextsMatch = (left: string, right: string): boolean =>
   normalizeClipboardText(left).replace(/\n+$/, "") === normalizeClipboardText(right).replace(/\n+$/, "");
+
+const isClipboardTextPrefix = (partial: string, full: string): boolean => {
+  const normalizedPartial = normalizeClipboardText(partial);
+  const normalizedFull = normalizeClipboardText(full);
+  return clipboardTextsMatch(normalizedPartial, normalizedFull) || normalizedFull.startsWith(normalizedPartial);
+};
 
 const parseClipboardSlice = (
   view: EditorView,
@@ -518,19 +527,22 @@ export const RichTextEditor = ({
       return undefined;
     }
     const current = nativeInputSessionRef.current;
-    if (current && view.state.selection.from >= current.from) {
+    if (current && view.state.selection.empty && view.state.selection.from === current.to) {
       current.isPaste ||= isPaste;
       current.revision += 1;
       return current;
     }
     if (current) {
-      releaseNativeInputSession(current, true, view);
+      releaseNativeInputSession(current, false, view);
     }
     const session: NativeInputPasteSession = {
       id: ++nativeInputSequenceRef.current,
       from: view.state.selection.from,
+      to: view.state.selection.from,
       isPaste,
       revision: 0,
+      expectedMarkdown: undefined,
+      clipboardReadPending: false,
     };
     nativeInputSessionRef.current = session;
     nativeTypingTransformSuppressedRef.current = true;
@@ -538,12 +550,17 @@ export const RichTextEditor = ({
       clearTimeout(nativeInputGuardTimeoutRef.current);
     }
     nativeInputGuardTimeoutRef.current = setTimeout(() => {
-      releaseNativeInputSession(session, true, view);
+      releaseNativeInputSession(session, false, view);
     }, ANDROID_IME_PASTE_GUARD_MS);
     return session;
   };
 
   const finalizeNativeInputSession = (view: EditorView, session: NativeInputPasteSession) => {
+    if (!(view.state.selection instanceof TextSelection) || !view.state.selection.empty || view.state.selection.from < session.from) {
+      releaseNativeInputSession(session, false, view);
+      return;
+    }
+    session.to = view.state.selection.from;
     const revision = ++session.revision;
     if (nativeInputDebounceTimeoutRef.current) {
       clearTimeout(nativeInputDebounceTimeoutRef.current);
@@ -551,46 +568,65 @@ export const RichTextEditor = ({
     nativeInputDebounceTimeoutRef.current = setTimeout(() => {
       nativeInputDebounceTimeoutRef.current = undefined;
       void (async () => {
-        if (!mountedRef.current || nativeInputSessionRef.current?.id !== session.id || session.revision !== revision) {
-          return;
-        }
-
-        const to = view.state.selection.from;
-        if (to < session.from) {
-          releaseNativeInputSession(session, true, view);
-          return;
-        }
-        const insertedText = normalizeClipboardText(view.state.doc.textBetween(session.from, to, "\n"));
-        const insertedMarkdown = selectMarkdownPasteSources([insertedText])[0];
-        if (!insertedMarkdown) {
-          releaseNativeInputSession(session, false, view);
-          return;
-        }
-
-        const requestId = ++pasteRequestRef.current;
-        let nativeText: string | undefined;
-        try {
-          nativeText = await readNativeText();
-        } catch {
-          nativeText = undefined;
-        }
         if (
           !mountedRef.current ||
-          requestId !== pasteRequestRef.current ||
           nativeInputSessionRef.current?.id !== session.id ||
           session.revision !== revision
         ) {
           return;
         }
 
-        const nativeMarkdown = selectMarkdownPasteSources([nativeText])[0];
-        const parsedMarkdown = nativeMarkdown ? parseMarkdownPaste(view, nativeMarkdown) : undefined;
-        if (!nativeMarkdown || !parsedMarkdown || !clipboardTextsMatch(insertedMarkdown, nativeMarkdown)) {
+        if (
+          !(view.state.selection instanceof TextSelection) ||
+          !view.state.selection.empty ||
+          view.state.selection.from !== session.to
+        ) {
+          releaseNativeInputSession(session, false, view);
+          return;
+        }
+
+        if (session.expectedMarkdown === undefined) {
+          if (session.clipboardReadPending) {
+            return;
+          }
+          session.clipboardReadPending = true;
+          let nativeText: string | undefined;
+          try {
+            nativeText = await readNativeText();
+          } catch {
+            nativeText = undefined;
+          }
+          if (!mountedRef.current || nativeInputSessionRef.current?.id !== session.id) {
+            return;
+          }
+          session.clipboardReadPending = false;
+          session.expectedMarkdown = selectMarkdownPasteSources([nativeText])[0] ?? null;
+          finalizeNativeInputSession(view, session);
+          return;
+        }
+
+        const expectedMarkdown = session.expectedMarkdown;
+        if (!expectedMarkdown) {
           releaseNativeInputSession(session, true, view);
           return;
         }
 
-        replaceRangeWithContent(view, parsedMarkdown, session.from, to);
+        const insertedText = normalizeClipboardText(view.state.doc.textBetween(session.from, session.to, "\n"));
+        if (!isClipboardTextPrefix(insertedText, expectedMarkdown)) {
+          releaseNativeInputSession(session, true, view);
+          return;
+        }
+
+        if (!clipboardTextsMatch(insertedText, expectedMarkdown)) {
+          return;
+        }
+
+        const parsedMarkdown = parseMarkdownPaste(view, expectedMarkdown);
+        if (!parsedMarkdown) {
+          releaseNativeInputSession(session, true, view);
+          return;
+        }
+        replaceRangeWithContent(view, parsedMarkdown, session.from, session.to);
         releaseNativeInputSession(session, false, view);
       })();
     }, ANDROID_IME_PASTE_DEBOUNCE_MS);

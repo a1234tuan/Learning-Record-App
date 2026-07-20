@@ -367,6 +367,168 @@ describe("RichTextEditor", () => {
     }
   });
 
+  it("waits for paced Android IME chunks when the first chunk has no Markdown marker", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    const chunks = [
+      "先插入一段普通说明文字。\r\n\r\n",
+      "### 后续标题\r\n\r\n- **第一项**\r\n",
+      "  - **第二项**",
+    ];
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(chunks.join(""));
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      for (const chunk of chunks) {
+        fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+        act(() => {
+          editorRef?.commands.insertContent(chunk);
+        });
+        fireEvent(editor, nativeInputEvent("input", "insertText"));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 170));
+        });
+      }
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>后续标题</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<p>先插入一段普通说明文字。</p>");
+      expect(html).toContain("<ul>");
+      expect(html).toContain("<strong>第一项</strong>");
+      expect(html).toContain("<strong>第二项</strong>");
+      expect(html).not.toContain("### 后续标题");
+      expect(readClipboardTextFallback).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("keeps raw Android IME text when a later chunk is not a clipboard prefix", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue("普通开头\r\n\r\n### 正确标题");
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      for (const chunk of ["普通开头\r\n\r\n", "### 错误标题"]) {
+        fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+        act(() => {
+          editorRef?.commands.insertContent(chunk);
+        });
+        fireEvent(editor, nativeInputEvent("input", "insertText"));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 170));
+        });
+      }
+
+      await waitFor(() => expect(editorRef?.getHTML()).toContain("### 错误标题"));
+      expect(editorRef?.getHTML()).not.toContain("<h3>正确标题</h3>");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("keeps incomplete Android IME input after the two-second session expires", async () => {
+    let editorRef: Editor | undefined;
+    vi.useFakeTimers();
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockReturnValue(new Promise(() => {}));
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent("尚未完成的粘贴内容");
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      expect(editorRef?.getHTML()).toContain("尚未完成的粘贴内容");
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("abandons an Android IME session when the selection moves before the clipboard matches", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue("**候选文本**");
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent("**候选文本**");
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+      act(() => {
+        editorRef?.commands.setTextSelection(1);
+      });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 170));
+      });
+
+      expect(editorRef?.getHTML()).toContain("**候选文本**");
+      expect(editorRef?.getHTML()).not.toContain("<strong>候选文本</strong>");
+      expect(readClipboardTextFallback).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
   it("keeps raw Android input when it does not match the native clipboard", async () => {
     let editorRef: Editor | undefined;
     vi.mocked(isNativePlatform).mockReturnValue(true);
