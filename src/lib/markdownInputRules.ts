@@ -122,7 +122,7 @@ const transformComposedMarkdown = (state: EditorState): Transaction | null => {
   return tr;
 };
 
-const dispatchComposedMarkdownTransform = (view: EditorView) => {
+export const applyComposedMarkdownTransform = (view: EditorView) => {
   if (!view.editable || view.composing) {
     return;
   }
@@ -132,8 +132,18 @@ const dispatchComposedMarkdownTransform = (view: EditorView) => {
   }
 };
 
-export const MarkdownTypingExtension = Extension.create({
+type MarkdownTypingOptions = {
+  shouldSkipInputTransform: () => boolean;
+};
+
+export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
   name: "recordMarkdownTyping",
+
+  addOptions() {
+    return {
+      shouldSkipInputTransform: () => false,
+    };
+  },
 
   addInputRules() {
     const bold = this.editor.schema.marks.bold;
@@ -198,7 +208,9 @@ export const MarkdownTypingExtension = Extension.create({
       // Android may deliver committed text through input without a compositionend event.
       setTimeout(() => {
         scheduled = false;
-        dispatchComposedMarkdownTransform(view);
+        if (!this.options.shouldSkipInputTransform()) {
+          applyComposedMarkdownTransform(view);
+        }
       }, 0);
       return false;
     };

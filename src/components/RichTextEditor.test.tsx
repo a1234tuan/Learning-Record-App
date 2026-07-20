@@ -43,6 +43,22 @@ const setSelectionInsideText = (editor: Editor, text: string) => {
   editor.commands.setTextSelection(targetPos);
 };
 
+const nativeInputEvent = (type: "beforeinput" | "input", inputType: string): InputEvent => {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as InputEvent;
+  Object.defineProperty(event, "inputType", { configurable: true, value: inputType });
+  Object.defineProperty(event, "isComposing", { configurable: true, value: false });
+  return event;
+};
+
+const androidMarkdownSample = [
+  "---",
+  "",
+  "### 整体规律总结",
+  "",
+  "- **破折号插入**：主语后紧跟一个由双破折号括起来的**名词短语同位语**。",
+  "  - **被动不定式**：need **to be** encouraged",
+].join("\r\n");
+
 describe("RichTextEditor", () => {
   it("renders an ordered-list toolbar action", () => {
     render(<RichTextEditor value="<p>Item</p>" onChange={vi.fn()} />);
@@ -200,6 +216,139 @@ describe("RichTextEditor", () => {
 
       await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h1>Android Markdown</h1>"));
       expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("converts an Android beforeinput paste when no paste event is emitted", async () => {
+    const onChange = vi.fn();
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(androidMarkdownSample);
+
+    try {
+      render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+      const editor = document.querySelector(".rich-editor")!;
+      const event = nativeInputEvent("beforeinput", "insertFromPaste");
+      fireEvent(editor, event);
+
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>整体规律总结</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<hr>");
+      expect(html).toContain("<ul>");
+      expect(html).toContain("<strong>破折号插入</strong>");
+      expect(html).not.toContain("### 整体规律总结");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("uses the input fallback when Android commits text despite a canceled beforeinput", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    let resolveClipboard: ((value: string) => void) | undefined;
+    const clipboardPromise = new Promise<string>((resolve) => {
+      resolveClipboard = resolve;
+    });
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockReturnValue(clipboardPromise);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertFromPaste"));
+      act(() => {
+        editorRef?.commands.insertContent(androidMarkdownSample);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertFromPaste"));
+      resolveClipboard?.(androidMarkdownSample);
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>整体规律总结</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<hr>");
+      expect(html).not.toContain("### 整体规律总结");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("replaces raw Android input with Markdown when an IME omits the paste event", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(androidMarkdownSample);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent(androidMarkdownSample);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h3>整体规律总结</h3>"));
+      const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+      expect(html).toContain("<hr>");
+      expect(html).toContain("<ul>");
+      expect(html).toContain("<strong>名词短语同位语</strong>");
+      expect(html).not.toContain("### 整体规律总结");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("keeps raw Android input when it does not match the native clipboard", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue("## 剪贴板内容");
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent("## 手工输入内容");
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(editorRef?.getHTML()).toContain("## 手工输入内容"));
+      expect(editorRef?.getHTML()).not.toContain("<h2>");
     } finally {
       vi.mocked(isNativePlatform).mockReturnValue(false);
       vi.mocked(readClipboardTextFallback).mockReset();

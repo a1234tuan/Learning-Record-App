@@ -3,7 +3,7 @@ import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import * as pmView from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
-import type { SelectionBookmark } from "@tiptap/pm/state";
+import { TextSelection, type SelectionBookmark } from "@tiptap/pm/state";
 import { Check, ChevronDown, Highlighter, List, ListOrdered } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -41,7 +41,7 @@ import {
   markdownToTiptapContent,
   selectMarkdownPasteSources,
 } from "../lib/markdownEditor";
-import { MarkdownTypingExtension } from "../lib/markdownInputRules";
+import { applyComposedMarkdownTransform, MarkdownTypingExtension } from "../lib/markdownInputRules";
 import { MarkdownLinkMark } from "../lib/markdownLinkMark";
 import { isNativePlatform } from "../lib/platform";
 
@@ -81,6 +81,31 @@ type InternalClipboardParser = (
   plainText: boolean,
   context: ResolvedPos,
 ) => Slice | null;
+
+type ClipboardSnapshot = {
+  markdown: string;
+  plainText: string;
+  htmlText: string;
+  files: File[];
+  hasImageClipboardItem: boolean;
+};
+
+type NativeInputCandidate = {
+  id: number;
+  from: number;
+  isPaste: boolean;
+};
+
+const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
+  markdown: clipboardData?.getData("text/markdown") || "",
+  plainText: clipboardData?.getData("text/plain") || "",
+  htmlText: clipboardData?.getData("text/html") || "",
+  files: clipboardImageFiles(clipboardData),
+  hasImageClipboardItem: Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/")),
+});
+
+const clipboardTextsMatch = (left: string, right: string): boolean =>
+  normalizeClipboardText(left).replace(/\n+$/, "") === normalizeClipboardText(right).replace(/\n+$/, "");
 
 const parseClipboardSlice = (
   view: EditorView,
@@ -312,6 +337,19 @@ const replaceSelectionWithContent = (
   view.dispatch(transaction.scrollIntoView());
 };
 
+const replaceRangeWithContent = (
+  view: EditorView,
+  content: unknown[],
+  from: number,
+  to: number,
+) => {
+  const nodes = content.map((item) => view.state.schema.nodeFromJSON(item));
+  const transaction = view.state.tr
+    .setSelection(TextSelection.create(view.state.doc, from, to))
+    .replaceSelection(Slice.maxOpen(Fragment.fromArray(nodes)));
+  view.dispatch(transaction.scrollIntoView());
+};
+
 const replaceSelectionWithSlice = (
   view: EditorView,
   slice: Slice,
@@ -339,12 +377,196 @@ export const RichTextEditor = ({
   const onPasteImageRef = useRef(onPasteImage);
   const pasteRequestRef = useRef(0);
   const mountedRef = useRef(true);
+  const nativeInputCandidateRef = useRef<NativeInputCandidate | undefined>();
+  const nativeInputSequenceRef = useRef(0);
+  const nativeTypingTransformSuppressedRef = useRef(false);
+  const nativeInputGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
   useEffect(() => () => {
     mountedRef.current = false;
+    if (nativeInputGuardTimeoutRef.current) {
+      clearTimeout(nativeInputGuardTimeoutRef.current);
+    }
   }, []);
+
+  const insertPastedAsset = async (view: EditorView, file: File, requestId?: number) => {
+    const asset = await onPasteImageRef.current?.(file);
+    if (
+      !asset ||
+      !mountedRef.current ||
+      (requestId !== undefined && requestId !== pasteRequestRef.current)
+    ) {
+      return;
+    }
+    replaceSelectionWithContent(view, [
+      {
+        type: "recordAsset",
+        attrs: { assetId: asset.id, kind: "image", title: asset.title },
+      },
+      { type: "paragraph" },
+    ]);
+  };
+
+  const insertPastedAssets = async (view: EditorView, files: readonly File[], requestId?: number) => {
+    for (const file of files) {
+      await insertPastedAsset(view, file, requestId);
+    }
+  };
+
+  const readNativeText = async (): Promise<string | undefined> => {
+    const nativeText = await readNativeClipboardText();
+    return nativeText || readClipboardTextFallback();
+  };
+
+  const processNativePaste = async (
+    view: EditorView,
+    clipboard: ClipboardSnapshot,
+    bookmark = view.state.selection.getBookmark(),
+    inputCandidate?: NativeInputCandidate,
+  ) => {
+    const requestId = ++pasteRequestRef.current;
+    const initialDoc = view.state.doc;
+    let nativeText: string | undefined;
+    try {
+      nativeText = await readNativeText();
+    } catch {
+      nativeText = undefined;
+    }
+
+    if (!mountedRef.current || requestId !== pasteRequestRef.current) {
+      return;
+    }
+
+    // Some Android WebViews report beforeinput as cancelable but still commit
+    // the text. The input fallback will replace that raw range as one unit.
+    if (inputCandidate && view.state.doc !== initialDoc) {
+      return;
+    }
+
+    const targetBookmark = view.state.doc === initialDoc ? bookmark : undefined;
+    const parsedMarkdown = parseFirstMarkdownPaste(view, [nativeText, clipboard.markdown, clipboard.plainText]);
+    if (parsedMarkdown) {
+      replaceSelectionWithContent(view, parsedMarkdown, targetBookmark);
+    } else {
+      const normalizedNativeText = nativeText ? normalizeClipboardText(nativeText) : "";
+      const fallbackText = clipboard.plainText ? normalizeClipboardText(clipboard.plainText) : normalizedNativeText;
+      const slice = (clipboard.htmlText || fallbackText.length <= MAX_MARKDOWN_PASTE_LENGTH)
+        ? parseClipboardSlice(view, fallbackText, clipboard.htmlText, !clipboard.htmlText)
+        : undefined;
+      if (slice) {
+        replaceSelectionWithSlice(view, slice, targetBookmark);
+      } else if (fallbackText) {
+        const transaction = view.state.tr;
+        if (targetBookmark) {
+          transaction.setSelection(targetBookmark.resolve(view.state.doc));
+        }
+        transaction.insertText(fallbackText);
+        view.dispatch(transaction.scrollIntoView());
+      }
+    }
+
+    if (inputCandidate) {
+      releaseNativeInputCandidate(inputCandidate, false, view);
+    }
+
+    if (clipboard.files.length > 0) {
+      await insertPastedAssets(view, clipboard.files, requestId);
+      return;
+    }
+    if (
+      onPasteImageRef.current &&
+      (clipboard.hasImageClipboardItem || (!nativeText && !clipboard.plainText && !clipboard.htmlText))
+    ) {
+      const image = await readClipboardImageFallback();
+      if (image && mountedRef.current && requestId === pasteRequestRef.current) {
+        await insertPastedAsset(view, image, requestId);
+      }
+    }
+  };
+
+  const releaseNativeInputCandidate = (candidate: NativeInputCandidate, replayTypingTransform: boolean, view: EditorView) => {
+    if (nativeInputCandidateRef.current?.id !== candidate.id) {
+      return;
+    }
+    nativeInputCandidateRef.current = undefined;
+    nativeTypingTransformSuppressedRef.current = false;
+    if (nativeInputGuardTimeoutRef.current) {
+      clearTimeout(nativeInputGuardTimeoutRef.current);
+      nativeInputGuardTimeoutRef.current = undefined;
+    }
+    if (replayTypingTransform) {
+      applyComposedMarkdownTransform(view);
+    }
+  };
+
+  const captureNativeInputCandidate = (view: EditorView, isPaste = false): NativeInputCandidate | undefined => {
+    if (!(view.state.selection instanceof TextSelection)) {
+      return undefined;
+    }
+    const candidate = {
+      id: ++nativeInputSequenceRef.current,
+      from: view.state.selection.from,
+      isPaste,
+    };
+    nativeInputCandidateRef.current = candidate;
+    nativeTypingTransformSuppressedRef.current = true;
+    if (nativeInputGuardTimeoutRef.current) {
+      clearTimeout(nativeInputGuardTimeoutRef.current);
+    }
+    nativeInputGuardTimeoutRef.current = setTimeout(() => {
+      releaseNativeInputCandidate(candidate, true, view);
+    }, 750);
+    return candidate;
+  };
+
+  const finalizeNativeInputCandidate = (view: EditorView, candidate: NativeInputCandidate) => {
+    setTimeout(() => {
+      void (async () => {
+        if (!mountedRef.current || nativeInputCandidateRef.current?.id !== candidate.id) {
+          return;
+        }
+
+        const to = view.state.selection.from;
+        if (to < candidate.from) {
+          releaseNativeInputCandidate(candidate, true, view);
+          return;
+        }
+        const insertedText = normalizeClipboardText(view.state.doc.textBetween(candidate.from, to, "\n"));
+        const insertedMarkdown = selectMarkdownPasteSources([insertedText])[0];
+        if (!insertedMarkdown) {
+          releaseNativeInputCandidate(candidate, false, view);
+          return;
+        }
+
+        const requestId = ++pasteRequestRef.current;
+        let nativeText: string | undefined;
+        try {
+          nativeText = await readNativeText();
+        } catch {
+          nativeText = undefined;
+        }
+        if (
+          !mountedRef.current ||
+          requestId !== pasteRequestRef.current ||
+          nativeInputCandidateRef.current?.id !== candidate.id
+        ) {
+          return;
+        }
+
+        const nativeMarkdown = selectMarkdownPasteSources([nativeText])[0];
+        const parsedMarkdown = nativeMarkdown ? parseMarkdownPaste(view, nativeMarkdown) : undefined;
+        if (!nativeMarkdown || !parsedMarkdown || !clipboardTextsMatch(insertedMarkdown, nativeMarkdown)) {
+          releaseNativeInputCandidate(candidate, true, view);
+          return;
+        }
+
+        replaceRangeWithContent(view, parsedMarkdown, candidate.from, to);
+        releaseNativeInputCandidate(candidate, false, view);
+      })();
+    }, 0);
+  };
 
   const editor = useEditor({
     editable: !readOnly,
@@ -353,7 +575,9 @@ export const RichTextEditor = ({
         codeBlock: false,
       }),
       MarkdownLinkMark,
-      MarkdownTypingExtension,
+      MarkdownTypingExtension.configure({
+        shouldSkipInputTransform: () => nativeTypingTransformSuppressedRef.current,
+      }),
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
       TaskItem.configure({ nested: true }),
@@ -380,116 +604,62 @@ export const RichTextEditor = ({
           event.preventDefault();
           return true;
         },
+        beforeinput: (view, event) => {
+          if (!isNativePlatform()) {
+            return false;
+          }
+          const inputEvent = event as InputEvent;
+          if (inputEvent.isComposing || view.composing) {
+            return false;
+          }
+          if (inputEvent.inputType === "insertFromPaste" || inputEvent.inputType === "insertFromPasteAsPlainText") {
+            if (event.cancelable) {
+              const candidate = captureNativeInputCandidate(view, true);
+              event.preventDefault();
+              void processNativePaste(view, snapshotClipboardData(inputEvent.dataTransfer), undefined, candidate);
+              return true;
+            }
+            captureNativeInputCandidate(view, true);
+            return false;
+          }
+          if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertReplacementText") {
+            captureNativeInputCandidate(view);
+          }
+          return false;
+        },
+        input: (view, event) => {
+          if (!isNativePlatform() || (event as InputEvent).isComposing) {
+            return false;
+          }
+          const candidate = nativeInputCandidateRef.current;
+          if (candidate) {
+            finalizeNativeInputCandidate(view, candidate);
+          }
+          return false;
+        },
       },
       handlePaste: (view, event) => {
-        const clipboardData = event.clipboardData;
-        const files = clipboardImageFiles(clipboardData);
-        const markdown = clipboardData?.getData("text/markdown") || "";
-        const plainText = clipboardData?.getData("text/plain") || "";
-        const htmlText = clipboardData?.getData("text/html") || "";
-        const hasImageClipboardItem = Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
-
-        const insertPastedAsset = async (file: File, requestId?: number) => {
-          const asset = await onPasteImageRef.current?.(file);
-          if (
-            !asset ||
-            !mountedRef.current ||
-            (requestId !== undefined && requestId !== pasteRequestRef.current)
-          ) {
-            return;
-          }
-          replaceSelectionWithContent(view, [
-            {
-              type: "recordAsset",
-              attrs: { assetId: asset.id, kind: "image", title: asset.title },
-            },
-            { type: "paragraph" },
-          ]);
-        };
-
-        const insertPastedAssets = async (assetFiles: readonly File[], requestId?: number) => {
-          for (const file of assetFiles) {
-            await insertPastedAsset(file, requestId);
-          }
-        };
-
-        const parseNativePaste = async () => {
-          const requestId = ++pasteRequestRef.current;
-          const bookmark = view.state.selection.getBookmark();
-          const initialDoc = view.state.doc;
-          let nativeText: string | undefined;
-          try {
-            nativeText = await readNativeClipboardText();
-            // Keep the previous helper as a browser/WebView fallback. It also
-            // preserves compatibility with older Capacitor builds that expose
-            // Clipboard only through the fallback path.
-            if (!nativeText) {
-              nativeText = await readClipboardTextFallback();
-            }
-          } catch {
-            nativeText = undefined;
-          }
-
-          if (!mountedRef.current || requestId !== pasteRequestRef.current) {
-            return;
-          }
-
-          // Preserve the original selection only when no newer transaction has
-          // changed the document while the native clipboard was loading.
-          const targetBookmark = view.state.doc === initialDoc ? bookmark : undefined;
-
-          const parsedMarkdown = parseFirstMarkdownPaste(view, [nativeText, markdown, plainText]);
-          if (parsedMarkdown) {
-            replaceSelectionWithContent(view, parsedMarkdown, targetBookmark);
-          } else {
-            const normalizedNativeText = nativeText ? normalizeClipboardText(nativeText) : "";
-            const fallbackText = plainText ? normalizeClipboardText(plainText) : normalizedNativeText;
-            const slice = (htmlText || fallbackText.length <= MAX_MARKDOWN_PASTE_LENGTH)
-              ? parseClipboardSlice(view, fallbackText, htmlText, !htmlText)
-              : undefined;
-            if (slice) {
-              replaceSelectionWithSlice(view, slice, targetBookmark);
-            } else if (fallbackText) {
-              const transaction = view.state.tr;
-              if (targetBookmark) {
-                transaction.setSelection(targetBookmark.resolve(view.state.doc));
-              }
-              transaction.insertText(fallbackText);
-              view.dispatch(transaction.scrollIntoView());
-            }
-          }
-
-          if (files.length > 0) {
-            await insertPastedAssets(files, requestId);
-            return;
-          }
-          if (onPasteImageRef.current && (hasImageClipboardItem || (!nativeText && !plainText && !htmlText))) {
-            const image = await readClipboardImageFallback();
-            if (image && mountedRef.current && requestId === pasteRequestRef.current) {
-              await insertPastedAsset(image, requestId);
-            }
-          }
-        };
-
         if (isNativePlatform()) {
           event.preventDefault();
-          void parseNativePaste();
+          const candidate = nativeInputCandidateRef.current?.isPaste ? nativeInputCandidateRef.current : undefined;
+          void processNativePaste(view, snapshotClipboardData(event.clipboardData), undefined, candidate);
           return true;
         }
 
-        const parsedMarkdown = parseFirstMarkdownPaste(view, [markdown, plainText]);
+        const clipboard = snapshotClipboardData(event.clipboardData);
+        const parsedMarkdown = parseFirstMarkdownPaste(view, [clipboard.markdown, clipboard.plainText]);
         if (parsedMarkdown) {
           event.preventDefault();
           replaceSelectionWithContent(view, parsedMarkdown);
-          void insertPastedAssets(files);
+          void insertPastedAssets(view, clipboard.files);
           return true;
         }
 
-        if (files.length > 0) {
-          void insertPastedAssets(files);
+        if (clipboard.files.length > 0) {
+          void insertPastedAssets(view, clipboard.files);
           // Keep the browser's native text/HTML paste when Markdown parsing was
           // skipped or failed, then add the image assets without losing content.
-          if (markdown || plainText || htmlText) {
+          if (clipboard.markdown || clipboard.plainText || clipboard.htmlText) {
             return false;
           }
           event.preventDefault();
@@ -498,14 +668,14 @@ export const RichTextEditor = ({
 
         const shouldReadClipboardImage = Boolean(
           onPasteImageRef.current &&
-          !markdown &&
-          !plainText &&
-          ((clipboardData?.items?.length ?? 0) === 0 || hasImageClipboardItem),
+          !clipboard.markdown &&
+          !clipboard.plainText &&
+          ((event.clipboardData?.items?.length ?? 0) === 0 || clipboard.hasImageClipboardItem),
         );
         if (shouldReadClipboardImage) {
           void readClipboardImageFallback().then((file) => {
             if (file) {
-              return insertPastedAsset(file);
+              return insertPastedAsset(view, file);
             }
             return undefined;
           });
