@@ -46,6 +46,7 @@ import {
 import { applyComposedMarkdownTransform, MarkdownTypingExtension } from "../lib/markdownInputRules";
 import { MarkdownLinkMark } from "../lib/markdownLinkMark";
 import { isNativePlatform } from "../lib/platform";
+import { TrailingEditableParagraph } from "../lib/trailingEditableParagraph";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -709,6 +710,7 @@ export const RichTextEditor = ({
       RecordStickyBoardNode,
       RecordCollapseBlockNode,
       RecordHighlightBlockNode,
+      TrailingEditableParagraph,
       Placeholder.configure({
         placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心得...",
       }),
@@ -846,7 +848,10 @@ export const RichTextEditor = ({
     if (value !== editor.getHTML()) {
       editor.commands.setContent(value, false);
     }
-  }, [editor, value]);
+    if (!readOnly) {
+      editor.commands.ensureTrailingEditableParagraph();
+    }
+  }, [editor, readOnly, value]);
 
   useEffect(() => {
     editor?.setEditable(!readOnly);

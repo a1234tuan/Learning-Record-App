@@ -329,7 +329,7 @@ describe("RichTextEditor", () => {
       },
     });
 
-    expect(editorRef?.getHTML()).toBe("<p>普通文本 1 + 1 = 2</p>");
+    expect(editorRef?.getHTML()).toBe("<p>普通文本 1 + 1 = 2</p><p></p>");
     expect(editorRef?.getHTML()).not.toContain("<h1>");
     expect(editorRef?.getHTML()).not.toContain("record-inline-math");
   });
@@ -701,7 +701,8 @@ describe("RichTextEditor", () => {
       const html = onChange.mock.calls.at(-1)?.[0] ?? "";
       expect(html).toContain("<ul>");
       expect(html).toContain("<strong>第一项</strong>");
-      expect(html).not.toContain("<p></p>");
+      expect(html).toMatch(/<p><\/p>$/);
+      expect(html.match(/<p><\/p>/g)).toHaveLength(1);
       expect(html).not.toContain("### 标题");
     } finally {
       vi.mocked(isNativePlatform).mockReturnValue(false);
@@ -1191,6 +1192,83 @@ describe("RichTextEditor", () => {
     expect(document.querySelector('[role="columnheader"].sticky-column')).toHaveTextContent("Concept");
     expect(document.querySelector('[role="cell"].sticky-column')).toHaveTextContent("Logical file system");
     expect(document.querySelectorAll(".comparison-table-right-scroll")).toHaveLength(1);
+  });
+
+  it("persists a selectable trailing paragraph for root, collapse, and highlight containers", async () => {
+    const comparison = createDefaultComparisonTable();
+    const sticky = createDefaultStickyBoard();
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<record-collapse data-title="折叠块" data-summary="" data-default-open="true">',
+          '<record-highlight-block data-tone="yellow"><record-asset data-asset-id="asset-1" data-kind="image" data-title="图片"></record-asset></record-highlight-block>',
+          `<record-comparison-table data-json='${serializeStructureData(comparison)}'></record-comparison-table>`,
+          `<record-sticky-board data-json='${serializeStructureData(sticky)}'></record-sticky-board>`,
+          "</record-collapse>",
+        ].join("")}
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const html = editorRef?.getHTML() ?? "";
+    const content = new DOMParser().parseFromString(html, "text/html");
+    const collapse = content.querySelector("record-collapse");
+    const highlight = collapse?.querySelector("record-highlight-block");
+
+    expect(highlight?.lastElementChild?.tagName).toBe("P");
+    expect(collapse?.lastElementChild?.tagName).toBe("P");
+    expect(content.body.lastElementChild?.tagName).toBe("P");
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain("</record-collapse><p></p>");
+  });
+
+  it("restores the trailing paragraph after deletion without growing duplicate blank lines", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p>末行文字</p><p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      const end = editorRef!.state.doc.content.size;
+      editorRef!.view.dispatch(editorRef!.state.tr.delete(end - 2, end));
+    });
+
+    expect(editorRef?.getHTML()).toBe("<p>末行文字</p><p></p>");
+    expect(editorRef?.getHTML().match(/<p><\/p>/g)).toHaveLength(1);
+
+    act(() => {
+      editorRef?.commands.undo();
+    });
+
+    expect(editorRef?.getHTML()).toBe("<p>末行文字</p><p></p>");
+    expect(editorRef?.getHTML().match(/<p><\/p>/g)).toHaveLength(1);
+  });
+
+  it("does not normalize or write back while rendering read-only content", () => {
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value="<p>只读内容</p>"
+        onChange={onChange}
+        readOnly
+      />,
+    );
+
+    expect(onChange).not.toHaveBeenCalledWith("<p>只读内容</p><p></p>");
   });
 
   it("uses a single right-side scroller for read-only comparison table columns", async () => {

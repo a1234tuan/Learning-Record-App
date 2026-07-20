@@ -632,6 +632,13 @@ button:disabled {
   margin: 0.45em 0;
 }
 
+/* The editor normalizes these containers to end in a real empty paragraph. */
+.rich-editor > p:last-child,
+.collapse-block-content > p:last-child,
+.highlight-block-content > p:last-child {
+  min-block-size: 1.55em;
+}
+
 .rich-editor h1,
 .rich-editor h2,
 .rich-editor h3,

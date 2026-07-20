@@ -106,6 +106,26 @@ describe("recordContent", () => {
     expect(synced.formulas).toEqual([]);
   });
 
+  it("ignores persisted editable trailing paragraphs when syncing refs and exporting content", () => {
+    const withoutTail = {
+      ...record,
+      assets: [],
+      formulas: [],
+      contentHtml: '<p>正文</p><record-formula data-formula-id="formula-1" data-title="公式" data-latex="x^2"></record-formula>',
+    };
+    const withTail = {
+      ...withoutTail,
+      contentHtml: `${withoutTail.contentHtml}<p></p>`,
+    };
+
+    expect(syncRecordRefsFromContent(withTail)).toMatchObject({
+      assets: [],
+      formulas: [{ id: "formula-1", title: "公式", latex: "x^2" }],
+    });
+    expect(recordToPlainText(withTail)).toBe(recordToPlainText(withoutTail));
+    expect(recordToLinearMarkdown(withTail)).toBe(recordToLinearMarkdown(withoutTail));
+  });
+
   it("renames a record asset title in content and refs", () => {
     const result = renameRecordAssetTitle(
       {
