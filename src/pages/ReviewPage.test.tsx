@@ -2,10 +2,17 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
+
+const richTextEditorMock = vi.hoisted(() => ({
+  props: [] as any[],
+}));
 
 vi.mock("../components/RichTextEditor", () => ({
-  RichTextEditor: () => <div data-testid="rich-editor" />,
+  RichTextEditor: (props: any) => {
+    richTextEditorMock.props.push(props);
+    return <div data-testid="rich-editor" />;
+  },
 }));
 
 vi.mock("../lib/date", async () => {
@@ -104,6 +111,12 @@ const records = [
   record("mastered", "进程同步", "OS"),
 ];
 
+const referenceSubjects: SubjectConfig[] = [
+  { id: "subject-data", createdAt: stamp, updatedAt: stamp, name: "数据结构", order: 0 },
+  { id: "subject-os", createdAt: stamp, updatedAt: stamp, name: "OS", order: 1 },
+  { id: "subject-math", createdAt: stamp, updatedAt: stamp, name: "数学", order: 2 },
+];
+
 type RenderOptions = Partial<React.ComponentProps<typeof ReviewPage>>;
 
 const renderReviewPage = (options: RenderOptions = {}) => {
@@ -144,6 +157,44 @@ const clickRating = (name: string | RegExp) => {
 describe("ReviewPage", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    richTextEditorMock.props = [];
+  });
+
+  it("passes queue card references to the read-only editor without enabling queue editing", () => {
+    const onOpenRecordReference = vi.fn();
+    renderReviewPage({
+      mode: "queue",
+      queueIds: ["active"],
+      currentRecordId: "active",
+      referenceRecords: records,
+      referenceSubjects,
+      onOpenRecordReference,
+    });
+
+    const editorProps = richTextEditorMock.props.at(-1);
+    expect(editorProps).toMatchObject({
+      readOnly: true,
+      currentRecordId: "active",
+      referenceRecords: records,
+      referenceSubjects,
+    });
+
+    editorProps.onOpenRecordReference("second");
+    expect(onOpenRecordReference).toHaveBeenCalledWith("active", "second");
+    expect(editorProps.renderInsertTools).toBeUndefined();
+  });
+
+  it("restores the review queue scroll position after returning from a reference", async () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    renderReviewPage({
+      mode: "queue",
+      queueIds: ["active"],
+      currentRecordId: "active",
+      restoreScrollY: 286,
+    });
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 286));
+    scrollTo.mockRestore();
   });
 
   it("manages all record cards with deck, due date and review actions", () => {

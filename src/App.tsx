@@ -46,6 +46,7 @@ import {
   MAX_RECORD_REFERENCE_DEPTH,
   popTabDepth,
   recordReferenceOpenError,
+  reviewQueueReferenceOpenError,
   type MoreSubRoute,
   type TabKey,
   type TabMemory,
@@ -383,11 +384,57 @@ export const App = () => {
           referenceStack: [
             ...currentStack,
             {
+              kind: "record",
               recordId: currentState.recordId,
               highlightAssetId: currentState.highlightAssetId,
               recordEditing: currentState.recordEditing,
               scrollY,
             },
+          ],
+          restoreScrollY: undefined,
+        },
+      };
+    });
+    window.scrollTo(0, 0);
+  };
+
+  const openReviewQueueRecordReference = (sourceRecordId: string, recordId: string) => {
+    const target = referenceRecords.find((record) => record.id === recordId);
+    if (!target) {
+      setBackToast("该日志已删除，无法打开预览");
+      return;
+    }
+
+    const openError = reviewQueueReferenceOpenError(tabMemory.review, sourceRecordId, recordId);
+    if (openError === "cycle") {
+      setBackToast("检测到循环引用，已停止打开");
+      return;
+    }
+    if (openError === "depth") {
+      setBackToast(`引用层级最多 ${MAX_RECORD_REFERENCE_DEPTH} 层`);
+      return;
+    }
+    if (openError) {
+      return;
+    }
+
+    clearBackHint();
+    const scrollY = window.scrollY;
+    setTabMemory((current) => {
+      const currentReview = current.review;
+      if (reviewQueueReferenceOpenError(currentReview, sourceRecordId, recordId)) {
+        return current;
+      }
+      return {
+        ...current,
+        review: {
+          ...currentReview,
+          recordId,
+          highlightAssetId: undefined,
+          recordEditing: false,
+          referenceStack: [
+            ...(currentReview.referenceStack ?? []),
+            { kind: "review-queue", sourceRecordId, scrollY },
           ],
           restoreScrollY: undefined,
         },
@@ -723,6 +770,10 @@ export const App = () => {
               )
             }
             onEnsureDay={app.ensureRecordReviewDay}
+            referenceRecords={referenceRecords}
+            referenceSubjects={app.subjects}
+            onOpenRecordReference={openReviewQueueRecordReference}
+            restoreScrollY={tabMemory.review.restoreScrollY}
             onRate={async (recordId, rating, evaluationText) => {
               const result = await app.rateRecordReview(recordId, rating, evaluationText);
               return result?.undoToken;

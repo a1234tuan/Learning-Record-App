@@ -17,12 +17,19 @@ export type ReviewMode = "queue" | "manage";
 
 export const MAX_RECORD_REFERENCE_DEPTH = 8;
 
-export type RecordReferenceNavigationEntry = {
-  recordId: string;
-  highlightAssetId?: string;
-  recordEditing?: boolean;
-  scrollY: number;
-};
+export type RecordReferenceNavigationEntry =
+  | {
+    kind: "record";
+    recordId: string;
+    highlightAssetId?: string;
+    recordEditing?: boolean;
+    scrollY: number;
+  }
+  | {
+    kind: "review-queue";
+    sourceRecordId: string;
+    scrollY: number;
+  };
 
 export type RecordTabState = {
   recordId?: string;
@@ -87,26 +94,55 @@ export const createInitialTabMemory = (): TabMemory => ({
 
 const referenceDepth = (state: RecordTabState): number => state.referenceStack?.length ?? 0;
 
+const referenceEntryRecordId = (entry: RecordReferenceNavigationEntry): string =>
+  entry.kind === "record" ? entry.recordId : entry.sourceRecordId;
+
+const referenceOpenError = (
+  sourceRecordId: string | undefined,
+  stack: readonly RecordReferenceNavigationEntry[],
+  targetRecordId: string,
+  maxDepth: number,
+): "missing-source" | "cycle" | "depth" | undefined => {
+  if (!sourceRecordId) {
+    return "missing-source";
+  }
+  if ([sourceRecordId, ...stack.map(referenceEntryRecordId)].includes(targetRecordId)) {
+    return "cycle";
+  }
+  return stack.length >= maxDepth ? "depth" : undefined;
+};
+
 export const recordReferenceOpenError = (
   state: RecordTabState,
   targetRecordId: string,
   maxDepth = MAX_RECORD_REFERENCE_DEPTH,
 ): "missing-source" | "cycle" | "depth" | undefined => {
-  if (!state.recordId) {
-    return "missing-source";
-  }
-  const stack = state.referenceStack ?? [];
-  if ([state.recordId, ...stack.map((entry) => entry.recordId)].includes(targetRecordId)) {
-    return "cycle";
-  }
-  return stack.length >= maxDepth ? "depth" : undefined;
+  return referenceOpenError(state.recordId, state.referenceStack ?? [], targetRecordId, maxDepth);
 };
+
+export const reviewQueueReferenceOpenError = (
+  state: RecordTabState,
+  sourceRecordId: string,
+  targetRecordId: string,
+  maxDepth = MAX_RECORD_REFERENCE_DEPTH,
+): "missing-source" | "cycle" | "depth" | undefined =>
+  referenceOpenError(sourceRecordId, state.referenceStack ?? [], targetRecordId, maxDepth);
 
 const popRecordReference = <T extends RecordTabState>(state: T): T | undefined => {
   const stack = state.referenceStack ?? [];
   const previous = stack.at(-1);
   if (!previous) {
     return undefined;
+  }
+  if (previous.kind === "review-queue") {
+    return {
+      ...state,
+      recordId: undefined,
+      highlightAssetId: undefined,
+      recordEditing: undefined,
+      referenceStack: stack.slice(0, -1),
+      restoreScrollY: previous.scrollY,
+    };
   }
   return {
     ...state,

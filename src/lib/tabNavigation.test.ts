@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTabPageKey, createInitialTabMemory, getTabDepth, popTabDepth, recordReferenceOpenError } from "./tabNavigation";
+import { buildTabPageKey, createInitialTabMemory, getTabDepth, popTabDepth, recordReferenceOpenError, reviewQueueReferenceOpenError } from "./tabNavigation";
 
 describe("tabNavigation", () => {
   it("keeps each tab state independent", () => {
@@ -40,7 +40,7 @@ describe("tabNavigation", () => {
       today: {
         recordId: "record-target",
         recordEditing: false,
-        referenceStack: [{ recordId: "record-source", recordEditing: false, scrollY: 384 }],
+        referenceStack: [{ kind: "record" as const, recordId: "record-source", recordEditing: false, scrollY: 384 }],
       },
     };
 
@@ -61,20 +61,69 @@ describe("tabNavigation", () => {
       ...createInitialTabMemory(),
       today: {
         recordId: "record-b",
-        referenceStack: [{ recordId: "record-a", scrollY: 0 }],
+        referenceStack: [{ kind: "record" as const, recordId: "record-a", scrollY: 0 }],
       },
     };
     const tooDeep = {
       ...createInitialTabMemory(),
       today: {
         recordId: "record-9",
-        referenceStack: Array.from({ length: 8 }, (_, index) => ({ recordId: `record-${index}`, scrollY: 0 })),
+        referenceStack: Array.from({ length: 8 }, (_, index) => ({ kind: "record" as const, recordId: `record-${index}`, scrollY: 0 })),
       },
     };
 
     expect(recordReferenceOpenError(cycle.today, "record-a")).toBe("cycle");
     expect(recordReferenceOpenError(tooDeep.today, "record-10")).toBe("depth");
     expect(recordReferenceOpenError(cycle.today, "record-c")).toBeUndefined();
+  });
+
+  it("returns a referenced record to its review queue card without changing review state", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      review: {
+        ...createInitialTabMemory().review,
+        queueIds: ["record-source", "record-next"],
+        currentRecordId: "record-source",
+        recordId: "record-target",
+        referenceStack: [{ kind: "review-queue" as const, sourceRecordId: "record-source", scrollY: 264 }],
+      },
+    };
+
+    expect(getTabDepth("review", memory)).toBe(2);
+    expect(reviewQueueReferenceOpenError(memory.review, "record-source", "record-source")).toBe("cycle");
+
+    const returned = popTabDepth(memory, "review");
+    expect(returned.review.recordId).toBeUndefined();
+    expect(returned.review.currentRecordId).toBe("record-source");
+    expect(returned.review.queueIds).toEqual(["record-source", "record-next"]);
+    expect(returned.review.referenceStack).toEqual([]);
+    expect(returned.review.restoreScrollY).toBe(264);
+    expect(getTabDepth("review", returned)).toBe(0);
+  });
+
+  it("unwinds nested record references back to the original review queue", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      review: {
+        ...createInitialTabMemory().review,
+        queueIds: ["record-source"],
+        currentRecordId: "record-source",
+        recordId: "record-c",
+        referenceStack: [
+          { kind: "review-queue" as const, sourceRecordId: "record-source", scrollY: 120 },
+          { kind: "record" as const, recordId: "record-b", scrollY: 0 },
+        ],
+      },
+    };
+
+    const backToFirstTarget = popTabDepth(memory, "review");
+    expect(backToFirstTarget.review.recordId).toBe("record-b");
+    expect(backToFirstTarget.review.referenceStack).toHaveLength(1);
+
+    const backToQueue = popTabDepth(backToFirstTarget, "review");
+    expect(backToQueue.review.recordId).toBeUndefined();
+    expect(backToQueue.review.currentRecordId).toBe("record-source");
+    expect(backToQueue.review.restoreScrollY).toBe(120);
   });
 
   it("returns journal subject records to the selected day first", () => {

@@ -16,7 +16,7 @@
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken } from "../types";
+import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
@@ -49,6 +49,10 @@ interface ReviewPageProps {
   onRefresh: () => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
   onEditRecord: (record: RecordBlock) => void;
+  referenceRecords?: readonly RecordBlock[];
+  referenceSubjects?: readonly SubjectConfig[];
+  onOpenRecordReference?: (sourceRecordId: string, targetRecordId: string) => void;
+  restoreScrollY?: number;
   onAddToReview: (recordId: string) => Promise<void> | void;
   onRemoveReview: (recordId: string) => Promise<void> | void;
   onResetReview: (recordId: string) => Promise<void> | void;
@@ -178,6 +182,10 @@ export const ReviewPage = ({
   onRefresh,
   onOpenRecord,
   onEditRecord,
+  referenceRecords = [],
+  referenceSubjects = [],
+  onOpenRecordReference,
+  restoreScrollY,
   onAddToReview,
   onRemoveReview,
   onResetReview,
@@ -200,6 +208,14 @@ export const ReviewPage = ({
   const [evaluationDraftRecordId, setEvaluationDraftRecordId] = useState<string | undefined>();
   const today = todayISO();
   const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
+
+  useEffect(() => {
+    if (restoreScrollY === undefined) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => window.scrollTo(0, restoreScrollY));
+    return () => window.cancelAnimationFrame(frame);
+  }, [restoreScrollY]);
   const reviewMap = useMemo(() => new Map(reviewStates.map((review) => [review.recordId, review])), [reviewStates]);
   const availableDueReviews = useMemo(
     () => dueReviews.filter((review) => !ratedRecordIds.has(review.recordId) && isReviewDueOn(review, today)),
@@ -592,6 +608,10 @@ export const ReviewPage = ({
                 onChange={() => undefined}
                 placeholder=""
                 readOnly
+                currentRecordId={currentRecord.id}
+                referenceRecords={referenceRecords}
+                referenceSubjects={referenceSubjects}
+                onOpenRecordReference={onOpenRecordReference ? (targetRecordId) => onOpenRecordReference(currentRecord.id, targetRecordId) : undefined}
               />
             </article>
             <section className={`review-bottom-controls ${evaluationOpen ? "open" : ""}`}>
