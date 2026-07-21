@@ -17,6 +17,7 @@ import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
 import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode } from "./RecordEditorNodes";
+import { ImageLightbox } from "./ImageLightbox";
 import {
   RecordCollapseBlockNode,
   RecordComparisonTableNode,
@@ -53,6 +54,7 @@ import {
   assessMarkdownPaste,
   type MarkdownPasteChunk,
 } from "../lib/markdownPasteWork";
+import type { RecordAssetRef } from "../types";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -69,6 +71,36 @@ const codeLanguageOptions = [
   { value: "python", label: "Python" },
   { value: "javascript", label: "JavaScript" },
 ];
+
+type QueuedRecordImage = RecordAssetRef & {
+  position: number;
+};
+
+type ImageGalleryState = {
+  images: RecordAssetRef[];
+  initialIndex: number;
+};
+
+const collectRecordImageQueue = (doc: ProseMirrorNode): QueuedRecordImage[] => {
+  const images: QueuedRecordImage[] = [];
+  doc.descendants((node, position) => {
+    if (node.type.name !== "recordAsset" || node.attrs.kind !== "image") {
+      return true;
+    }
+    const id = String(node.attrs.assetId ?? "");
+    if (!id) {
+      return true;
+    }
+    images.push({
+      id,
+      kind: "image",
+      title: String(node.attrs.title ?? "图片"),
+      position,
+    });
+    return true;
+  });
+  return images;
+};
 
 const parseMarkdownPaste = (view: EditorView, source: string | undefined): unknown[] | undefined => {
   if (!source) {
@@ -613,12 +645,29 @@ export const RichTextEditor = ({
   const nativeInputGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const nativeInputDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const [markdownConversionProgress, setMarkdownConversionProgress] = useState<MarkdownConversionProgress | undefined>();
+  const [imageGallery, setImageGallery] = useState<ImageGalleryState | undefined>();
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  const openImageGallery = useCallback((assetRef: RecordAssetRef, position: number) => {
+    const currentEditor = editorInstanceRef.current;
+    if (!currentEditor || currentEditor.isDestroyed) {
+      return;
+    }
+    const queue = collectRecordImageQueue(currentEditor.state.doc);
+    const initialIndex = queue.findIndex((item) => item.position === position && item.id === assetRef.id);
+    if (initialIndex < 0) {
+      return;
+    }
+    setImageGallery({
+      images: queue.map(({ position: _position, ...image }) => image),
+      initialIndex,
+    });
+  }, []);
   useEffect(() => () => {
     mountedRef.current = false;
     pasteRequestRef.current += 1;
@@ -1168,7 +1217,12 @@ export const RichTextEditor = ({
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
       TaskItem.configure({ nested: true }),
-      RecordAssetNode.configure({ highlightedAssetId, onAssetChanged, onAssetTitleChange }),
+      RecordAssetNode.configure({
+        highlightedAssetId,
+        onAssetChanged,
+        onAssetTitleChange,
+        onOpenImage: openImageGallery,
+      }),
       RecordFormulaNode,
       RecordInlineMathNode,
       RecordStructureDiagramNode,
@@ -1459,6 +1513,13 @@ export const RichTextEditor = ({
         </div>
       )}
       <EditorContent editor={editor} />
+      {imageGallery && (
+        <ImageLightbox
+          images={imageGallery.images}
+          initialIndex={imageGallery.initialIndex}
+          onClose={() => setImageGallery(undefined)}
+        />
+      )}
     </div>
   );
 };

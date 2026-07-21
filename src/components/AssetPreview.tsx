@@ -1,4 +1,4 @@
-import { Download, File, Image, Pause, Play, Volume2, X } from "lucide-react";
+import { Download, File, Image, Pause, Play, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { Asset, RecordAssetRef } from "../types";
@@ -6,7 +6,6 @@ import { storage } from "../services/storageAdapter";
 import { downloadAsset } from "../services/assetDownloadService";
 import { runOcrForAsset } from "../services/ocrJobService";
 import { describeOcrForAi } from "../services/ocrDiagnostics";
-import { ImageLightbox } from "./ImageLightbox";
 
 type AssetPreviewProps = {
   assetRef?: RecordAssetRef;
@@ -18,6 +17,8 @@ type AssetPreviewProps = {
   onTitleChange?: (title: string) => void;
   onTitleCommit?: (title: string) => void;
   onAssetChanged?: () => void;
+  onOpenImage?: () => void;
+  onDeleteImage?: () => void;
   highlight?: boolean;
 };
 
@@ -44,6 +45,8 @@ export const AssetPreview = (props: AssetPreviewProps) => {
     onTitleChange,
     onTitleCommit,
     onAssetChanged,
+    onOpenImage,
+    onDeleteImage,
     highlight,
   } = props;
   const isViewMode = mode === "view";
@@ -59,7 +62,6 @@ export const AssetPreview = (props: AssetPreviewProps) => {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [message, setMessage] = useState("");
-  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [ocrDetailsOpen, setOcrDetailsOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -181,22 +183,13 @@ export const AssetPreview = (props: AssetPreviewProps) => {
     if (asset.kind === "image") {
       return (
         <article className={`asset-card asset-card-view compact-image-card${highlight ? " highlighted" : ""}`} data-asset-id={asset.id}>
-          <button type="button" className="compact-image-button" title="预览图片" onClick={() => setLightboxOpen(true)}>
+          <button type="button" className="compact-image-button" title="预览图片" onClick={onOpenImage}>
             <img className="image-preview" src={url} alt={title} />
           </button>
           <div className="compact-image-meta">
             {viewTitle && <strong>{viewTitle}</strong>}
             <span className={`ocr-badge ${ocrDone ? "success" : ocrBusy ? "busy" : "muted"}`}>{ocrBadge}</span>
           </div>
-          {lightboxOpen && (
-            <ImageLightbox
-              asset={asset}
-              url={url}
-              title={title}
-              onClose={() => setLightboxOpen(false)}
-              onStatus={setMessage}
-            />
-          )}
           {message && <small className="status-message compact-status">{message}</small>}
         </article>
       );
@@ -297,14 +290,27 @@ export const AssetPreview = (props: AssetPreviewProps) => {
           )}
           <small>{asset.fileName} / {formatSize(asset.size)}</small>
         </div>
-        <button type="button" className="icon-button" title="下载" onClick={() => void handleDownload()}>
-          <Download size={17} />
-        </button>
+        <div className="asset-card-actions">
+          <button type="button" className="icon-button" title="下载" onClick={() => void handleDownload()}>
+            <Download size={17} />
+          </button>
+          {asset.kind === "image" && onDeleteImage && (
+            <button
+              type="button"
+              className="icon-button danger"
+              title="删除图片"
+              aria-label="删除图片"
+              onClick={onDeleteImage}
+            >
+              <Trash2 size={17} />
+            </button>
+          )}
+        </div>
       </div>
 
       {asset.kind === "image" && (
         <>
-        <button type="button" className="image-preview-button" title="预览图片" onClick={() => setLightboxOpen(true)}>
+        <button type="button" className="image-preview-button" title="预览图片" onClick={onOpenImage}>
           <img className="image-preview" src={url} alt={title} />
         </button>
         <div className="ocr-row">
@@ -351,15 +357,6 @@ export const AssetPreview = (props: AssetPreviewProps) => {
               <dd>{asset.ocrUpdatedAt ?? "无"}</dd>
             </div>
           </dl>
-        )}
-        {lightboxOpen && (
-          <ImageLightbox
-            asset={asset}
-            url={url}
-            title={title}
-            onClose={() => setLightboxOpen(false)}
-            onStatus={setMessage}
-          />
         )}
         </>
       )}

@@ -1,6 +1,6 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { NodeSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
@@ -139,6 +139,7 @@ const useDeferredKaTeX = (latex: string, displayMode: boolean, immediate: boolea
 type RecordAssetNodeOptions = {
   onAssetChanged?: () => void;
   onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
+  onOpenImage?: (assetRef: RecordAssetRef, position: number) => void;
   highlightedAssetId?: string;
 };
 
@@ -149,7 +150,7 @@ type RecordAssetNodeViewProps = NodeViewProps & {
 const asAssetKind = (value: unknown): RecordAssetRef["kind"] =>
   value === "image" || value === "audio" || value === "attachment" ? value : "attachment";
 
-const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor }: RecordAssetNodeViewProps) => {
+const RecordAssetNodeView = ({ node, getPos, updateAttributes, extensionOptions, editor }: RecordAssetNodeViewProps) => {
   const assetRef: RecordAssetRef = {
     id: String(node.attrs.assetId ?? ""),
     kind: asAssetKind(node.attrs.kind),
@@ -157,6 +158,37 @@ const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor 
   };
 
   const editable = editor.isEditable;
+  const getNodePosition = (): number | undefined => {
+    try {
+      const position = typeof getPos === "function" ? getPos() : getPos;
+      return typeof position === "number" ? position : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const openImage = () => {
+    const position = getNodePosition();
+    if (assetRef.kind === "image" && position !== undefined) {
+      extensionOptions.onOpenImage?.(assetRef, position);
+    }
+  };
+
+  const deleteImage = () => {
+    const position = getNodePosition();
+    const paragraph = editor.state.schema.nodes.paragraph;
+    if (assetRef.kind !== "image" || position === undefined || !paragraph) {
+      return;
+    }
+    const transaction = editor.state.tr.replaceWith(position, position + node.nodeSize, paragraph.create());
+    try {
+      transaction.setSelection(TextSelection.near(transaction.doc.resolve(position + 1), 1));
+    } catch {
+      // The replacement paragraph is still valid even if a nested container
+      // maps the selection to a different boundary.
+    }
+    editor.view.dispatch(transaction.scrollIntoView());
+  };
 
   return (
     <NodeViewWrapper className="record-inline-node">
@@ -167,6 +199,8 @@ const RecordAssetNodeView = ({ node, updateAttributes, extensionOptions, editor 
         onTitleChange={editable ? (title) => updateAttributes({ title }) : undefined}
         onTitleCommit={editable ? (title) => void extensionOptions.onAssetTitleChange?.(assetRef.id, title) : undefined}
         onAssetChanged={extensionOptions.onAssetChanged}
+        onOpenImage={assetRef.kind === "image" ? openImage : undefined}
+        onDeleteImage={editable && assetRef.kind === "image" ? deleteImage : undefined}
         highlight={assetRef.id === extensionOptions.highlightedAssetId}
       />
     </NodeViewWrapper>
@@ -321,6 +355,7 @@ export const RecordAssetNode = Node.create({
     return {
       onAssetChanged: undefined,
       onAssetTitleChange: undefined,
+      onOpenImage: undefined,
       highlightedAssetId: undefined,
     } satisfies RecordAssetNodeOptions;
   },

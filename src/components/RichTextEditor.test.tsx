@@ -25,7 +25,20 @@ vi.mock("../lib/clipboard", async () => {
 });
 
 vi.mock("./AssetPreview", () => ({
-  AssetPreview: () => <article className="asset-card asset-card-view compact-image-card" data-testid="asset-preview" />,
+  AssetPreview: ({ assetRef, onDeleteImage, onOpenImage }: any) => (
+    <article className="asset-card asset-card-view compact-image-card" data-testid="asset-preview" data-asset-id={assetRef?.id}>
+      {onOpenImage && <button type="button" aria-label={`预览 ${assetRef.id}`} onClick={onOpenImage} />}
+      {onDeleteImage && <button type="button" aria-label={`删除 ${assetRef.id}`} onClick={onDeleteImage} />}
+    </article>
+  ),
+}));
+
+vi.mock("./ImageLightbox", () => ({
+  ImageLightbox: ({ images, initialIndex, onClose }: any) => (
+    <div data-testid="image-lightbox" data-index={initialIndex} data-images={images.map((image: { id: string }) => image.id).join(",")}>
+      <button type="button" aria-label="关闭" onClick={onClose} />
+    </div>
+  ),
 }));
 
 const setSelectionInsideText = (editor: Editor, text: string) => {
@@ -1246,6 +1259,81 @@ describe("RichTextEditor", () => {
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.stringContaining("record-highlight-block")));
     expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-tone="pink"');
+  });
+
+  it("replaces a deleted middle image with an editable paragraph", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<record-asset data-asset-id="image-1" data-kind="image" data-title="第一张"></record-asset>',
+          '<record-asset data-asset-id="image-2" data-kind="image" data-title="第二张"></record-asset>',
+          '<record-asset data-asset-id="image-3" data-kind="image" data-title="第三张"></record-asset>',
+        ].join("")}
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 image-2" }));
+
+    await waitFor(() => expect(editorRef?.getHTML()).not.toContain("image-2"));
+    const html = editorRef?.getHTML() ?? "";
+    expect(html).toContain('data-asset-id="image-1"');
+    expect(html).toContain('data-asset-id="image-3"');
+    expect(html).toContain('</record-asset><p></p><record-asset');
+    expect(onChange.mock.calls.at(-1)?.[0]).toBe(html);
+  });
+
+  it("keeps image deletion available inside nested blocks without exposing it for non-images", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<record-collapse data-title="折叠" data-summary="" data-default-open="true">',
+          '<record-highlight-block data-tone="yellow"><record-asset data-asset-id="nested-image" data-kind="image" data-title="图片"></record-asset></record-highlight-block>',
+          '<record-asset data-asset-id="audio-1" data-kind="audio" data-title="录音"></record-asset>',
+          "</record-collapse>",
+        ].join("")}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除 nested-image" }));
+    await waitFor(() => expect(editorRef?.getHTML()).not.toContain("nested-image"));
+    expect(screen.queryByRole("button", { name: "删除 audio-1" })).not.toBeInTheDocument();
+    expect(editorRef?.getHTML()).toContain('data-asset-id="audio-1"');
+  });
+
+  it("opens a record-wide image queue in document order from a nested preview", async () => {
+    render(
+      <RichTextEditor
+        value={[
+          '<record-asset data-asset-id="image-1" data-kind="image" data-title="第一张"></record-asset>',
+          '<record-collapse data-title="折叠" data-summary="" data-default-open="true">',
+          '<record-asset data-asset-id="image-2" data-kind="image" data-title="第二张"></record-asset>',
+          '<record-highlight-block data-tone="yellow"><record-asset data-asset-id="image-3" data-kind="image" data-title="第三张"></record-asset></record-highlight-block>',
+          "</record-collapse>",
+          '<record-asset data-asset-id="image-1" data-kind="image" data-title="重复"></record-asset>',
+        ].join("")}
+        onChange={vi.fn()}
+        readOnly
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "预览 image-2" }));
+
+    const lightbox = await screen.findByTestId("image-lightbox");
+    expect(lightbox).toHaveAttribute("data-index", "1");
+    expect(lightbox).toHaveAttribute("data-images", "image-1,image-2,image-3,image-1");
   });
 
   it("changes the active highlight tone instead of nesting another block", async () => {

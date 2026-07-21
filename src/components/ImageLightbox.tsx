@@ -1,11 +1,12 @@
-import { Download, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 
-import type { Asset } from "../types";
+import type { Asset, RecordAssetRef } from "../types";
 import { downloadAsset } from "../services/assetDownloadService";
+import { storage } from "../services/storageAdapter";
 import {
   clampImageScale,
   clampImageTransform,
@@ -19,14 +20,14 @@ import {
 } from "../lib/imageTransform";
 
 interface ImageLightboxProps {
-  asset: Asset;
-  url: string;
-  title: string;
+  images: readonly RecordAssetRef[];
+  initialIndex: number;
   onClose: () => void;
   onStatus?: (message: string) => void;
 }
 
 const initialTransform: ImageTransform = { scale: 1, x: 0, y: 0 };
+const SWIPE_DISTANCE_PX = 48;
 
 const distance = (first: Point, second: Point): number =>
   Math.hypot(first.x - second.x, first.y - second.y);
@@ -62,7 +63,13 @@ export const getLightboxStageViewport = (
   };
 };
 
-export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLightboxProps) => {
+export const ImageLightbox = ({ images, initialIndex, onClose, onStatus }: ImageLightboxProps) => {
+  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, Math.min(initialIndex, images.length - 1)));
+  const [asset, setAsset] = useState<Asset | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
   const [transform, setTransform] = useState<ImageTransform>(initialTransform);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
   const [naturalSize, setNaturalSize] = useState<Size>({ width: 0, height: 0 });
@@ -78,16 +85,67 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
     startCenter: Point;
     startPoint: Point;
     startTransform: ImageTransform;
+    didPinch: boolean;
   }>({
     mode: null,
     startDistance: 0,
     startCenter: { x: 0, y: 0 },
     startPoint: { x: 0, y: 0 },
     startTransform: initialTransform,
+    didPinch: false,
   });
 
+  const activeRef = images[activeIndex];
   const imageSize = useMemo(() => getContainedImageSize(naturalSize, viewport), [naturalSize, viewport]);
-  const imageReady = hasMeasuredSize(viewport) && hasMeasuredSize(imageSize);
+  const imageReady = Boolean(url) && hasMeasuredSize(viewport) && hasMeasuredSize(imageSize);
+  const title = activeRef?.title || asset?.title || asset?.fileName || "图片";
+  const canGoPrevious = activeIndex > 0;
+  const canGoNext = activeIndex < images.length - 1;
+
+  useEffect(() => {
+    setActiveIndex(Math.max(0, Math.min(initialIndex, images.length - 1)));
+  }, [images, initialIndex]);
+
+  useEffect(() => {
+    if (!activeRef) {
+      setAsset(null);
+      setUrl(null);
+      setLoading(false);
+      setMissing(true);
+      return undefined;
+    }
+    let objectUrl: string | undefined;
+    let active = true;
+    setAsset(null);
+    setUrl(null);
+    setMissing(false);
+    setLoading(true);
+    void storage.getAsset(activeRef.id).then((nextAsset) => {
+      if (!active) {
+        return;
+      }
+      if (!nextAsset || nextAsset.kind !== "image") {
+        setMissing(true);
+        setLoading(false);
+        return;
+      }
+      objectUrl = URL.createObjectURL(nextAsset.data);
+      setAsset(nextAsset);
+      setUrl(objectUrl);
+      setLoading(false);
+    }, () => {
+      if (active) {
+        setMissing(true);
+        setLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL?.(objectUrl);
+      }
+    };
+  }, [activeIndex, activeRef?.id]);
 
   useEffect(() => {
     transformRef.current = transform;
@@ -110,9 +168,19 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
     transformRef.current = initialTransform;
     pointersRef.current.clear();
     gestureRef.current.mode = null;
+    gestureRef.current.didPinch = false;
     setInteracting(false);
     setTransform(initialTransform);
   }, []);
+
+  const navigate = useCallback((direction: -1 | 1) => {
+    setActiveIndex((current) => Math.max(0, Math.min(images.length - 1, current + direction)));
+  }, [images.length]);
+
+  const reportStatus = (nextMessage: string) => {
+    setMessage(nextMessage);
+    onStatus?.(nextMessage);
+  };
 
   useEffect(() => {
     scrollPositionRef.current = { x: window.scrollX, y: window.scrollY };
@@ -182,18 +250,14 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
     if (!imageReady) {
       return;
     }
-    setTransform((current) => {
-      if (current.scale <= 1) {
-        return initialTransform;
-      }
-      return clampNext(current);
-    });
+    setTransform((current) => current.scale <= 1 ? initialTransform : clampNext(current));
   }, [clampNext, imageReady]);
 
   useEffect(() => {
     setNaturalSize({ width: 0, height: 0 });
+    setMessage("");
     resetToCenter();
-  }, [resetToCenter, url]);
+  }, [activeIndex, resetToCenter]);
 
   const resetRemainingPointerGesture = () => {
     const remaining = Array.from(pointersRef.current.values())[0];
@@ -208,6 +272,7 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
       startCenter: remaining,
       startPoint: remaining,
       startTransform: transformRef.current,
+      didPinch: gestureRef.current.didPinch,
     };
   };
 
@@ -229,6 +294,7 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
         startCenter: midpoint(first, second),
         startPoint: point,
         startTransform: transformRef.current,
+        didPinch: true,
       };
       return;
     }
@@ -239,14 +305,12 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
       startCenter: point,
       startPoint: point,
       startTransform: transformRef.current,
+      didPinch: false,
     };
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!imageReady) {
-      return;
-    }
-    if (!pointersRef.current.has(event.pointerId)) {
+    if (!imageReady || !pointersRef.current.has(event.pointerId)) {
       return;
     }
     const point = pointFromEvent(event);
@@ -277,7 +341,30 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
     }
   };
 
-  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current;
+    const point = pointFromEvent(event);
+    const canSwipe = pointersRef.current.size === 1
+      && gesture.mode === "pan"
+      && !gesture.didPinch
+      && gesture.startTransform.scale <= 1;
+    pointersRef.current.delete(event.pointerId);
+    if (canSwipe) {
+      const deltaX = point.x - gesture.startPoint.x;
+      const deltaY = point.y - gesture.startPoint.y;
+      if (Math.abs(deltaX) >= SWIPE_DISTANCE_PX && Math.abs(deltaX) > Math.abs(deltaY)) {
+        if (deltaX < 0 && canGoNext) {
+          navigate(1);
+        }
+        if (deltaX > 0 && canGoPrevious) {
+          navigate(-1);
+        }
+      }
+    }
+    resetRemainingPointerGesture();
+  };
+
+  const cancelPointerGesture = (event: React.PointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(event.pointerId);
     resetRemainingPointerGesture();
   };
@@ -312,16 +399,41 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
     <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={title}>
       <div ref={toolbarRef} className="image-lightbox-toolbar">
         <strong>{title}</strong>
+        <span className="image-lightbox-counter" aria-label="图片序号">{activeIndex + 1} / {images.length}</span>
         <div>
           <button
             type="button"
             className="icon-button"
+            title="上一张"
+            aria-label="上一张"
+            disabled={!canGoPrevious}
+            onClick={() => navigate(-1)}
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            title="下一张"
+            aria-label="下一张"
+            disabled={!canGoNext}
+            onClick={() => navigate(1)}
+          >
+            <ChevronRight size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
             title="下载"
+            disabled={!asset}
             onClick={async () => {
+              if (!asset) {
+                return;
+              }
               try {
-                onStatus?.(await downloadAsset(asset));
+                reportStatus(await downloadAsset(asset));
               } catch (error) {
-                onStatus?.(error instanceof Error ? error.message : "下载失败。");
+                reportStatus(error instanceof Error ? error.message : "下载失败。");
               }
             }}
           >
@@ -337,31 +449,36 @@ export const ImageLightbox = ({ asset, url, title, onClose, onStatus }: ImageLig
         className="image-lightbox-stage"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
-        onLostPointerCapture={handlePointerEnd}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={cancelPointerGesture}
+        onLostPointerCapture={cancelPointerGesture}
         onDoubleClick={handleDoubleClick}
         onWheel={handleWheel}
       >
-        <img
-          src={url}
-          alt={title}
-          style={{
-            width: imageReady ? `${imageSize.width}px` : undefined,
-            height: imageReady ? `${imageSize.height}px` : undefined,
-            transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
-            opacity: imageReady ? 1 : 0,
-            transition: interacting ? "none" : "transform 120ms ease, opacity 80ms ease",
-          }}
-          onLoad={(event) => {
-            setNaturalSize({
-              width: event.currentTarget.naturalWidth,
-              height: event.currentTarget.naturalHeight,
-            });
-            resetToCenter();
-          }}
-          draggable={false}
-        />
+        {loading && <span className="image-lightbox-state">正在读取图片...</span>}
+        {missing && <span className="image-lightbox-state">图片资源不可用</span>}
+        {message && <span className="image-lightbox-status" role="status">{message}</span>}
+        {url && (
+          <img
+            src={url}
+            alt={title}
+            style={{
+              width: imageReady ? `${imageSize.width}px` : undefined,
+              height: imageReady ? `${imageSize.height}px` : undefined,
+              transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
+              opacity: imageReady ? 1 : 0,
+              transition: interacting ? "none" : "transform 120ms ease, opacity 80ms ease",
+            }}
+            onLoad={(event) => {
+              setNaturalSize({
+                width: event.currentTarget.naturalWidth,
+                height: event.currentTarget.naturalHeight,
+              });
+              resetToCenter();
+            }}
+            draggable={false}
+          />
+        )}
       </div>
     </div>
   );
