@@ -18,12 +18,14 @@ const richEditorMock = vi.hoisted(() => {
     props: any;
     editor: any;
     insertContentAt: ReturnType<typeof vi.fn>;
+    cancelMarkdownPasteConversion: ReturnType<typeof vi.fn>;
     reset: () => void;
   } = {
     html: "<p></p>",
     props: null,
     editor: null,
     insertContentAt: vi.fn(),
+    cancelMarkdownPasteConversion: vi.fn(),
     reset: () => undefined,
   };
 
@@ -44,6 +46,9 @@ const richEditorMock = vi.hoisted(() => {
   state.editor = {
     isDestroyed: false,
     getHTML: () => state.html,
+    commands: {
+      cancelMarkdownPasteConversion: state.cancelMarkdownPasteConversion,
+    },
     state: {
       selection: {
         $from: {
@@ -64,6 +69,7 @@ const richEditorMock = vi.hoisted(() => {
     state.props = null;
     state.editor.isDestroyed = false;
     state.insertContentAt.mockClear();
+    state.cancelMarkdownPasteConversion.mockClear();
   };
 
   return state;
@@ -223,6 +229,7 @@ describe("RecordEditorPage", () => {
     fireEvent.click(saveButton());
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(richEditorMock.cancelMarkdownPasteConversion).toHaveBeenCalled();
     expect(onSave.mock.calls[0][0]).toEqual(expect.objectContaining({
       contentHtml: "<record-collapse-block><p>body</p></record-collapse-block>",
     }));

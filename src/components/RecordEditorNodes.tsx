@@ -1,7 +1,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { NodeSelection } from "@tiptap/pm/state";
-import { type FocusEvent, useEffect, useMemo, useState } from "react";
+import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -10,13 +10,57 @@ import { AssetPreview } from "./AssetPreview";
 
 const KATEX_CACHE_LIMIT = 256;
 const katexHtmlCache = new Map<string, string>();
+const queuedFormulaRenders = new Map<number, () => void>();
+let formulaRenderSequence = 0;
+let formulaRenderScheduled = false;
 
-const renderKaTeX = (latex: string, displayMode: boolean): string => {
-  const key = `${displayMode ? "block" : "inline"}:${latex}`;
+const cacheKeyFor = (latex: string, displayMode: boolean): string => `${displayMode ? "block" : "inline"}:${latex}`;
+
+const cachedKaTeX = (latex: string, displayMode: boolean): string | undefined => {
+  const key = cacheKeyFor(latex, displayMode);
   const cached = katexHtmlCache.get(key);
   if (cached !== undefined) {
     katexHtmlCache.delete(key);
     katexHtmlCache.set(key, cached);
+  }
+  return cached;
+};
+
+const scheduleFormulaRender = () => {
+  if (formulaRenderScheduled || queuedFormulaRenders.size === 0) {
+    return;
+  }
+  formulaRenderScheduled = true;
+  const run = () => {
+    formulaRenderScheduled = false;
+    const next = queuedFormulaRenders.entries().next().value as [number, () => void] | undefined;
+    if (next) {
+      queuedFormulaRenders.delete(next[0]);
+      next[1]();
+    }
+    scheduleFormulaRender();
+  };
+  if (typeof window !== "undefined") {
+    const idle = (window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number }).requestIdleCallback;
+    if (idle) {
+      idle(run, { timeout: 100 });
+      return;
+    }
+    window.setTimeout(run, 16);
+  }
+};
+
+const enqueueFormulaRender = (render: () => void): (() => void) => {
+  const id = ++formulaRenderSequence;
+  queuedFormulaRenders.set(id, render);
+  scheduleFormulaRender();
+  return () => queuedFormulaRenders.delete(id);
+};
+
+const renderKaTeX = (latex: string, displayMode: boolean): string => {
+  const key = cacheKeyFor(latex, displayMode);
+  const cached = cachedKaTeX(latex, displayMode);
+  if (cached !== undefined) {
     return cached;
   }
 
@@ -34,6 +78,62 @@ const renderKaTeX = (latex: string, displayMode: boolean): string => {
     }
   }
   return html;
+};
+
+const useDeferredKaTeX = (latex: string, displayMode: boolean, immediate: boolean) => {
+  const hostRef = useRef<HTMLElement | null>(null);
+  const setHostRef = useCallback((element: HTMLElement | null) => {
+    hostRef.current = element;
+  }, []);
+  const [html, setHtml] = useState<string | undefined>(() => cachedKaTeX(latex, displayMode));
+
+  useEffect(() => {
+    const cached = cachedKaTeX(latex, displayMode);
+    if (cached !== undefined) {
+      setHtml(cached);
+      return undefined;
+    }
+    setHtml(undefined);
+    let cancelled = false;
+    let cancelQueuedRender: (() => void) | undefined;
+    const render = () => {
+      const rendered = renderKaTeX(latex, displayMode);
+      if (!cancelled) {
+        setHtml(rendered);
+      }
+    };
+    if (immediate) {
+      render();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const host = hostRef.current;
+    if (typeof IntersectionObserver === "undefined" || !host) {
+      cancelQueuedRender = enqueueFormulaRender(render);
+      return () => {
+        cancelled = true;
+        cancelQueuedRender?.();
+      };
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) {
+        return;
+      }
+      observer.disconnect();
+      cancelQueuedRender = enqueueFormulaRender(render);
+    }, { rootMargin: "400px 0px" });
+    observer.observe(host);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      cancelQueuedRender?.();
+    };
+  }, [displayMode, immediate, latex]);
+
+  return { hostRef: setHostRef, html };
 };
 
 type RecordAssetNodeOptions = {
@@ -80,7 +180,7 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
   const [draftLatex, setDraftLatex] = useState(latex);
-  const html = useMemo(() => renderKaTeX(latex, true), [latex]);
+  const { hostRef, html } = useDeferredKaTeX(latex, true, editing);
 
   useEffect(() => {
     if (!editing) {
@@ -145,17 +245,19 @@ const RecordFormulaNodeView = ({ node, updateAttributes, editor }: NodeViewProps
       ) : (
         title && <strong>{title}</strong>
       )}
-      <div className="formula-preview" dangerouslySetInnerHTML={{ __html: html }} />
+      <div ref={hostRef} className="formula-preview">
+        {html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : <code className="formula-render-pending">{latex}</code>}
+      </div>
     </NodeViewWrapper>
   );
 };
 
 const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewProps) => {
   const latex = String(node.attrs.latex ?? "");
-  const html = useMemo(() => renderKaTeX(latex, false), [latex]);
   const editable = editor.isEditable;
   const [editing, setEditing] = useState(false);
   const [draftLatex, setDraftLatex] = useState(latex);
+  const { hostRef, html } = useDeferredKaTeX(latex, false, editing);
 
   useEffect(() => {
     if (!editing) {
@@ -205,9 +307,9 @@ const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewPr
           }}
         />
       ) : html ? (
-        <span dangerouslySetInnerHTML={{ __html: html }} />
+        <span ref={hostRef} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <code>{latex}</code>
+        <code ref={hostRef} className="formula-render-pending">{latex}</code>
       )}
     </NodeViewWrapper>
   );

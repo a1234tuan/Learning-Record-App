@@ -455,6 +455,7 @@ export const RecordEditorPage = ({
       return;
     }
     leavingRef.current = true;
+    editorRef.current?.commands.cancelMarkdownPasteConversion?.();
     void (async () => {
       try {
         await stopRecordingIntoDraft();
@@ -467,6 +468,10 @@ export const RecordEditorPage = ({
     })();
     onBack();
   };
+
+  useEffect(() => () => {
+    editorRef.current?.commands.cancelMarkdownPasteConversion?.();
+  }, []);
 
   useEffect(() => () => {
     void stopRecordingIntoDraft();
@@ -483,6 +488,7 @@ export const RecordEditorPage = ({
     let draftToSave: RecordBlock | null = null;
     try {
       cancelScheduledDraftSave();
+      editorRef.current?.commands.cancelMarkdownPasteConversion?.();
       await waitForPendingAssets();
       await waitForDraftSaves();
 

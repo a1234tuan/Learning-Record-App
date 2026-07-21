@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { Extension, type JSONContent } from "@tiptap/core";
 import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import * as pmView from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import { TextSelection, type SelectionBookmark } from "@tiptap/pm/state";
-import { Check, ChevronDown, Highlighter, List, ListOrdered } from "lucide-react";
+import { Check, ChevronDown, Highlighter, List, ListOrdered, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -47,6 +48,11 @@ import { applyComposedMarkdownTransform, MarkdownTypingExtension } from "../lib/
 import { MarkdownLinkMark } from "../lib/markdownLinkMark";
 import { isNativePlatform } from "../lib/platform";
 import { TrailingEditableParagraph } from "../lib/trailingEditableParagraph";
+import {
+  MARKDOWN_PASTE_LIMITS,
+  assessMarkdownPaste,
+  type MarkdownPasteChunk,
+} from "../lib/markdownPasteWork";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -73,27 +79,6 @@ const parseMarkdownPaste = (view: EditorView, source: string | undefined): unkno
   } catch {
     return undefined;
   }
-};
-
-const parseMarkdownPasteScheduled = async (
-  view: EditorView,
-  source: string,
-  cancelled: () => boolean = () => false,
-): Promise<unknown[] | undefined> => {
-  if (source.length > 64 * 1024) {
-    await new Promise<void>((resolve) => {
-      const idle = (window as Window & { requestIdleCallback?: (callback: () => void) => number }).requestIdleCallback;
-      if (idle) {
-        idle(resolve);
-      } else {
-        window.setTimeout(resolve, 0);
-      }
-    });
-    if (cancelled()) {
-      return undefined;
-    }
-  }
-  return cancelled() ? undefined : parseMarkdownPaste(view, source);
 };
 
 type InternalClipboardParser = (
@@ -147,6 +132,57 @@ type PasteAnchor = {
   doc: ProseMirrorNode;
   bookmark: SelectionBookmark;
 };
+
+type MarkdownConversionProgress = {
+  completed: number;
+  total: number;
+  retainedRaw?: boolean;
+};
+
+type MarkdownPasteConversionSession = {
+  id: number;
+  chunks: readonly MarkdownPasteChunk[];
+  positions: number[];
+  nextIndex: number;
+  completed: number;
+  skipped: number;
+  cancelScheduledStep?: () => void;
+};
+
+type MarkdownPasteConversionOptions = {
+  onCancel: () => void;
+};
+
+type MarkdownPasteInsertOptions = {
+  bookmark?: SelectionBookmark;
+  range?: ChangedDocumentRange;
+  native: boolean;
+};
+
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    markdownPasteConversion: {
+      cancelMarkdownPasteConversion: () => ReturnType;
+    };
+  }
+}
+
+const MarkdownPasteConversionExtension = Extension.create<MarkdownPasteConversionOptions>({
+  name: "markdownPasteConversion",
+
+  addOptions() {
+    return { onCancel: () => undefined };
+  },
+
+  addCommands() {
+    return {
+      cancelMarkdownPasteConversion: () => () => {
+        this.options.onCancel();
+        return true;
+      },
+    };
+  },
+});
 
 const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
   markdown: clipboardData?.getData("text/markdown") || "",
@@ -405,6 +441,86 @@ interface RichTextEditorProps {
   onPasteImage?: (file: File) => Promise<{ id: string; kind: "image"; title: string } | undefined> | { id: string; kind: "image"; title: string } | undefined;
 }
 
+const rawMarkdownChunkNode = (source: string): JSONContent => {
+  const content: JSONContent[] = [];
+  source.split("\n").forEach((line, index, lines) => {
+    if (line) {
+      content.push({ type: "text", text: line });
+    }
+    if (index < lines.length - 1) {
+      content.push({ type: "hardBreak" });
+    }
+  });
+  return content.length > 0 ? { type: "paragraph", content } : { type: "paragraph" };
+};
+
+const rawMarkdownText = (node: ProseMirrorNode): string =>
+  node.textBetween(0, node.content.size, "\n", "\n");
+
+const findRawMarkdownChunkPositions = (
+  doc: ProseMirrorNode,
+  chunks: readonly MarkdownPasteChunk[],
+): number[] | undefined => {
+  const positions: number[] = [];
+  let searchFrom = 0;
+  for (const chunk of chunks) {
+    let matchedPosition: number | undefined;
+    doc.descendants((node, pos) => {
+      if (matchedPosition !== undefined || pos < searchFrom || node.type.name !== "paragraph") {
+        return true;
+      }
+      if (rawMarkdownText(node) === chunk.source) {
+        matchedPosition = pos;
+        return false;
+      }
+      return true;
+    });
+    if (matchedPosition === undefined) {
+      return undefined;
+    }
+    positions.push(matchedPosition);
+    searchFrom = matchedPosition + 1;
+  }
+  return positions;
+};
+
+const insertRawMarkdownChunks = (
+  view: EditorView,
+  chunks: readonly MarkdownPasteChunk[],
+  bookmark?: SelectionBookmark,
+  range?: ChangedDocumentRange,
+): number[] | undefined => {
+  const nodes = chunks.map((chunk) => view.state.schema.nodeFromJSON(rawMarkdownChunkNode(chunk.source)));
+  const transaction = view.state.tr;
+  if (range) {
+    const from = Math.max(0, Math.min(range.from, transaction.doc.content.size));
+    const to = Math.max(from, Math.min(range.to, transaction.doc.content.size));
+    let blockFrom = from;
+    let blockTo = to;
+    try {
+      const $from = transaction.doc.resolve(from);
+      const $to = transaction.doc.resolve(to);
+      const sharedDepth = $from.sharedDepth(to);
+      if ($from.depth > sharedDepth) {
+        blockFrom = $from.before(sharedDepth + 1);
+      }
+      if ($to.depth > sharedDepth) {
+        blockTo = $to.after(sharedDepth + 1);
+      }
+    } catch {
+      // Native IMEs can report a range at a block edge. The clamped range is safe.
+    }
+    transaction.replace(blockFrom, blockTo, new Slice(Fragment.fromArray(nodes), 0, 0));
+  } else {
+    if (bookmark) {
+      transaction.setSelection(bookmark.resolve(transaction.doc));
+    }
+    transaction.replaceSelection(new Slice(Fragment.fromArray(nodes), 0, 0));
+  }
+  view.dispatch(transaction.scrollIntoView());
+  return findRawMarkdownChunkPositions(view.state.doc, chunks);
+};
+
 const replaceSelectionWithContent = (
   view: EditorView,
   content: unknown[],
@@ -481,8 +597,13 @@ export const RichTextEditor = ({
   onPasteImage,
 }: RichTextEditorProps) => {
   const onPasteImageRef = useRef(onPasteImage);
+  const onChangeRef = useRef(onChange);
+  const editorViewRef = useRef<EditorView | undefined>();
+  const editorInstanceRef = useRef<Editor | undefined>();
   const pasteRequestRef = useRef(0);
   const pasteAnchorRef = useRef<PasteAnchor | undefined>();
+  const bulkMarkdownConversionRef = useRef<MarkdownPasteConversionSession | undefined>();
+  const markdownConversionSequenceRef = useRef(0);
   const mountedRef = useRef(true);
   const nativeInputSessionRef = useRef<NativeInputPasteSession | undefined>();
   const nativeInputSequenceRef = useRef(0);
@@ -491,13 +612,20 @@ export const RichTextEditor = ({
   const nativeTypingTransformSkipTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const nativeInputGuardTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const nativeInputDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+  const [markdownConversionProgress, setMarkdownConversionProgress] = useState<MarkdownConversionProgress | undefined>();
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
   useEffect(() => () => {
     mountedRef.current = false;
     pasteRequestRef.current += 1;
     pasteAnchorRef.current = undefined;
+    const conversion = bulkMarkdownConversionRef.current;
+    conversion?.cancelScheduledStep?.();
+    bulkMarkdownConversionRef.current = undefined;
     if (nativeInputGuardTimeoutRef.current) {
       clearTimeout(nativeInputGuardTimeoutRef.current);
     }
@@ -509,7 +637,181 @@ export const RichTextEditor = ({
     }
   }, []);
 
+  const emitCurrentEditorHtml = (view?: EditorView) => {
+    const instance = editorInstanceRef.current;
+    if (instance && !instance.isDestroyed) {
+      onChangeRef.current(instance.getHTML());
+      return;
+    }
+    // This fallback is only used while Tiptap is being mounted. In normal
+    // operation the editor instance above is always available.
+    if (view) {
+      onChangeRef.current(view.dom.innerHTML);
+    }
+  };
+
+  const refreshPasteAnchor = (view: EditorView, requestId: number) => {
+    const anchor: PasteAnchor = {
+      requestId,
+      doc: view.state.doc,
+      bookmark: view.state.selection.getBookmark(),
+    };
+    pasteAnchorRef.current = anchor;
+    return anchor;
+  };
+
+  const mapActiveMarkdownConversionPositions = (mapping: { map: (position: number, assoc?: number) => number }) => {
+    const conversion = bulkMarkdownConversionRef.current;
+    if (!conversion) {
+      return;
+    }
+    conversion.positions = conversion.positions.map((position) => mapping.map(position, -1));
+  };
+
+  const cancelMarkdownPasteConversion = (view = editorViewRef.current, emit = true) => {
+    const conversion = bulkMarkdownConversionRef.current;
+    if (!conversion) {
+      setMarkdownConversionProgress((progress) => progress?.retainedRaw ? undefined : progress);
+      return;
+    }
+    conversion.cancelScheduledStep?.();
+    bulkMarkdownConversionRef.current = undefined;
+    setMarkdownConversionProgress(undefined);
+    if (emit) {
+      emitCurrentEditorHtml(view);
+    }
+  };
+
+  const scheduleMarkdownConversionStep = (view: EditorView, conversion: MarkdownPasteConversionSession) => {
+    const run = () => {
+      conversion.cancelScheduledStep = undefined;
+      processMarkdownConversionBatch(view, conversion);
+    };
+    const idle = (window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    }).requestIdleCallback;
+    if (idle) {
+      const handle = idle(run, { timeout: 80 });
+      conversion.cancelScheduledStep = () => (window as Window & {
+        cancelIdleCallback?: (handle: number) => void;
+      }).cancelIdleCallback?.(handle);
+      return;
+    }
+    const handle = window.setTimeout(run, 16);
+    conversion.cancelScheduledStep = () => window.clearTimeout(handle);
+  };
+
+  const finishMarkdownConversion = (view: EditorView, conversion: MarkdownPasteConversionSession) => {
+    if (bulkMarkdownConversionRef.current?.id !== conversion.id) {
+      return;
+    }
+    bulkMarkdownConversionRef.current = undefined;
+    setMarkdownConversionProgress(undefined);
+    emitCurrentEditorHtml(view);
+  };
+
+  const processMarkdownConversionBatch = (view: EditorView, conversion: MarkdownPasteConversionSession) => {
+    if (!mountedRef.current || bulkMarkdownConversionRef.current?.id !== conversion.id) {
+      return;
+    }
+    if (conversion.nextIndex < 0) {
+      finishMarkdownConversion(view, conversion);
+      return;
+    }
+
+    const budget = isNativePlatform() ? MARKDOWN_PASTE_LIMITS.native : MARKDOWN_PASTE_LIMITS.web;
+    const batch: number[] = [];
+    let sourceLength = 0;
+    let formulaCount = 0;
+    while (conversion.nextIndex >= 0 && batch.length < budget.batchBlocks) {
+      const index = conversion.nextIndex;
+      const chunk = conversion.chunks[index];
+      const exceedsBudget = batch.length > 0 && (
+        sourceLength + chunk.source.length > budget.batchLength
+        || formulaCount + chunk.formulaCount > budget.batchFormulas
+      );
+      if (exceedsBudget) {
+        break;
+      }
+      batch.push(index);
+      conversion.nextIndex -= 1;
+      sourceLength += chunk.source.length;
+      formulaCount += chunk.formulaCount;
+    }
+
+    if (batch.length === 0) {
+      finishMarkdownConversion(view, conversion);
+      return;
+    }
+
+    const transaction = view.state.tr;
+    for (const index of batch) {
+      const position = conversion.positions[index];
+      const rawNode = transaction.doc.nodeAt(position);
+      const chunk = conversion.chunks[index];
+      if (!rawNode || rawNode.type.name !== "paragraph" || rawMarkdownText(rawNode) !== chunk.source) {
+        conversion.skipped += 1;
+        continue;
+      }
+      const parsed = parseMarkdownPaste(view, chunk.source);
+      if (!parsed) {
+        conversion.skipped += 1;
+        continue;
+      }
+      try {
+        const nodes = parsed.map((item) => view.state.schema.nodeFromJSON(item));
+        transaction.replace(position, position + rawNode.nodeSize, new Slice(Fragment.fromArray(nodes), 0, 0));
+      } catch {
+        conversion.skipped += 1;
+      }
+    }
+
+    transaction.setMeta("addToHistory", false);
+    transaction.setMeta("markdownPasteConversion", true);
+    mapActiveMarkdownConversionPositions(transaction.mapping);
+    if (transaction.docChanged) {
+      view.dispatch(transaction.scrollIntoView());
+      const anchor = pasteAnchorRef.current;
+      if (anchor) {
+        refreshPasteAnchor(view, anchor.requestId);
+      }
+    }
+    conversion.completed += batch.length;
+    setMarkdownConversionProgress({ completed: conversion.completed, total: conversion.chunks.length });
+
+    if (conversion.nextIndex < 0) {
+      finishMarkdownConversion(view, conversion);
+      return;
+    }
+    scheduleMarkdownConversionStep(view, conversion);
+  };
+
+  const startMarkdownPasteConversion = (
+    view: EditorView,
+    chunks: readonly MarkdownPasteChunk[],
+    positions: number[],
+  ) => {
+    if (chunks.length === 0 || positions.length !== chunks.length) {
+      return false;
+    }
+    cancelMarkdownPasteConversion(view, false);
+    const conversion: MarkdownPasteConversionSession = {
+      id: ++markdownConversionSequenceRef.current,
+      chunks,
+      positions,
+      nextIndex: chunks.length - 1,
+      completed: 0,
+      skipped: 0,
+    };
+    bulkMarkdownConversionRef.current = conversion;
+    setMarkdownConversionProgress({ completed: 0, total: chunks.length });
+    scheduleMarkdownConversionStep(view, conversion);
+    return true;
+  };
+
   const beginPasteOperation = (view: EditorView): PasteAnchor => {
+    cancelMarkdownPasteConversion(view);
     const requestId = ++pasteRequestRef.current;
     const anchor: PasteAnchor = {
       requestId,
@@ -535,6 +837,7 @@ export const RichTextEditor = ({
   const cancelPendingPaste = (view?: EditorView) => {
     pasteRequestRef.current += 1;
     pasteAnchorRef.current = undefined;
+    cancelMarkdownPasteConversion(view);
     const session = nativeInputSessionRef.current;
     if (session && view) {
       releaseNativeInputSession(session, false, view);
@@ -545,24 +848,37 @@ export const RichTextEditor = ({
     if (anchor && !isPasteAnchorCurrent(view, anchor)) {
       return;
     }
+    const anchorRequestId = anchor?.requestId;
     const asset = await onPasteImageRef.current?.(file);
+    const currentAnchor = anchorRequestId === undefined
+      ? undefined
+      : pasteAnchorRef.current?.requestId === anchorRequestId
+        ? pasteAnchorRef.current
+        : undefined;
     if (
       !asset ||
       !mountedRef.current ||
-      (anchor && !isPasteAnchorCurrent(view, anchor))
+      (anchorRequestId !== undefined && (!currentAnchor || !isPasteAnchorCurrent(view, currentAnchor)))
     ) {
       return;
     }
-    replaceSelectionWithContent(view, [
+    const nodes = [
       {
         type: "recordAsset",
         attrs: { assetId: asset.id, kind: "image", title: asset.title },
       },
       { type: "paragraph" },
-    ], anchor?.bookmark);
-    if (anchor) {
+    ].map((item) => view.state.schema.nodeFromJSON(item));
+    const transaction = view.state.tr;
+    if (currentAnchor) {
+      transaction.setSelection(currentAnchor.bookmark.resolve(view.state.doc));
+    }
+    transaction.replaceSelection(Slice.maxOpen(Fragment.fromArray(nodes)));
+    mapActiveMarkdownConversionPositions(transaction.mapping);
+    view.dispatch(transaction.scrollIntoView());
+    if (anchorRequestId !== undefined) {
       const nextAnchor: PasteAnchor = {
-        requestId: anchor.requestId,
+        requestId: anchorRequestId,
         doc: view.state.doc,
         bookmark: view.state.selection.getBookmark(),
       };
@@ -595,6 +911,44 @@ export const RichTextEditor = ({
     return nativeText || readClipboardTextFallback({ skipNative: true });
   };
 
+  const insertMarkdownPaste = (
+    view: EditorView,
+    source: string,
+    options: MarkdownPasteInsertOptions,
+  ): boolean => {
+    const normalizedSource = normalizeClipboardText(source);
+    const assessment = assessMarkdownPaste(normalizedSource, options.native);
+    if (assessment.retainRaw) {
+      const rawOnly: MarkdownPasteChunk[] = [{
+        source: normalizedSource,
+        kind: "paragraph",
+        formulaCount: assessment.formulaCount,
+      }];
+      const positions = insertRawMarkdownChunks(view, rawOnly, options.bookmark, options.range);
+      if (positions) {
+        setMarkdownConversionProgress({ completed: 0, total: 0, retainedRaw: true });
+        return true;
+      }
+      return false;
+    }
+
+    if (assessment.shouldStream) {
+      const positions = insertRawMarkdownChunks(view, assessment.chunks, options.bookmark, options.range);
+      return positions ? startMarkdownPasteConversion(view, assessment.chunks, positions) : false;
+    }
+
+    const parsedMarkdown = parseMarkdownPaste(view, normalizedSource);
+    if (!parsedMarkdown) {
+      return false;
+    }
+    if (options.range) {
+      replaceRangeWithContent(view, parsedMarkdown, options.range.from, options.range.to);
+    } else {
+      replaceSelectionWithContent(view, parsedMarkdown, options.bookmark);
+    }
+    return true;
+  };
+
   const processNativePaste = async (
     view: EditorView,
     clipboard: ClipboardSnapshot,
@@ -625,15 +979,13 @@ export const RichTextEditor = ({
       return;
     }
     const markdownSource = selectMarkdownPasteSources([nativeText, clipboard.markdown, clipboard.plainText])[0];
-    const parsedMarkdown = markdownSource
-      ? await parseMarkdownPasteScheduled(view, markdownSource, () => !isPasteAnchorCurrent(view, anchor))
-      : undefined;
     if (!isPasteAnchorCurrent(view, anchor)) {
       return;
     }
-    if (parsedMarkdown) {
-      replaceSelectionWithContent(view, parsedMarkdown, targetBookmark);
-    } else {
+    const handledMarkdown = markdownSource
+      ? insertMarkdownPaste(view, markdownSource, { bookmark: targetBookmark, native: true })
+      : false;
+    if (!handledMarkdown) {
       const normalizedNativeText = nativeText ? normalizeClipboardText(nativeText) : "";
       const fallbackText = clipboard.plainText ? normalizeClipboardText(clipboard.plainText) : normalizedNativeText;
       const slice = (clipboard.htmlText || fallbackText.length <= MAX_MARKDOWN_PASTE_LENGTH)
@@ -655,12 +1007,7 @@ export const RichTextEditor = ({
       releaseNativeInputSession(inputSession, false, view);
     }
 
-    const assetAnchor: PasteAnchor = {
-      requestId,
-      doc: view.state.doc,
-      bookmark: view.state.selection.getBookmark(),
-    };
-    pasteAnchorRef.current = assetAnchor;
+    const assetAnchor = refreshPasteAnchor(view, requestId);
 
     if (clipboard.files.length > 0) {
       await insertPastedAssets(view, clipboard.files, assetAnchor);
@@ -792,19 +1139,17 @@ export const RichTextEditor = ({
           return;
         }
 
-        const parsedMarkdown = await parseMarkdownPasteScheduled(
-          view,
-          expectedMarkdown,
-          () => nativeInputSessionRef.current?.id !== session.id || session.revision !== revision,
-        );
         if (nativeInputSessionRef.current?.id !== session.id || session.revision !== revision) {
           return;
         }
-        if (!parsedMarkdown) {
+        const handledMarkdown = insertMarkdownPaste(view, expectedMarkdown, {
+          native: true,
+          range: changedRange,
+        });
+        if (!handledMarkdown) {
           releaseNativeInputSession(session, true, view);
           return;
         }
-        replaceRangeWithContent(view, parsedMarkdown, changedRange.from, changedRange.to);
         releaseNativeInputSession(session, false, view);
       })();
     }, ANDROID_IME_PASTE_DEBOUNCE_MS);
@@ -832,6 +1177,9 @@ export const RichTextEditor = ({
       RecordCollapseBlockNode,
       RecordHighlightBlockNode,
       TrailingEditableParagraph,
+      MarkdownPasteConversionExtension.configure({
+        onCancel: () => cancelMarkdownPasteConversion(),
+      }),
       Placeholder.configure({
         placeholder: placeholder ?? "写下今天的学习、卡点、截图、公式或一点心得...",
       }),
@@ -856,7 +1204,7 @@ export const RichTextEditor = ({
           return false;
         },
         keydown: (view, event) => {
-          if (pasteAnchorRef.current || (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key))) {
+          if (bulkMarkdownConversionRef.current || pasteAnchorRef.current || (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key))) {
             cancelPendingPaste(view);
           }
           return false;
@@ -864,7 +1212,7 @@ export const RichTextEditor = ({
         beforeinput: (view, event) => {
           const inputEvent = event as InputEvent;
           if (!isNativePlatform()) {
-            if (pasteAnchorRef.current && inputEvent.inputType !== "insertFromPaste" && inputEvent.inputType !== "insertFromPasteAsPlainText") {
+            if ((bulkMarkdownConversionRef.current || pasteAnchorRef.current) && inputEvent.inputType !== "insertFromPaste" && inputEvent.inputType !== "insertFromPasteAsPlainText") {
               cancelPendingPaste(view);
             }
             return false;
@@ -883,7 +1231,7 @@ export const RichTextEditor = ({
             return false;
           }
           if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertReplacementText") {
-            if (pasteAnchorRef.current) {
+            if (bulkMarkdownConversionRef.current || pasteAnchorRef.current) {
               cancelPendingPaste(view);
             }
             captureNativeInputSession(view);
@@ -897,6 +1245,12 @@ export const RichTextEditor = ({
           const session = nativeInputSessionRef.current;
           const pendingPaste = pasteAnchorRef.current;
           if (pendingPaste && view.state.doc !== pendingPaste.doc && !session) {
+            cancelPendingPaste(view);
+          }
+          if (bulkMarkdownConversionRef.current && !session) {
+            // Some Android IMEs commit ordinary typing through input only. The
+            // document has already changed at this point, so preserve it and
+            // stop using positions captured for the older paste session.
             cancelPendingPaste(view);
           }
           if (session) {
@@ -921,54 +1275,19 @@ export const RichTextEditor = ({
         const markdownSource = selectMarkdownPasteSources([clipboard.markdown, clipboard.plainText])[0];
         if (markdownSource) {
           event.preventDefault();
-          if (markdownSource.length <= 64 * 1024) {
-            const parsedMarkdown = parseMarkdownPaste(view, markdownSource);
-            if (parsedMarkdown) {
-              replaceSelectionWithContent(view, parsedMarkdown);
-            } else {
-              view.dispatch(view.state.tr.insertText(normalizeClipboardText(markdownSource)).scrollIntoView());
-            }
-            const anchor: PasteAnchor = {
-              requestId: ++pasteRequestRef.current,
-              doc: view.state.doc,
-              bookmark: view.state.selection.getBookmark(),
-            };
-            pasteAnchorRef.current = anchor;
-            void insertPastedAssets(view, clipboard.files, anchor);
-            return true;
-          }
-          const initialDoc = view.state.doc;
           const anchor = beginPasteOperation(view);
-          const rawTransaction = view.state.tr;
-          rawTransaction.setSelection(anchor.bookmark.resolve(view.state.doc));
-          rawTransaction.insertText(normalizeClipboardText(markdownSource));
-          view.dispatch(rawTransaction.scrollIntoView());
-          const rawRange = findChangedDocumentRange(initialDoc, view.state.doc);
-          if (!rawRange) {
-            return true;
+          const handledMarkdown = insertMarkdownPaste(view, markdownSource, {
+            bookmark: anchor.bookmark,
+            native: false,
+          });
+          if (!handledMarkdown) {
+            const transaction = view.state.tr;
+            transaction.setSelection(anchor.bookmark.resolve(view.state.doc));
+            transaction.insertText(normalizeClipboardText(markdownSource));
+            view.dispatch(transaction.scrollIntoView());
           }
-          const rawAnchor: PasteAnchor = {
-            requestId: anchor.requestId,
-            doc: view.state.doc,
-            bookmark: view.state.selection.getBookmark(),
-          };
-          pasteAnchorRef.current = rawAnchor;
-          void (async () => {
-            const parsedMarkdown = await parseMarkdownPasteScheduled(view, markdownSource, () => !isPasteAnchorCurrent(view, rawAnchor));
-            if (!isPasteAnchorCurrent(view, rawAnchor)) {
-              return;
-            }
-            if (parsedMarkdown) {
-              replaceRangeWithContent(view, parsedMarkdown, rawRange.from, rawRange.to);
-            }
-            const assetAnchor: PasteAnchor = {
-              requestId: rawAnchor.requestId,
-              doc: view.state.doc,
-              bookmark: view.state.selection.getBookmark(),
-            };
-            pasteAnchorRef.current = assetAnchor;
-            await insertPastedAssets(view, clipboard.files, assetAnchor);
-          })();
+          const assetAnchor = refreshPasteAnchor(view, anchor.requestId);
+          void insertPastedAssets(view, clipboard.files, assetAnchor);
           return true;
         }
 
@@ -1015,8 +1334,14 @@ export const RichTextEditor = ({
         return false;
       },
     },
+    onCreate: ({ editor }) => {
+      editorInstanceRef.current = editor;
+      editorViewRef.current = editor.view;
+    },
     onUpdate: ({ editor }) => {
-      onChange(editor.getHTML());
+      if (!bulkMarkdownConversionRef.current) {
+        onChangeRef.current(editor.getHTML());
+      }
     },
   });
 
@@ -1024,7 +1349,7 @@ export const RichTextEditor = ({
     if (!editor) {
       return;
     }
-    if (value !== editor.getHTML()) {
+    if (!bulkMarkdownConversionRef.current && value !== editor.getHTML()) {
       editor.commands.setContent(value, false);
     }
     if (!readOnly) {
@@ -1113,6 +1438,24 @@ export const RichTextEditor = ({
           </select>
           <HighlightInsertMenu editor={editor} />
           {renderInsertTools?.(editor)}
+        </div>
+      )}
+      {!readOnly && markdownConversionProgress && (
+        <div className="markdown-conversion-status" role="status">
+          {markdownConversionProgress.retainedRaw
+            ? <span>内容过大，已保留 Markdown 原文。</span>
+            : <span>正在转换 Markdown（{markdownConversionProgress.completed}/{markdownConversionProgress.total}）</span>}
+          {!markdownConversionProgress.retainedRaw && (
+            <button
+              type="button"
+              className="markdown-conversion-cancel"
+              title="取消 Markdown 转换"
+              aria-label="取消 Markdown 转换"
+              onClick={() => editor.commands.cancelMarkdownPasteConversion()}
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
       )}
       <EditorContent editor={editor} />

@@ -549,6 +549,45 @@ button:disabled {
   gap: 6px;
 }
 
+.markdown-conversion-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.markdown-conversion-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-conversion-cancel {
+  display: grid;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.markdown-conversion-cancel:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+
 .editor-toolbar button {
   min-width: 34px;
   height: 32px;
@@ -3400,6 +3439,24 @@ button:disabled {
 .highlight-tone-popover button:focus-visible {
   background: #f5efe5;
   background: var(--surface-2);
+}
+
+.formula-render-pending {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.88em;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.formula-preview .formula-render-pending {
+  display: block;
+  overflow-x: auto;
+  white-space: pre-wrap;
 }
 
 .highlight-tone-popover button[aria-pressed="true"] {

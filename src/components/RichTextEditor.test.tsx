@@ -814,7 +814,7 @@ describe("RichTextEditor", () => {
   it("defers medium Markdown parsing while preserving the raw paste until replacement", async () => {
     const onChange = vi.fn();
     let editorRef: Editor | undefined;
-    const source = `# 空闲解析标题\n\n${"内容".repeat(35_000)}`;
+    const source = Array.from({ length: 41 }, (_, index) => `# 空闲解析标题 ${index}\n\n内容 ${index}`).join("\n\n");
     render(
       <RichTextEditor
         value="<p></p>"
@@ -831,7 +831,136 @@ describe("RichTextEditor", () => {
     });
 
     expect(editorRef?.getHTML()).toContain("# 空闲解析标题");
-    await waitFor(() => expect(editorRef?.getHTML()).toContain("<h1>空闲解析标题</h1>"));
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("<h1>空闲解析标题 0</h1>"));
+    expect(editorRef?.getHTML()).not.toContain("# 空闲解析标题 0");
+  });
+
+  it("shows non-blocking conversion progress for a structurally large Android paste", async () => {
+    let editorRef: Editor | undefined;
+    const source = Array.from({ length: 25 }, (_, index) => `### 标题 ${index}\n\n- **重点 ${index}**`).join("\n\n");
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(source);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      fireEvent.paste(document.querySelector(".rich-editor")!, {
+        clipboardData: { getData: () => "", items: [] },
+      });
+
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("正在转换 Markdown"));
+      expect(editorRef?.getHTML()).toContain("### 标题 0");
+      await waitFor(() => expect(editorRef?.getHTML()).toContain("<h3>标题 0</h3>"));
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("cancels a pending Markdown conversion without discarding raw remainder", async () => {
+    let editorRef: Editor | undefined;
+    const source = Array.from({ length: 121 }, (_, index) => `# 章节 ${index}\n\n内容 ${index}`).join("\n\n");
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: { getData: (type: string) => type === "text/plain" ? source : "", items: [] },
+    });
+
+    const cancel = await screen.findByRole("button", { name: "取消 Markdown 转换" });
+    fireEvent.click(cancel);
+
+    // The tail batch may have completed before the cancel click, but the
+    // source content must remain regardless of whether it is raw or rendered.
+    expect(editorRef?.getHTML()).toContain("章节 120");
+    expect(screen.queryByRole("button", { name: "取消 Markdown 转换" })).not.toBeInTheDocument();
+  });
+
+  it("stops a streaming Android conversion when an IME emits input without beforeinput", async () => {
+    let editorRef: Editor | undefined;
+    const source = Array.from({ length: 25 }, (_, index) => `### 标题 ${index}\n\n内容`).join("\n\n");
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(source);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      const editorElement = document.querySelector(".rich-editor")!;
+      fireEvent.paste(editorElement, { clipboardData: { getData: () => "", items: [] } });
+      await screen.findByRole("button", { name: "取消 Markdown 转换" });
+
+      act(() => {
+        editorRef?.commands.insertContent("用户继续输入");
+      });
+      fireEvent(editorElement, nativeInputEvent("input", "insertText"));
+
+      expect(editorRef?.getHTML()).toContain("用户继续输入");
+      expect(screen.queryByRole("button", { name: "取消 Markdown 转换" })).not.toBeInTheDocument();
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("keeps a streaming Markdown paste anchored while its image upload completes", async () => {
+    let editorRef: Editor | undefined;
+    let resolveUpload!: (asset: { id: string; kind: "image"; title: string }) => void;
+    const imageUpload = new Promise<{ id: string; kind: "image"; title: string }>((resolve) => {
+      resolveUpload = resolve;
+    });
+    const source = Array.from({ length: 41 }, (_, index) => `# 标题 ${index}\n\n内容`).join("\n\n");
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        onPasteImage={() => imageUpload}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? source : "",
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+      },
+    });
+
+    await screen.findByRole("button", { name: "取消 Markdown 转换" });
+    await act(async () => {
+      resolveUpload({ id: "asset-stream", kind: "image", title: "截图" });
+    });
+
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("asset-stream"));
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("<h1>标题 0</h1>"));
   });
 
   it("keeps text when an image is pasted with Markdown that cannot be parsed", async () => {
