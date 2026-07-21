@@ -5,7 +5,7 @@ import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from 
 import * as pmView from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import { TextSelection, type SelectionBookmark } from "@tiptap/pm/state";
-import { Check, ChevronDown, Highlighter, List, ListOrdered, X } from "lucide-react";
+import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -16,8 +16,9 @@ import cpp from "highlight.js/lib/languages/cpp";
 import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
-import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode } from "./RecordEditorNodes";
+import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode, RecordReferenceNode, type RecordReferenceTarget } from "./RecordEditorNodes";
 import { ImageLightbox } from "./ImageLightbox";
+import { RecordReferencePicker } from "./RecordReferencePicker";
 import {
   RecordCollapseBlockNode,
   RecordComparisonTableNode,
@@ -54,7 +55,7 @@ import {
   assessMarkdownPaste,
   type MarkdownPasteChunk,
 } from "../lib/markdownPasteWork";
-import type { RecordAssetRef } from "../types";
+import type { RecordAssetRef, RecordBlock, SubjectConfig } from "../types";
 
 const lowlight = createLowlight();
 lowlight.register("cpp", cpp);
@@ -80,6 +81,17 @@ type ImageGalleryState = {
   images: RecordAssetRef[];
   initialIndex: number;
 };
+
+type ReferencePickerState = {
+  bookmark: SelectionBookmark;
+};
+
+const recordReferenceTargetMap = (records: readonly RecordBlock[]): Map<string, RecordReferenceTarget> =>
+  new Map(
+    records
+      .filter((record) => !record.deletedAt)
+      .map((record) => [record.id, { id: record.id, title: record.title || "未命名日志" }]),
+  );
 
 const collectRecordImageQueue = (doc: ProseMirrorNode): QueuedRecordImage[] => {
   const images: QueuedRecordImage[] = [];
@@ -471,6 +483,10 @@ interface RichTextEditorProps {
   onAssetChanged?: () => void;
   onAssetTitleChange?: (assetId: string, title: string) => Promise<void> | void;
   onPasteImage?: (file: File) => Promise<{ id: string; kind: "image"; title: string } | undefined> | { id: string; kind: "image"; title: string } | undefined;
+  currentRecordId?: string;
+  referenceRecords?: readonly RecordBlock[];
+  referenceSubjects?: readonly SubjectConfig[];
+  onOpenRecordReference?: (recordId: string) => void;
 }
 
 const rawMarkdownChunkNode = (source: string): JSONContent => {
@@ -627,9 +643,16 @@ export const RichTextEditor = ({
   onAssetChanged,
   onAssetTitleChange,
   onPasteImage,
+  currentRecordId,
+  referenceRecords = [],
+  referenceSubjects = [],
+  onOpenRecordReference,
 }: RichTextEditorProps) => {
   const onPasteImageRef = useRef(onPasteImage);
   const onChangeRef = useRef(onChange);
+  const recordReferenceTargetsRef = useRef<Map<string, RecordReferenceTarget>>(recordReferenceTargetMap(referenceRecords));
+  const recordReferenceListenersRef = useRef(new Set<() => void>());
+  const onOpenRecordReferenceRef = useRef(onOpenRecordReference);
   const editorViewRef = useRef<EditorView | undefined>();
   const editorInstanceRef = useRef<Editor | undefined>();
   const pasteRequestRef = useRef(0);
@@ -646,12 +669,22 @@ export const RichTextEditor = ({
   const nativeInputDebounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>();
   const [markdownConversionProgress, setMarkdownConversionProgress] = useState<MarkdownConversionProgress | undefined>();
   const [imageGallery, setImageGallery] = useState<ImageGalleryState | undefined>();
+  const [referencePicker, setReferencePicker] = useState<ReferencePickerState | undefined>();
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+  useEffect(() => {
+    recordReferenceTargetsRef.current = recordReferenceTargetMap(referenceRecords);
+    for (const listener of recordReferenceListenersRef.current) {
+      listener();
+    }
+  }, [referenceRecords]);
+  useEffect(() => {
+    onOpenRecordReferenceRef.current = onOpenRecordReference;
+  }, [onOpenRecordReference]);
 
   const openImageGallery = useCallback((assetRef: RecordAssetRef, position: number) => {
     const currentEditor = editorInstanceRef.current;
@@ -1225,6 +1258,14 @@ export const RichTextEditor = ({
       }),
       RecordFormulaNode,
       RecordInlineMathNode,
+      RecordReferenceNode.configure({
+        resolveReference: (recordId: string) => recordReferenceTargetsRef.current.get(recordId),
+        subscribeReferenceChanges: (listener: () => void) => {
+          recordReferenceListenersRef.current.add(listener);
+          return () => recordReferenceListenersRef.current.delete(listener);
+        },
+        onOpenReference: (recordId: string) => onOpenRecordReferenceRef.current?.(recordId),
+      }),
       RecordStructureDiagramNode,
       RecordComparisonTableNode,
       RecordStickyBoardNode,
@@ -1421,6 +1462,26 @@ export const RichTextEditor = ({
 
   const codeLanguage = normalizeCodeLanguage(String(editor.getAttributes("codeBlock").language ?? "")) ?? "";
 
+  const insertRecordReference = (record: RecordBlock) => {
+    const referenceNode = editor.schema.nodes.recordReference;
+    const pickerBookmark = referencePicker?.bookmark;
+    if (!referenceNode || !pickerBookmark) {
+      return;
+    }
+    try {
+      const selection = pickerBookmark.resolve(editor.state.doc);
+      const node = referenceNode.create({ recordId: record.id, title: record.title || "未命名日志" });
+      const transaction = editor.state.tr.setSelection(selection).replaceSelectionWith(node).scrollIntoView();
+      editor.view.dispatch(transaction);
+      editor.commands.focus();
+    } catch {
+      // If the editor was replaced while the picker was open, closing it is
+      // safer than inserting a reference at an unrelated fallback position.
+    } finally {
+      setReferencePicker(undefined);
+    }
+  };
+
   return (
     <div className={readOnly ? "editor-shell read-only" : "editor-shell"}>
       {!readOnly && (
@@ -1490,6 +1551,16 @@ export const RichTextEditor = ({
           >
             {codeLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
+          {currentRecordId && (
+            <button
+              type="button"
+              title="引用日志"
+              aria-label="引用日志"
+              onClick={() => setReferencePicker({ bookmark: editor.state.selection.getBookmark() })}
+            >
+              <Paperclip size={16} />
+            </button>
+          )}
           <HighlightInsertMenu editor={editor} />
           {renderInsertTools?.(editor)}
         </div>
@@ -1518,6 +1589,15 @@ export const RichTextEditor = ({
           images={imageGallery.images}
           initialIndex={imageGallery.initialIndex}
           onClose={() => setImageGallery(undefined)}
+        />
+      )}
+      {referencePicker && currentRecordId && (
+        <RecordReferencePicker
+          currentRecordId={currentRecordId}
+          records={referenceRecords}
+          subjects={referenceSubjects}
+          onSelect={insertRecordReference}
+          onClose={() => setReferencePicker(undefined)}
         />
       )}
     </div>

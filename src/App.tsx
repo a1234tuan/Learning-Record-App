@@ -43,7 +43,9 @@ import {
   createInitialTabMemory,
   getRecordState,
   getTabDepth,
+  MAX_RECORD_REFERENCE_DEPTH,
   popTabDepth,
+  recordReferenceOpenError,
   type MoreSubRoute,
   type TabKey,
   type TabMemory,
@@ -170,6 +172,8 @@ export const App = () => {
           recordId: undefined,
           highlightAssetId: undefined,
           recordEditing: undefined,
+          referenceStack: [],
+          restoreScrollY: undefined,
         },
       }));
       setActiveTab("more");
@@ -187,6 +191,8 @@ export const App = () => {
           recordId: record.id,
           highlightAssetId: assetId,
           recordEditing: editing,
+          referenceStack: [],
+          restoreScrollY: undefined,
         },
       }));
       setActiveTab(tab);
@@ -195,15 +201,7 @@ export const App = () => {
   );
 
   const closeRecordInCurrentTab = useCallback(() => {
-    setTabMemory((current) => ({
-      ...current,
-      [activeTab]: {
-        ...current[activeTab],
-        recordId: undefined,
-        highlightAssetId: undefined,
-        recordEditing: undefined,
-      },
-    }));
+    setTabMemory((current) => popTabDepth(current, activeTab));
   }, [activeTab]);
 
   const setCurrentRecordEditing = useCallback((recordEditing: boolean) => {
@@ -311,6 +309,10 @@ export const App = () => {
     () => getFavoriteRecords(app.blocks.filter((block): block is RecordBlock => block.type === "record")),
     [app.blocks],
   );
+  const referenceRecords = useMemo(
+    () => app.blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt),
+    [app.blocks],
+  );
   const recordReviewsByRecord = useMemo(
     () => Object.fromEntries(app.recordReviews.map((review) => [review.recordId, review])),
     [app.recordReviews],
@@ -342,6 +344,58 @@ export const App = () => {
     ? app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === currentRecordState.recordId)
     : undefined;
 
+  const openRecordReference = (recordId: string) => {
+    const target = referenceRecords.find((record) => record.id === recordId);
+    if (!target) {
+      setBackToast("该日志已删除，无法打开预览");
+      return;
+    }
+
+    const state = getRecordState(activeTab, tabMemory);
+    const openError = recordReferenceOpenError(state, recordId);
+    if (openError === "cycle") {
+      setBackToast("检测到循环引用，已停止打开");
+      return;
+    }
+    if (openError === "depth") {
+      setBackToast(`引用层级最多 ${MAX_RECORD_REFERENCE_DEPTH} 层`);
+      return;
+    }
+    if (openError) {
+      return;
+    }
+
+    clearBackHint();
+    const scrollY = window.scrollY;
+    setTabMemory((current) => {
+      const currentState = getRecordState(activeTab, current);
+      if (recordReferenceOpenError(currentState, recordId)) {
+        return current;
+      }
+      const currentStack = currentState.referenceStack ?? [];
+      return {
+        ...current,
+        [activeTab]: {
+          ...currentState,
+          recordId: recordId,
+          highlightAssetId: undefined,
+          recordEditing: false,
+          referenceStack: [
+            ...currentStack,
+            {
+              recordId: currentState.recordId,
+              highlightAssetId: currentState.highlightAssetId,
+              recordEditing: currentState.recordEditing,
+              scrollY,
+            },
+          ],
+          restoreScrollY: undefined,
+        },
+      };
+    });
+    window.scrollTo(0, 0);
+  };
+
   const openAiForDate = async (date: string) => {
     const attachment = await buildDayLogAiContextAsync(date, app.blocks, app.assets);
     const session = await createAiSessionForDate(date, attachment);
@@ -368,6 +422,9 @@ export const App = () => {
       onAssetChanged={app.refresh}
       highlightedAssetId={highlightedAssetId}
       subjects={app.subjects}
+      referenceRecords={referenceRecords}
+      onOpenRecordReference={openRecordReference}
+      restoreScrollY={currentRecordState.restoreScrollY}
       onGetDraft={app.getRecordDraft}
       onSaveDraft={app.saveRecordDraft}
       onDeleteDraft={app.deleteRecordDraft}

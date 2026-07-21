@@ -1,7 +1,8 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
-import { type FocusEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FocusEvent, type KeyboardEvent, type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Paperclip } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -145,6 +146,17 @@ type RecordAssetNodeOptions = {
 
 type RecordAssetNodeViewProps = NodeViewProps & {
   extensionOptions: RecordAssetNodeOptions;
+};
+
+export type RecordReferenceTarget = {
+  id: string;
+  title: string;
+};
+
+type RecordReferenceNodeOptions = {
+  resolveReference?: (recordId: string) => RecordReferenceTarget | undefined;
+  subscribeReferenceChanges?: (listener: () => void) => () => void;
+  onOpenReference?: (recordId: string) => void;
 };
 
 const asAssetKind = (value: unknown): RecordAssetRef["kind"] =>
@@ -349,6 +361,53 @@ const RecordInlineMathNodeView = ({ node, updateAttributes, editor }: NodeViewPr
   );
 };
 
+const RecordReferenceNodeView = ({ node, editor, extensionOptions }: NodeViewProps & { extensionOptions: RecordReferenceNodeOptions }) => {
+  const recordId = String(node.attrs.recordId ?? "");
+  const savedTitle = String(node.attrs.title ?? "日志引用");
+  const target = recordId ? extensionOptions.resolveReference?.(recordId) : undefined;
+  const available = Boolean(target);
+  const title = target?.title?.trim() || savedTitle;
+  const label = available ? `引用日志：${title}` : `已删除的日志：${title}`;
+
+  const [, setReferenceVersion] = useState(0);
+  useEffect(() => extensionOptions.subscribeReferenceChanges?.(() => {
+    setReferenceVersion((version) => version + 1);
+  }), [extensionOptions]);
+
+  const open = (event: MouseEvent<HTMLSpanElement> | KeyboardEvent<HTMLSpanElement>) => {
+    if (editor.isEditable) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (available) {
+      extensionOptions.onOpenReference?.(recordId);
+    }
+  };
+
+  return (
+    <NodeViewWrapper
+      as="span"
+      className={`record-reference-node${available ? "" : " unavailable"}`}
+      contentEditable={false}
+      role={!editor.isEditable && available ? "link" : undefined}
+      tabIndex={!editor.isEditable && available ? 0 : undefined}
+      aria-label={label}
+      aria-disabled={!available || undefined}
+      title={available ? title : "该日志已删除，无法打开预览"}
+      onClick={open}
+      onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => {
+        if ((event.key === "Enter" || event.key === " ") && !editor.isEditable) {
+          open(event);
+        }
+      }}
+    >
+      <Paperclip size={14} strokeWidth={2} aria-hidden="true" />
+      <span>{available ? title : `已删除：${title}`}</span>
+    </NodeViewWrapper>
+  );
+};
+
 export const RecordAssetNode = Node.create({
   name: "recordAsset",
   addOptions() {
@@ -509,5 +568,50 @@ export const RecordInlineMathNode = Node.create({
         });
       },
     };
+  },
+});
+
+export const RecordReferenceNode = Node.create({
+  name: "recordReference",
+  inline: true,
+  group: "inline",
+  atom: true,
+  selectable: true,
+  draggable: false,
+
+  addOptions() {
+    return {
+      resolveReference: undefined,
+      subscribeReferenceChanges: undefined,
+      onOpenReference: undefined,
+    } satisfies RecordReferenceNodeOptions;
+  },
+
+  addAttributes() {
+    return {
+      recordId: {
+        default: "",
+        parseHTML: (element) => element.getAttribute("data-record-id") ?? "",
+        renderHTML: (attributes) => ({ "data-record-id": attributes.recordId }),
+      },
+      title: {
+        default: "日志引用",
+        parseHTML: (element) => element.getAttribute("data-title") ?? "日志引用",
+        renderHTML: (attributes) => ({ "data-title": attributes.title }),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "record-reference" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["record-reference", mergeAttributes(HTMLAttributes)];
+  },
+
+  addNodeView() {
+    const extensionOptions = this.options as RecordReferenceNodeOptions;
+    return ReactNodeViewRenderer((props) => <RecordReferenceNodeView {...props} extensionOptions={extensionOptions} />);
   },
 });

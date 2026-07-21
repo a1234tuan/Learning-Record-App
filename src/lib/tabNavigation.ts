@@ -15,10 +15,21 @@ export type MoreSubRoute =
   | null;
 export type ReviewMode = "queue" | "manage";
 
+export const MAX_RECORD_REFERENCE_DEPTH = 8;
+
+export type RecordReferenceNavigationEntry = {
+  recordId: string;
+  highlightAssetId?: string;
+  recordEditing?: boolean;
+  scrollY: number;
+};
+
 export type RecordTabState = {
   recordId?: string;
   highlightAssetId?: string;
   recordEditing?: boolean;
+  referenceStack?: RecordReferenceNavigationEntry[];
+  restoreScrollY?: number;
 };
 
 export type TabMemory = {
@@ -74,18 +85,51 @@ export const createInitialTabMemory = (): TabMemory => ({
   },
 });
 
+const referenceDepth = (state: RecordTabState): number => state.referenceStack?.length ?? 0;
+
+export const recordReferenceOpenError = (
+  state: RecordTabState,
+  targetRecordId: string,
+  maxDepth = MAX_RECORD_REFERENCE_DEPTH,
+): "missing-source" | "cycle" | "depth" | undefined => {
+  if (!state.recordId) {
+    return "missing-source";
+  }
+  const stack = state.referenceStack ?? [];
+  if ([state.recordId, ...stack.map((entry) => entry.recordId)].includes(targetRecordId)) {
+    return "cycle";
+  }
+  return stack.length >= maxDepth ? "depth" : undefined;
+};
+
+const popRecordReference = <T extends RecordTabState>(state: T): T | undefined => {
+  const stack = state.referenceStack ?? [];
+  const previous = stack.at(-1);
+  if (!previous) {
+    return undefined;
+  }
+  return {
+    ...state,
+    recordId: previous.recordId,
+    highlightAssetId: previous.highlightAssetId,
+    recordEditing: previous.recordEditing,
+    referenceStack: stack.slice(0, -1),
+    restoreScrollY: previous.scrollY,
+  };
+};
+
 export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
   switch (tab) {
     case "today":
-      return memory.today.recordId ? 1 : 0;
+      return memory.today.recordId ? 1 + referenceDepth(memory.today) : 0;
     case "journal":
-      return memory.journal.recordId ? 2 : memory.journal.searchOpen || memory.journal.selectedDate ? 1 : 0;
+      return memory.journal.recordId ? 2 + referenceDepth(memory.journal) : memory.journal.searchOpen || memory.journal.selectedDate ? 1 : 0;
     case "categories":
-      return memory.categories.recordId ? 2 : memory.categories.activeSubject || memory.categories.managing ? 1 : 0;
+      return memory.categories.recordId ? 2 + referenceDepth(memory.categories) : memory.categories.activeSubject || memory.categories.managing ? 1 : 0;
     case "review":
-      return memory.review.recordId ? 1 : 0;
+      return memory.review.recordId ? 1 + referenceDepth(memory.review) : 0;
     case "more":
-      return memory.more.recordId ? 2 : memory.more.subRoute ? 1 : 0;
+      return memory.more.recordId ? 2 + referenceDepth(memory.more) : memory.more.subRoute ? 1 : 0;
   }
 };
 
@@ -125,15 +169,25 @@ export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionI
 export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
   switch (tab) {
     case "today":
+      {
+        const previous = popRecordReference(memory.today);
+        if (previous) {
+          return { ...memory, today: previous };
+        }
+      }
       return {
         ...memory,
-        today: { ...memory.today, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+        today: { ...memory.today, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
       };
     case "journal":
       if (memory.journal.recordId) {
+        const previous = popRecordReference(memory.journal);
+        if (previous) {
+          return { ...memory, journal: previous };
+        }
         return {
           ...memory,
-          journal: { ...memory.journal, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+          journal: { ...memory.journal, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
         };
       }
       if (memory.journal.searchOpen) {
@@ -154,9 +208,13 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
       };
     case "categories":
       if (memory.categories.recordId) {
+        const previous = popRecordReference(memory.categories);
+        if (previous) {
+          return { ...memory, categories: previous };
+        }
         return {
           ...memory,
-          categories: { ...memory.categories, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+          categories: { ...memory.categories, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
         };
       }
       return {
@@ -164,15 +222,25 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
         categories: { ...memory.categories, activeSubject: null, managing: false },
       };
     case "review":
+      {
+        const previous = popRecordReference(memory.review);
+        if (previous) {
+          return { ...memory, review: previous };
+        }
+      }
       return {
         ...memory,
-        review: { ...memory.review, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+        review: { ...memory.review, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
       };
     case "more":
       if (memory.more.recordId) {
+        const previous = popRecordReference(memory.more);
+        if (previous) {
+          return { ...memory, more: previous };
+        }
         return {
           ...memory,
-          more: { ...memory.more, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined },
+          more: { ...memory.more, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
         };
       }
       return {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTabPageKey, createInitialTabMemory, getTabDepth, popTabDepth } from "./tabNavigation";
+import { buildTabPageKey, createInitialTabMemory, getTabDepth, popTabDepth, recordReferenceOpenError } from "./tabNavigation";
 
 describe("tabNavigation", () => {
   it("keeps each tab state independent", () => {
@@ -32,6 +32,49 @@ describe("tabNavigation", () => {
     expect(next.today.recordEditing).toBeUndefined();
     expect(next.categories.recordId).toBe("category-record");
     expect(next.categories.activeSubject).toBe("英语");
+  });
+
+  it("returns through record references before closing the source record", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      today: {
+        recordId: "record-target",
+        recordEditing: false,
+        referenceStack: [{ recordId: "record-source", recordEditing: false, scrollY: 384 }],
+      },
+    };
+
+    expect(getTabDepth("today", memory)).toBe(2);
+
+    const returned = popTabDepth(memory, "today");
+    expect(returned.today.recordId).toBe("record-source");
+    expect(returned.today.referenceStack).toEqual([]);
+    expect(returned.today.restoreScrollY).toBe(384);
+    expect(getTabDepth("today", returned)).toBe(1);
+
+    const closed = popTabDepth(returned, "today");
+    expect(closed.today.recordId).toBeUndefined();
+  });
+
+  it("blocks circular and over-limit reference navigation", () => {
+    const cycle = {
+      ...createInitialTabMemory(),
+      today: {
+        recordId: "record-b",
+        referenceStack: [{ recordId: "record-a", scrollY: 0 }],
+      },
+    };
+    const tooDeep = {
+      ...createInitialTabMemory(),
+      today: {
+        recordId: "record-9",
+        referenceStack: Array.from({ length: 8 }, (_, index) => ({ recordId: `record-${index}`, scrollY: 0 })),
+      },
+    };
+
+    expect(recordReferenceOpenError(cycle.today, "record-a")).toBe("cycle");
+    expect(recordReferenceOpenError(tooDeep.today, "record-10")).toBe("depth");
+    expect(recordReferenceOpenError(cycle.today, "record-c")).toBeUndefined();
   });
 
   it("returns journal subject records to the selected day first", () => {

@@ -93,6 +93,20 @@ describe("recordContent", () => {
     expect(recordToLinearMarkdown(synced)).toContain("$a^2+b^2=c^2$");
   });
 
+  it("keeps inline record references in HTML while exporting readable text and Markdown", () => {
+    const referenceRecord = {
+      ...record,
+      assets: [],
+      formulas: [],
+      contentHtml: '<p>关联到 <record-reference data-record-id="r2" data-title="线性代数总览"></record-reference>。</p>',
+    };
+
+    expect(normalizeRecordContent(referenceRecord)).toBe(referenceRecord.contentHtml);
+    expect(recordToPlainText(referenceRecord)).toContain("📎 线性代数总览");
+    expect(recordToPlainText(referenceRecord)).not.toContain("record-reference");
+    expect(recordToLinearMarkdown(referenceRecord)).toContain("[📎 线性代数总览](record://r2)");
+  });
+
   it("syncs record indexes from linear content", () => {
     const synced = syncRecordRefsFromContent({
       ...record,

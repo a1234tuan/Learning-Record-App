@@ -10,6 +10,7 @@ import {
 } from "../lib/recordStructureBlocks";
 import { readClipboardTextFallback } from "../lib/clipboard";
 import { isNativePlatform } from "../lib/platform";
+import type { RecordBlock, SubjectConfig } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
 
 vi.mock("../lib/platform", () => ({
@@ -72,6 +73,29 @@ const androidMarkdownSample = [
   "  - **被动不定式**：need **to be** encouraged",
 ].join("\r\n");
 
+const referenceRecord = (id: string, title: string, subject = "数学"): RecordBlock => ({
+  id,
+  createdAt: "2026-07-21T00:00:00.000Z",
+  updatedAt: "2026-07-21T00:00:00.000Z",
+  type: "record",
+  date: "2026-07-21",
+  order: 0,
+  subject,
+  title,
+  contentHtml: "<p></p>",
+  assets: [],
+  formulas: [],
+  mistakeRefs: [],
+});
+
+const referenceSubjects: SubjectConfig[] = [{
+  id: "subject-math",
+  createdAt: "2026-07-21T00:00:00.000Z",
+  updatedAt: "2026-07-21T00:00:00.000Z",
+  name: "数学",
+  order: 0,
+}];
+
 describe("RichTextEditor", () => {
   it("renders an ordered-list toolbar action", () => {
     render(<RichTextEditor value="<p>Item</p>" onChange={vi.fn()} />);
@@ -80,6 +104,66 @@ describe("RichTextEditor", () => {
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
+  });
+
+  it("inserts a compact record reference at the saved editor selection", async () => {
+    const onChange = vi.fn();
+    const source = referenceRecord("record-source", "来源日志");
+    const target = referenceRecord("record-target", "目标日志");
+    render(
+      <RichTextEditor
+        value="<p>正文</p>"
+        onChange={onChange}
+        currentRecordId={source.id}
+        referenceRecords={[source, target]}
+        referenceSubjects={referenceSubjects}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "引用日志" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索日志标题" }), { target: { value: "目标" } });
+    fireEvent.click(await screen.findByRole("button", { name: /目标日志/ }));
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-reference"));
+    const html = onChange.mock.calls.at(-1)?.[0] ?? "";
+    expect(html).toContain('data-record-id="record-target"');
+    expect(html).toContain('data-title="目标日志"');
+  });
+
+  it("opens available references only in read-only preview and marks deleted targets unavailable", async () => {
+    const onOpenRecordReference = vi.fn();
+    const source = referenceRecord("record-source", "来源日志");
+    const target = referenceRecord("record-target", "最新标题");
+    const referenceHtml = '<p>见 <record-reference data-record-id="record-target" data-title="旧标题"></record-reference></p>';
+    const view = render(
+      <RichTextEditor
+        value={referenceHtml}
+        onChange={vi.fn()}
+        readOnly
+        currentRecordId={source.id}
+        referenceRecords={[source, target]}
+        referenceSubjects={referenceSubjects}
+        onOpenRecordReference={onOpenRecordReference}
+      />,
+    );
+
+    const referenceLink = await screen.findByRole("link", { name: "引用日志：最新标题" });
+    fireEvent.click(referenceLink);
+    expect(onOpenRecordReference).toHaveBeenCalledWith(target.id);
+
+    view.rerender(
+      <RichTextEditor
+        value={referenceHtml}
+        onChange={vi.fn()}
+        readOnly
+        currentRecordId={source.id}
+        referenceRecords={[source]}
+        referenceSubjects={referenceSubjects}
+        onOpenRecordReference={onOpenRecordReference}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("已删除：旧标题")).toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: /旧标题/ })).not.toBeInTheDocument();
   });
 
   it("converts pasted Markdown with formulas into editor nodes", async () => {

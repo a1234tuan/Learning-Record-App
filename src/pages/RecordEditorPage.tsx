@@ -41,6 +41,9 @@ interface RecordEditorPageProps {
   onAssetChanged?: () => void;
   highlightedAssetId?: string;
   subjects: SubjectConfig[];
+  referenceRecords?: readonly RecordBlock[];
+  onOpenRecordReference?: (recordId: string) => void;
+  restoreScrollY?: number;
   onGetDraft: (recordId: string) => Promise<RecordDraft | undefined>;
   onSaveDraft: (draft: RecordDraft) => Promise<RecordDraft>;
   onDeleteDraft: (recordId: string) => Promise<void>;
@@ -114,6 +117,9 @@ export const RecordEditorPage = ({
   onAssetChanged,
   highlightedAssetId,
   subjects,
+  referenceRecords = [],
+  onOpenRecordReference,
+  restoreScrollY,
   onGetDraft,
   onSaveDraft,
   onDeleteDraft,
@@ -148,6 +154,14 @@ export const RecordEditorPage = ({
   const leavingRef = useRef(false);
   const stoppingRecordingRef = useRef<Promise<void> | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (draftLoading || restoreScrollY === undefined) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => window.scrollTo(0, restoreScrollY));
+    return () => window.cancelAnimationFrame(frame);
+  }, [draftLoading, record.id, restoreScrollY]);
 
   useEffect(() => {
     initialEditingRef.current = initialEditing;
@@ -748,6 +762,9 @@ export const RecordEditorPage = ({
             placeholder="像笔记页一样，把文字、思路、截图、公式和录音放进同一个记录块..."
             onAssetTitleChange={onAssetTitleChange}
             onPasteImage={uploadPastedImage}
+            currentRecordId={record.id}
+            referenceRecords={referenceRecords}
+            referenceSubjects={subjects}
             renderInsertTools={(editor) => {
               editorRef.current = editor;
               return (
@@ -830,6 +847,10 @@ export const RecordEditorPage = ({
             highlightedAssetId={highlightedAssetId}
             onAssetChanged={onAssetChanged}
             onAssetTitleChange={onAssetTitleChange}
+            currentRecordId={record.id}
+            referenceRecords={referenceRecords}
+            referenceSubjects={subjects}
+            onOpenRecordReference={onOpenRecordReference}
           />
           {(reviewState || reviewLogs.length > 0) && (
             <section className="record-review-panel">

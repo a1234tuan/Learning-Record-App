@@ -2,7 +2,7 @@ import type { Asset, RecordAssetRef, RecordBlock, RecordFormula } from "../types
 import { structureBlockMarkdownFromElement, structureBlockPlainTextFromElement } from "./recordStructureBlocks";
 
 export type LinearNode =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; markdown?: string }
   | { kind: "asset"; ref: RecordAssetRef; asset?: Asset; ocrText?: string }
   | { kind: "formula"; formula: RecordFormula; inline: boolean }
   | { kind: "highlight"; text: string; markdown: string }
@@ -34,6 +34,10 @@ const decodeHtml = (value: string): string => {
 
 const stripHtml = (html: string): string =>
   html
+    .replace(/<record-reference\b[^>]*data-title=(?:"([^"]*)"|'([^']*)')[^>]*>(?:<\/record-reference>)?/gi, (_match, doubleQuoted, singleQuoted) =>
+      `📎 ${decodeHtml(doubleQuoted ?? singleQuoted ?? "日志引用")}`,
+    )
+    .replace(/<record-reference\b[^>]*>(?:<\/record-reference>)?/gi, "📎 日志引用")
     .replace(/<record-inline-math\b[^>]*data-latex=(?:"([^"]*)"|'([^']*)')[^>]*>(?:<\/record-inline-math>)?/gi, (_match, doubleQuoted, singleQuoted) =>
       `$${decodeHtml(doubleQuoted ?? singleQuoted ?? "")}$`,
     )
@@ -45,6 +49,17 @@ const stripHtml = (html: string): string =>
 
 const parseElement = (html: string): Document => new DOMParser().parseFromString(html, "text/html");
 
+const recordReferenceMarkdown = (html: string): string =>
+  html.replace(/<record-reference\b([^>]*)>(?:<\/record-reference>)?/gi, (_match, attributes: string) => {
+    const recordId = /\bdata-record-id=(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
+    const title = /\bdata-title=(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
+    const id = decodeHtml(recordId?.[1] ?? recordId?.[2] ?? "").trim();
+    const label = decodeHtml(title?.[1] ?? title?.[2] ?? "日志引用").trim() || "日志引用";
+    return id ? `[📎 ${label}](record://${id})` : `📎 ${label}`;
+  });
+
+const inlineMarkdownText = (html: string): string => decodeHtml(stripHtml(recordReferenceMarkdown(html)));
+
 const serializeAssetNode = (asset: RecordAssetRef): string =>
   `<record-asset data-asset-id="${escapeHtml(asset.id)}" data-kind="${escapeHtml(asset.kind)}" data-title="${escapeHtml(asset.title)}"></record-asset>`;
 
@@ -52,7 +67,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|inline-math|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
+  /<record-(asset|formula|inline-math|reference|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -146,10 +161,10 @@ export const renameRecordAssetTitle = (
 const isStructureBlockTag = (tag: string): boolean =>
   tag === "record-structure-diagram" || tag === "record-comparison-table" || tag === "record-sticky-board";
 
-const collapseElementText = (element: Element, assetMap: Map<string, Asset>): string => {
+const collapseElementText = (element: Element, assetMap: Map<string, Asset>, useReferenceMarkdown = false): string => {
   const title = element.getAttribute("data-title") ?? "折叠块";
   const summary = element.getAttribute("data-summary") ?? "";
-  const bodyText = decodeHtml(stripHtml(element.innerHTML));
+  const bodyText = useReferenceMarkdown ? inlineMarkdownText(element.innerHTML) : decodeHtml(stripHtml(element.innerHTML));
   const structures = Array.from(element.querySelectorAll("record-structure-diagram, record-comparison-table, record-sticky-board"))
     .map(structureBlockPlainTextFromElement);
   const formulas = Array.from(element.querySelectorAll("record-formula, record-inline-math")).map((node) =>
@@ -167,7 +182,7 @@ const collapseElementMarkdown = (element: Element, assetMap: Map<string, Asset>)
   const open = element.getAttribute("data-default-open") === "true" ? " open" : "";
   const title = element.getAttribute("data-title") ?? "折叠块";
   const summary = element.getAttribute("data-summary");
-  const body = collapseElementText(element, assetMap)
+  const body = collapseElementText(element, assetMap, true)
     .split("\n")
     .filter((line) => line !== title && line !== summary)
     .join("\n");
@@ -185,11 +200,11 @@ const highlightToneLabel = (tone: string | null): string => {
   }
 };
 
-const highlightElementText = (element: Element): string =>
-  decodeHtml(stripHtml(element.innerHTML));
+const highlightElementText = (element: Element, useReferenceMarkdown = false): string =>
+  useReferenceMarkdown ? inlineMarkdownText(element.innerHTML) : decodeHtml(stripHtml(element.innerHTML));
 
 const highlightElementMarkdown = (element: Element): string => {
-  const text = highlightElementText(element);
+  const text = highlightElementText(element, true);
   const lines = text.split("\n").filter(Boolean);
   return [`> ${highlightToneLabel(element.getAttribute("data-tone"))}`, ...lines.map((line) => `> ${line}`)].join("\n");
 };
@@ -259,9 +274,10 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
 
     const wrapper = document.createElement("div");
     wrapper.append(child.cloneNode(true));
-    const text = decodeHtml(stripHtml(wrapper.innerHTML));
+    const html = wrapper.innerHTML;
+    const text = decodeHtml(stripHtml(html));
     if (text) {
-      nodes.push({ kind: "text", text });
+      nodes.push({ kind: "text", text, markdown: inlineMarkdownText(html) });
     }
   }
 
@@ -298,7 +314,7 @@ export const recordToLinearMarkdown = (record: RecordBlock, assets: Asset[] = []
     "",
     ...parseLinearRecordContent(record, assets).map((node) => {
       if (node.kind === "text") {
-        return node.text;
+        return node.markdown ?? node.text;
       }
       if (node.kind === "formula") {
         if (node.inline) {
