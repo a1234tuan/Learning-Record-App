@@ -4,7 +4,7 @@ import { registerSW } from "virtual:pwa-register";
 
 import { App } from "./App";
 import { cleanupNativeServiceWorker } from "./lib/nativeServiceWorker";
-import { isNativePlatform } from "./lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "./lib/platform";
 import "./styles.css";
 import "./styles/theme.css";
 import "./styles/layout.css";
@@ -19,7 +19,7 @@ const startApplication = async () => {
       window.location.reload();
       return;
     }
-  } else {
+  } else if (!isDesktopPlatform()) {
     registerSW({ immediate: true });
   }
 

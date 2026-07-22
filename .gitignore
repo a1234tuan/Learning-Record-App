@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dev-dist/
+build/
+release/
 .env
 .env.*
 .idea/

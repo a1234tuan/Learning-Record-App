@@ -42,6 +42,7 @@ interface RecordingsPageProps {
   onPlayerChange: (assetId: string | undefined) => void;
   onQueryChange: (query: string) => void;
   onSearchOpenChange: (open: boolean) => void;
+  onBack?: () => void;
   onRenameAudio: (assetId: string, title: string) => Promise<void> | void;
   onDurationKnown: (assetId: string, durationSeconds: number) => Promise<void> | void;
 }
@@ -482,6 +483,7 @@ export const RecordingsPage = ({
   onPlayerChange,
   onQueryChange,
   onSearchOpenChange,
+  onBack,
   onRenameAudio,
   onDurationKnown,
 }: RecordingsPageProps) => {
@@ -548,15 +550,23 @@ export const RecordingsPage = ({
         title="录音"
         subtitle="按学科查看日志里的录音文件。"
         actions={(
-          <button
-            type="button"
-            className={`icon-button ${searchOpen ? "active" : ""}`}
-            title="搜索录音"
-            aria-label="搜索录音"
-            onClick={() => onSearchOpenChange(!searchOpen)}
-          >
-            <Search size={18} />
-          </button>
+          <>
+            {onBack && (
+              <button type="button" className="secondary-button" onClick={onBack}>
+                <ArrowLeft size={18} />
+                返回
+              </button>
+            )}
+            <button
+              type="button"
+              className={`icon-button ${searchOpen ? "active" : ""}`}
+              title="搜索录音"
+              aria-label="搜索录音"
+              onClick={() => onSearchOpenChange(!searchOpen)}
+            >
+              <Search size={18} />
+            </button>
+          </>
         )}
       />
 

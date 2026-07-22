@@ -12,6 +12,9 @@ type RecordContentSyncOptions = {
   preserveLegacyRefs?: boolean;
 };
 
+// Preserve editor indentation through the existing whitespace normalization.
+const RECORD_TAB_PLACEHOLDER = "\uE000";
+
 const escapeHtml = (value: string): string =>
   value
     .replace(/&/g, "&amp;")
@@ -34,6 +37,7 @@ const decodeHtml = (value: string): string => {
 
 const stripHtml = (html: string): string =>
   html
+    .replace(/<record-tab\b[^>]*>(?:<\/record-tab>)?/gi, RECORD_TAB_PLACEHOLDER)
     .replace(/<record-reference\b[^>]*data-title=(?:"([^"]*)"|'([^']*)')[^>]*>(?:<\/record-reference>)?/gi, (_match, doubleQuoted, singleQuoted) =>
       `📎 ${decodeHtml(doubleQuoted ?? singleQuoted ?? "日志引用")}`,
     )
@@ -45,7 +49,8 @@ const stripHtml = (html: string): string =>
     .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .trim()
+    .replaceAll(RECORD_TAB_PLACEHOLDER, "\t");
 
 const parseElement = (html: string): Document => new DOMParser().parseFromString(html, "text/html");
 
@@ -67,7 +72,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|inline-math|reference|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
+  /<record-(asset|formula|inline-math|reference|tab|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {

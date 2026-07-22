@@ -615,3 +615,24 @@ export const RecordReferenceNode = Node.create({
     return ReactNodeViewRenderer((props) => <RecordReferenceNodeView {...props} extensionOptions={extensionOptions} />);
   },
 });
+
+export const RecordTabStopNode = Node.create({
+  name: "recordTabStop",
+  inline: true,
+  group: "inline",
+  atom: true,
+  selectable: true,
+  draggable: false,
+
+  parseHTML() {
+    return [{ tag: "record-tab" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["record-tab", mergeAttributes(HTMLAttributes, { "data-width": "4", "aria-label": "缩进" })];
+  },
+
+  renderText() {
+    return "\t";
+  },
+});

@@ -637,6 +637,11 @@ button:disabled {
   background: transparent;
 }
 
+.desktop-app .editor-shell:not(.read-only) .rich-editor {
+  padding-block-end: 8.5rem;
+  scroll-padding-block-end: 8.5rem;
+}
+
 .editor-heading-select,
 .editor-code-language-select {
   min-width: 58px;
@@ -669,6 +674,14 @@ button:disabled {
 
 .rich-editor p {
   margin: 0.45em 0;
+}
+
+.rich-editor record-tab {
+  display: inline-block;
+  inline-size: 4ch;
+  min-inline-size: 4ch;
+  vertical-align: baseline;
+  user-select: all;
 }
 
 /* The editor normalizes these containers to end in a real empty paragraph. */

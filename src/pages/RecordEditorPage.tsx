@@ -10,7 +10,7 @@ import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioReco
 import { StructureInsertMenu } from "../components/StructureInsertMenu";
 import { newId } from "../lib/entity";
 import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
-import { isNativePlatform } from "../lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
 import { ratingLabel, reviewKindLabel } from "../lib/reviewScheduler";
@@ -27,6 +27,7 @@ import {
   stopNativeAudioRecording,
 } from "../services/nativeAudioRecorder";
 import { useRestoreInProgress } from "../services/restoreLockService";
+import { registerDesktopFlushHandler } from "../services/desktopLifecycleService";
 
 interface RecordEditorPageProps {
   record: RecordBlock;
@@ -357,6 +358,16 @@ export const RecordEditorPage = ({
         void flushDraft().catch(() => undefined);
       }
     };
+  }, [cancelScheduledDraftSave, flushDraft]);
+
+  useEffect(() => {
+    if (!isDesktopPlatform()) {
+      return undefined;
+    }
+    return registerDesktopFlushHandler(async () => {
+      cancelScheduledDraftSave();
+      await flushDraft(draftRef.current, { force: true });
+    });
   }, [cancelScheduledDraftSave, flushDraft]);
 
   const update = (patch: Partial<RecordBlock>) => {

@@ -3,7 +3,12 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Block, RecordBlock } from "../types";
+import { isDesktopPlatform } from "../lib/platform";
 import { SearchPage } from "./SearchPage";
+
+vi.mock("../lib/platform", () => ({
+  isDesktopPlatform: vi.fn(() => false),
+}));
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -76,5 +81,24 @@ describe("SearchPage", () => {
     await waitFor(() => expect(screen.getByText("结果较多，仅显示前 200 条，请缩小关键词。")).toBeInTheDocument());
     expect(screen.getByText("结果 200")).toBeInTheDocument();
     expect(document.querySelectorAll(".search-result")).toHaveLength(200);
+  });
+
+  it("does not push desktop IME composition text into the global search state", () => {
+    const onQueryChange = vi.fn();
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(<SearchPage entries={[]} blocks={[]} assets={[]} query="" onQueryChange={onQueryChange} />);
+      const input = screen.getByPlaceholderText(/搜索/);
+
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: "zhong" } });
+      expect(onQueryChange).not.toHaveBeenCalled();
+
+      fireEvent.compositionEnd(input, { data: "中", target: { value: "中" } });
+      expect(onQueryChange).toHaveBeenCalledTimes(1);
+      expect(onQueryChange).toHaveBeenLastCalledWith("中");
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
   });
 });

@@ -9,12 +9,13 @@ import {
   serializeStructureData,
 } from "../lib/recordStructureBlocks";
 import { readClipboardTextFallback } from "../lib/clipboard";
-import { isNativePlatform } from "../lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import type { RecordBlock, SubjectConfig } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
 
 vi.mock("../lib/platform", () => ({
   isNativePlatform: vi.fn(() => false),
+  isDesktopPlatform: vi.fn(() => false),
 }));
 
 vi.mock("../lib/clipboard", async () => {
@@ -104,6 +105,67 @@ describe("RichTextEditor", () => {
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
+  });
+
+  it("uses desktop heading shortcuts and preserves a visible tab stop in content", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<p>桌面正文</p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => setSelectionInsideText(editorRef!, "桌面正文"));
+      const editorElement = document.querySelector(".rich-editor")!;
+
+      fireEvent.keyDown(editorElement, { key: "2", ctrlKey: true });
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<h2>桌面正文</h2>"));
+
+      fireEvent.keyDown(editorElement, { key: "0", ctrlKey: true });
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<p>桌面正文</p>"));
+
+      fireEvent.keyDown(editorElement, { key: "Tab" });
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("<record-tab"));
+
+      fireEvent.keyDown(editorElement, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).not.toContain("<record-tab"));
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
+  });
+
+  it("inserts a literal tab in desktop code blocks", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<pre><code>const value = 1;</code></pre>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => setSelectionInsideText(editorRef!, "const value"));
+      fireEvent.keyDown(document.querySelector(".rich-editor")!, { key: "Tab" });
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("\t"));
+      expect(onChange.mock.calls.at(-1)?.[0]).not.toContain("record-tab");
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
   });
 
   it("inserts a compact record reference at the saved editor selection", async () => {

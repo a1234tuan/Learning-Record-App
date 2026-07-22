@@ -73,6 +73,18 @@ describe("recordContent", () => {
     expect(synced.formulas).toEqual([]);
   });
 
+  it("keeps desktop tab stops in plain-text and Markdown exports", () => {
+    const indented = {
+      ...record,
+      assets: [],
+      formulas: [],
+      contentHtml: "<p><record-tab data-width=\"4\"></record-tab>缩进正文</p>",
+    };
+
+    expect(recordToPlainText(indented)).toContain("\t缩进正文");
+    expect(recordToLinearMarkdown(indented)).toContain("\t缩进正文");
+  });
+
   it("extracts record refs from content", () => {
     const refs = extractRecordRefsFromContent(normalizeRecordContent(record));
 

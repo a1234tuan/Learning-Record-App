@@ -113,6 +113,15 @@ describe("RecordingsPage", () => {
     expect(props.onSelectedSubjectChange).toHaveBeenCalledWith("OS");
   });
 
+  it("exposes a root-level return action when opened from More", () => {
+    const onBack = vi.fn();
+    renderPage({ onBack });
+
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it("lists recordings inside a subject folder", () => {
     renderPage({ selectedSubject: "OS" });
 

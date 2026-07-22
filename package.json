@@ -4,8 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 127.0.0.1",
+    "web:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-web.ps1",
     "build": "tsc -b && vite build",
+    "desktop:icon": "node scripts/create-desktop-icon.cjs",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:build": "npm run desktop:icon && npm run build && electron-builder --win nsis",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -61,10 +65,47 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.2.0",
+    "electron-builder": "26.0.12",
     "jsdom": "^25.0.1",
+    "png-to-ico": "^2.1.0",
+    "sharp": "^0.34.4",
     "typescript": "^5.7.2",
     "vite": "^6.0.6",
     "vite-plugin-pwa": "^0.21.1",
     "vitest": "^2.1.8"
+  },
+  "main": "desktop/main.cjs",
+  "build": {
+    "appId": "com.noteproject.study408.desktop",
+    "productName": "学习日志",
+    "directories": {
+      "output": "release/desktop"
+    },
+    "files": [
+      "dist/**",
+      "desktop/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "desktop/installer.nsh",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "学习日志"
+    }
   }
 }

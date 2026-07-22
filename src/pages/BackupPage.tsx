@@ -9,6 +9,7 @@ import { restoreNativeRepositoryBackup } from "../services/nativeRepositoryBacku
 import { storage } from "../services/storageAdapter";
 import { manualZipSyncAdapter } from "../services/syncAdapters";
 import { isNativePlatform } from "../lib/platform";
+import { canUseNativeAutoBackup } from "../services/nativeAutoBackup";
 import { AutoBackupPanel } from "../components/AutoBackupPanel";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { importRecordTransferPackage, parseRecordTransferPackage } from "../services/recordTransferService";
@@ -83,6 +84,7 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
   const transferInputRef = useRef<HTMLInputElement>(null);
   const transferAbortRef = useRef<AbortController>();
   const native = isNativePlatform();
+  const repositoryAvailable = canUseNativeAutoBackup();
 
   useEffect(() => () => transferAbortRef.current?.abort(), []);
 
@@ -343,12 +345,12 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
             </button>
           </SurfaceCard>
 
-          {native && (
+          {repositoryAvailable && (
             <SurfaceCard className="more-action-card backup-action-card" variant="raised">
               <div>
                 <DatabaseBackup size={20} />
                 <h3>自动备份文件夹恢复</h3>
-                <p>从已绑定的增量仓库拉取恢复，可选择仓库父文件夹或 study-journal-backup 本身。恢复前会先校验快照和资源完整性。</p>
+                <p>从已绑定的增量仓库拉取恢复。Windows 请先绑定包含 study-journal-backup 的文件夹；恢复前会校验快照和资源完整性。</p>
               </div>
               <button type="button" className="secondary-button" onClick={importRepository} disabled={busy !== null}>
                 <DatabaseBackup size={18} />

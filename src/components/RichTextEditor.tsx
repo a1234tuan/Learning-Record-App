@@ -16,7 +16,7 @@ import cpp from "highlight.js/lib/languages/cpp";
 import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
-import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode, RecordReferenceNode, type RecordReferenceTarget } from "./RecordEditorNodes";
+import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode, RecordReferenceNode, RecordTabStopNode, type RecordReferenceTarget } from "./RecordEditorNodes";
 import { ImageLightbox } from "./ImageLightbox";
 import { RecordReferencePicker } from "./RecordReferencePicker";
 import {
@@ -48,7 +48,7 @@ import {
 } from "../lib/markdownEditor";
 import { applyComposedMarkdownTransform, MarkdownTypingExtension } from "../lib/markdownInputRules";
 import { MarkdownLinkMark } from "../lib/markdownLinkMark";
-import { isNativePlatform } from "../lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { TrailingEditableParagraph } from "../lib/trailingEditableParagraph";
 import {
   MARKDOWN_PASTE_LIMITS,
@@ -227,6 +227,107 @@ const MarkdownPasteConversionExtension = Extension.create<MarkdownPasteConversio
     };
   },
 });
+
+const desktopEditorControlHasFocus = (): boolean => {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && Boolean(active.closest("input, textarea, select, button"));
+};
+
+const DesktopEditorShortcuts = Extension.create({
+  name: "desktopEditorShortcuts",
+
+  addKeyboardShortcuts() {
+    const setHeading = (level: 1 | 2 | 3 | 4) => () => {
+      if (!isDesktopPlatform() || desktopEditorControlHasFocus()) {
+        return false;
+      }
+      return this.editor.commands.setHeading({ level });
+    };
+    const setParagraph = () => {
+      if (!isDesktopPlatform() || desktopEditorControlHasFocus()) {
+        return false;
+      }
+      return this.editor.commands.setParagraph();
+    };
+    const insertTab = () => {
+      if (!isDesktopPlatform() || desktopEditorControlHasFocus()) {
+        return false;
+      }
+      const { state } = this.editor;
+      if (state.selection.$from.parent.type.name === "codeBlock") {
+        return this.editor.commands.insertContent("\t");
+      }
+      const tabStop = state.schema.nodes.recordTabStop;
+      if (!tabStop) {
+        return false;
+      }
+      return this.editor.commands.command(({ tr, dispatch }) => {
+        if (dispatch) {
+          dispatch(tr.replaceSelectionWith(tabStop.create()).scrollIntoView());
+        }
+        return true;
+      });
+    };
+    const removeTab = () => {
+      if (!isDesktopPlatform() || desktopEditorControlHasFocus()) {
+        return false;
+      }
+      const { state } = this.editor;
+      if (!state.selection.empty) {
+        return true;
+      }
+      const { $from } = state.selection;
+      const previousNode = $from.nodeBefore;
+      if ($from.parent.type.name === "codeBlock" && previousNode?.isText && previousNode.text?.endsWith("\t")) {
+        return this.editor.commands.command(({ tr, dispatch }) => {
+          if (dispatch) {
+            dispatch(tr.delete($from.pos - 1, $from.pos).scrollIntoView());
+          }
+          return true;
+        });
+      }
+      if (previousNode?.type.name !== "recordTabStop") {
+        return true;
+      }
+      return this.editor.commands.command(({ tr, dispatch }) => {
+        if (dispatch) {
+          dispatch(tr.delete($from.pos - previousNode.nodeSize, $from.pos).scrollIntoView());
+        }
+        return true;
+      });
+    };
+
+    return {
+      "Ctrl-1": setHeading(1),
+      "Ctrl-2": setHeading(2),
+      "Ctrl-3": setHeading(3),
+      "Ctrl-4": setHeading(4),
+      "Ctrl-0": setParagraph,
+      Tab: insertTab,
+      "Shift-Tab": removeTab,
+    };
+  },
+});
+
+const keepDesktopSelectionAboveViewportBottom = (view: EditorView): boolean => {
+  if (!isDesktopPlatform() || !view.hasFocus() || view.composing) {
+    return false;
+  }
+  window.requestAnimationFrame(() => {
+    if (!view.hasFocus() || view.isDestroyed) {
+      return;
+    }
+    const viewport = window.visualViewport;
+    const viewportHeight = viewport?.height ?? window.innerHeight;
+    const lineHeight = Number.parseFloat(window.getComputedStyle(view.dom).lineHeight) || 26;
+    const safeBottom = Math.max(0, viewportHeight - lineHeight * 5 - 24);
+    const caret = view.coordsAtPos(view.state.selection.head);
+    if (caret.bottom > safeBottom) {
+      window.scrollBy({ top: Math.ceil(caret.bottom - safeBottom), behavior: "auto" });
+    }
+  });
+  return false;
+};
 
 const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): ClipboardSnapshot => ({
   markdown: clipboardData?.getData("text/markdown") || "",
@@ -1258,6 +1359,7 @@ export const RichTextEditor = ({
       }),
       RecordFormulaNode,
       RecordInlineMathNode,
+      RecordTabStopNode,
       RecordReferenceNode.configure({
         resolveReference: (recordId: string) => recordReferenceTargetsRef.current.get(recordId),
         subscribeReferenceChanges: (listener: () => void) => {
@@ -1272,6 +1374,7 @@ export const RichTextEditor = ({
       RecordCollapseBlockNode,
       RecordHighlightBlockNode,
       TrailingEditableParagraph,
+      DesktopEditorShortcuts,
       MarkdownPasteConversionExtension.configure({
         onCancel: () => cancelMarkdownPasteConversion(),
       }),
@@ -1354,6 +1457,7 @@ export const RichTextEditor = ({
           return false;
         },
       },
+      handleScrollToSelection: (view) => keepDesktopSelectionAboveViewportBottom(view),
       handlePaste: (view, event) => {
         if (isNativePlatform()) {
           event.preventDefault();

@@ -165,7 +165,19 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
     case "review":
       return memory.review.recordId ? 1 + referenceDepth(memory.review) : 0;
     case "more":
-      return memory.more.recordId ? 2 + referenceDepth(memory.more) : memory.more.subRoute ? 1 : 0;
+      if (memory.more.recordId) {
+        return 2 + referenceDepth(memory.more);
+      }
+      if (memory.more.subRoute !== "recordings") {
+        return memory.more.subRoute ? 1 : 0;
+      }
+      if (memory.more.recordingsState.playerAssetId) {
+        return 3;
+      }
+      if (memory.more.recordingsState.selectedSubject || memory.more.recordingsState.searchOpen) {
+        return 2;
+      }
+      return 1;
   }
 };
 
@@ -278,6 +290,35 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
           ...memory,
           more: { ...memory.more, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
         };
+      }
+      if (memory.more.subRoute === "recordings") {
+        if (memory.more.recordingsState.playerAssetId) {
+          return {
+            ...memory,
+            more: {
+              ...memory.more,
+              recordingsState: { ...memory.more.recordingsState, playerAssetId: undefined },
+            },
+          };
+        }
+        if (memory.more.recordingsState.selectedSubject) {
+          return {
+            ...memory,
+            more: {
+              ...memory.more,
+              recordingsState: { ...memory.more.recordingsState, selectedSubject: undefined },
+            },
+          };
+        }
+        if (memory.more.recordingsState.searchOpen) {
+          return {
+            ...memory,
+            more: {
+              ...memory.more,
+              recordingsState: { ...memory.more.recordingsState, searchOpen: false },
+            },
+          };
+        }
       }
       return {
         ...memory,

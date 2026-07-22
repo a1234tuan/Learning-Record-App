@@ -273,7 +273,7 @@ export const writeNativeRepositoryBackupSnapshot = async (
   options: ExportOptions = {},
 ): Promise<RepositoryWriteSummary> => {
   if (!canUseNativeAutoBackup()) {
-    throw new Error("Android 增量文件夹备份只在 Android App 内可用。");
+    throw new Error("增量文件夹备份只在 Android 或 Windows 桌面应用内可用。");
   }
 
   options.onProgress?.({ stage: "preparing", message: "正在准备增量备份仓库。" });
@@ -471,7 +471,7 @@ export const restoreNativeRepositoryBackup = async (
 ): Promise<ImportSummary> =>
   withRestoreLock(async () => {
     if (!canUseNativeAutoBackup()) {
-      throw new Error("Android 增量文件夹恢复只在 Android App 内可用。");
+      throw new Error("增量文件夹恢复只在 Android 或 Windows 桌面应用内可用。");
     }
 
     options.onProgress?.({ stage: "indexing", message: "正在检查自动备份仓库。" });

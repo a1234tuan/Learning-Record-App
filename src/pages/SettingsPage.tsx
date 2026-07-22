@@ -1,25 +1,37 @@
-import { Download, FolderSync, Upload } from "lucide-react";
+import { Bot, DatabaseBackup, Download, FolderSync, ScanText, Upload } from "lucide-react";
 import { useState } from "react";
 
 import type { AppSettings } from "../types";
 import { storage } from "../services/storageAdapter";
 import { fileSystemFolderSyncAdapter, manualZipSyncAdapter } from "../services/syncAdapters";
 import { nativeBackupAdapter } from "../services/nativeBackupAdapter";
-import { isNativePlatform } from "../lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
 import { importAndRestoreSnapshot } from "../services/importRestoreService";
 import { AutoBackupPanel } from "../components/AutoBackupPanel";
+import { ListRow } from "../components/ui";
 
 interface SettingsPageProps {
   settings: AppSettings;
   onSaveSettings: (settings: AppSettings) => void;
   onRestored: () => void;
+  onOpenBackup: () => void;
+  onOpenAiTools: () => void;
+  onOpenOcrSettings: () => void;
 }
 
-export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsPageProps) => {
+export const SettingsPage = ({
+  settings,
+  onSaveSettings,
+  onRestored,
+  onOpenBackup,
+  onOpenAiTools,
+  onOpenOcrSettings,
+}: SettingsPageProps) => {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"export" | "import" | "folder" | null>(null);
   const native = isNativePlatform();
+  const desktop = isDesktopPlatform();
   const folderAvailable = fileSystemFolderSyncAdapter.isAvailable();
 
   const exportZip = async () => {
@@ -86,7 +98,7 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
       <section className="section-header">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1>数据与偏好</h1>
+          <h1>设置</h1>
         </div>
       </section>
       <section className="settings-panel">
@@ -132,6 +144,29 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
           />
         </label>
       </section>
+      <section className="more-section settings-entry-section">
+        <h2>数据与服务</h2>
+        <div className="more-list">
+          <ListRow
+            icon={<DatabaseBackup size={19} />}
+            title="日志互通与备份"
+            description="完整备份、恢复、自动备份和单条或多条日志互通"
+            onClick={onOpenBackup}
+          />
+          <ListRow
+            icon={<Bot size={19} />}
+            title="AI 设置与聊天"
+            description="供应商、模型、预设、聊天记录和 AI 材料导出"
+            onClick={onOpenAiTools}
+          />
+          <ListRow
+            icon={<ScanText size={19} />}
+            title="OCR 设置"
+            description="配置图片文字识别 Token，用于检索和 AI 图片问答"
+            onClick={onOpenOcrSettings}
+          />
+        </div>
+      </section>
       <AutoBackupPanel settings={settings} onChanged={onRestored} />
       <section className="backup-panel">
         <button type="button" className="primary-button" onClick={exportZip} disabled={busy !== null}>
@@ -142,7 +177,7 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
           <Upload size={18} />
           {native ? "从文件导入" : "导入恢复"}
         </button>
-        {!native && (
+        {!native && !desktop && (
           <button
             type="button"
             className="secondary-button"
@@ -153,7 +188,7 @@ export const SettingsPage = ({ settings, onSaveSettings, onRestored }: SettingsP
             写入同步文件夹
           </button>
         )}
-        {!native && !folderAvailable && (
+        {!native && !desktop && !folderAvailable && (
           <p className="helper-text">当前浏览器不支持目录授权，仍可使用手动 zip 备份与恢复。</p>
         )}
         {native && <p className="helper-text">Android 版会把备份写入应用文档目录，并通过系统分享面板发送到网盘、微信或文件管理器。</p>}

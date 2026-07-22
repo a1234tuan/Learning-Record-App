@@ -3,6 +3,7 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import {
   BarChart3,
+  ArrowLeft,
   BrainCircuit,
   CalendarDays,
   CalendarCheck,
@@ -40,6 +41,9 @@ import { exportRecordTransferPackage } from "./services/recordTransferService";
 import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
+import { isDesktopPlatform } from "./lib/platform";
+import { onAppBackgroundAutoBackup } from "./services/autoBackupService";
+import { flushDesktopPendingChanges } from "./services/desktopLifecycleService";
 import {
   buildTabPageKey,
   createInitialTabMemory,
@@ -53,9 +57,17 @@ import {
   type TabKey,
   type TabMemory,
 } from "./lib/tabNavigation";
+import {
+  createWebNavigationSessionId,
+  createWebNavigationSnapshot,
+  isCurrentWebNavigationSession,
+  restoreWebNavigationSnapshot,
+} from "./lib/webNavigationHistory";
 
 const sameIds = (left: string[], right: string[]) =>
   left.length === right.length && left.every((id, index) => id === right[index]);
+
+const DESKTOP_MIGRATION_SEEN_KEY = "study-journal-desktop-migration-seen";
 
 const isEditableElement = (target: EventTarget | Element | null) => {
   if (!(target instanceof Element)) {
@@ -136,16 +148,33 @@ const bottomNavItems: Array<{ tab: TabKey; label: string; icon: typeof Home }> =
   { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
 
+type NavigationState = {
+  activeTab: TabKey;
+  tabMemory: TabMemory;
+  activeAiSessionId: string | null;
+};
+
+type NavigationCommitOptions = {
+  history?: "push" | "replace" | "none";
+  scrollToTop?: boolean;
+};
+
 export const App = () => {
   const [activeTab, setActiveTab] = useState<TabKey>("today");
   const [tabMemory, setTabMemory] = useState<TabMemory>(() => createInitialTabMemory());
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
   const [backToast, setBackToast] = useState("");
   const [reviewToast, setReviewToast] = useState("");
+  const [desktopMigrationOpen, setDesktopMigrationOpen] = useState(false);
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
+  const navigationStateRef = useRef<NavigationState>({ activeTab, tabMemory, activeAiSessionId });
+  const webNavigationSessionRef = useRef<string | null>(null);
+  const historyScrollRestoreRef = useRef(0);
   const app = useAppData();
   const keyboardVisible = useKeyboardVisible();
+
+  navigationStateRef.current = { activeTab, tabMemory, activeAiSessionId };
 
   const clearBackHint = useCallback(() => {
     lastBackPressRef.current = 0;
@@ -156,21 +185,73 @@ export const App = () => {
     setBackToast("");
   }, []);
 
+  const commitNavigation = useCallback((next: NavigationState, options: NavigationCommitOptions = {}) => {
+    const current = navigationStateRef.current;
+    const historyMode = options.history ?? "push";
+    const sessionId = webNavigationSessionRef.current;
+    const webNavigationEnabled = !Capacitor.isNativePlatform() && !isDesktopPlatform() && Boolean(sessionId);
+    const nextScrollY = options.scrollToTop ? 0 : window.scrollY;
+
+    if (webNavigationEnabled && sessionId && historyMode !== "none") {
+      const currentSnapshot = createWebNavigationSnapshot(
+        sessionId,
+        current.activeTab,
+        current.tabMemory,
+        current.activeAiSessionId,
+        window.scrollY,
+      );
+      const nextSnapshot = createWebNavigationSnapshot(
+        sessionId,
+        next.activeTab,
+        next.tabMemory,
+        next.activeAiSessionId,
+        nextScrollY,
+      );
+      if (historyMode === "push") {
+        window.history.replaceState(currentSnapshot, "");
+        window.history.pushState(nextSnapshot, "");
+      } else {
+        window.history.replaceState(nextSnapshot, "");
+      }
+    }
+
+    navigationStateRef.current = next;
+    setActiveTab(next.activeTab);
+    setTabMemory(next.tabMemory);
+    setActiveAiSessionId(next.activeAiSessionId);
+    if (options.scrollToTop) {
+      window.scrollTo(0, 0);
+    }
+  }, []);
+
+  const updateNavigationState = useCallback((update: (current: NavigationState) => NavigationState, history: "replace" | "none" = "replace") => {
+    const current = navigationStateRef.current;
+    commitNavigation(update(current), { history });
+  }, [commitNavigation]);
+
   const switchTab = useCallback(
     (tab: TabKey) => {
       clearBackHint();
-      setActiveTab(tab);
+      const current = navigationStateRef.current;
+      if (current.activeTab === tab) {
+        return;
+      }
+      commitNavigation({ ...current, activeTab: tab });
     },
-    [clearBackHint],
+    [clearBackHint, commitNavigation],
   );
 
   const openMoreSubRoute = useCallback(
     (subRoute: MoreSubRoute) => {
       clearBackHint();
-      setTabMemory((current) => ({
-        ...current,
+      const current = navigationStateRef.current;
+      if (current.activeTab === "more" && current.tabMemory.more.subRoute === subRoute && !current.tabMemory.more.recordId) {
+        return;
+      }
+      const nextMemory: TabMemory = {
+        ...current.tabMemory,
         more: {
-          ...current.more,
+          ...current.tabMemory.more,
           subRoute,
           recordId: undefined,
           highlightAssetId: undefined,
@@ -178,48 +259,69 @@ export const App = () => {
           referenceStack: [],
           restoreScrollY: undefined,
         },
-      }));
-      setActiveTab("more");
+      };
+      commitNavigation({ ...current, activeTab: "more", tabMemory: nextMemory });
     },
-    [clearBackHint],
+    [clearBackHint, commitNavigation],
   );
+
+  const dismissDesktopMigration = useCallback(() => {
+    localStorage.setItem(DESKTOP_MIGRATION_SEEN_KEY, "1");
+    setDesktopMigrationOpen(false);
+  }, []);
+
+  const openDesktopMigration = useCallback(() => {
+    dismissDesktopMigration();
+    openMoreSubRoute("backup");
+  }, [dismissDesktopMigration, openMoreSubRoute]);
 
   const openRecordInTab = useCallback(
     (record: RecordBlock, tab: TabKey, assetId?: string, editing = false) => {
       clearBackHint();
-      setTabMemory((current) => ({
-        ...current,
+      const current = navigationStateRef.current;
+      const nextMemory: TabMemory = {
+        ...current.tabMemory,
         [tab]: {
-          ...current[tab],
+          ...current.tabMemory[tab],
           recordId: record.id,
           highlightAssetId: assetId,
           recordEditing: editing,
           referenceStack: [],
           restoreScrollY: undefined,
         },
-      }));
-      setActiveTab(tab);
+      };
+      commitNavigation({ ...current, activeTab: tab, tabMemory: nextMemory });
     },
-    [clearBackHint],
+    [clearBackHint, commitNavigation],
   );
 
-  const closeRecordInCurrentTab = useCallback(() => {
-    setTabMemory((current) => popTabDepth(current, activeTab));
-  }, [activeTab]);
+  const popCurrentTabDepth = useCallback(() => {
+    const current = navigationStateRef.current;
+    const sessionId = webNavigationSessionRef.current;
+    if (!Capacitor.isNativePlatform() && !isDesktopPlatform() && sessionId && isCurrentWebNavigationSession(window.history.state, sessionId)) {
+      window.history.back();
+      return;
+    }
+    const nextMemory = popTabDepth(current.tabMemory, current.activeTab);
+    if (nextMemory !== current.tabMemory) {
+      commitNavigation({ ...current, tabMemory: nextMemory }, { history: "none" });
+    }
+  }, [commitNavigation]);
+
+  const closeRecordInCurrentTab = popCurrentTabDepth;
 
   const setCurrentRecordEditing = useCallback((recordEditing: boolean) => {
-    setTabMemory((current) => ({
+    updateNavigationState((current) => ({
       ...current,
-      [activeTab]: {
-        ...current[activeTab],
+      tabMemory: {
+        ...current.tabMemory,
+        [current.activeTab]: {
+          ...current.tabMemory[current.activeTab],
         recordEditing,
       },
+      },
     }));
-  }, [activeTab]);
-
-  const popCurrentTabDepth = useCallback(() => {
-    setTabMemory((current) => popTabDepth(current, activeTab));
-  }, [activeTab]);
+  }, [updateNavigationState]);
 
   useEffect(() => {
     if (!app.settings) {
@@ -229,6 +331,81 @@ export const App = () => {
     document.documentElement.style.setProperty("--reading-line-height", String(app.settings.lineHeight));
     document.documentElement.dataset.theme = app.settings.theme;
   }, [app.settings]);
+
+  useEffect(() => {
+    if (!app.initialized || !isDesktopPlatform() || localStorage.getItem(DESKTOP_MIGRATION_SEEN_KEY)) {
+      return;
+    }
+    const hasActiveRecord = app.blocks.some((block) => block.type === "record" && !block.deletedAt);
+    if (!hasActiveRecord) {
+      setDesktopMigrationOpen(true);
+    }
+  }, [app.blocks, app.initialized]);
+
+  useEffect(() => {
+    if (!app.initialized || Capacitor.isNativePlatform() || isDesktopPlatform()) {
+      return undefined;
+    }
+
+    const sessionId = createWebNavigationSessionId();
+    webNavigationSessionRef.current = sessionId;
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    const initial = navigationStateRef.current;
+    window.history.replaceState(
+      createWebNavigationSnapshot(sessionId, initial.activeTab, initial.tabMemory, initial.activeAiSessionId, window.scrollY),
+      "",
+    );
+
+    const onPopState = (event: PopStateEvent) => {
+      const snapshot = restoreWebNavigationSnapshot(event.state);
+      if (!snapshot || snapshot.sessionId !== sessionId) {
+        return;
+      }
+
+      clearBackHint();
+      navigationStateRef.current = {
+        activeTab: snapshot.activeTab,
+        tabMemory: snapshot.tabMemory,
+        activeAiSessionId: snapshot.activeAiSessionId,
+      };
+      setActiveTab(snapshot.activeTab);
+      setTabMemory(snapshot.tabMemory);
+      setActiveAiSessionId(snapshot.activeAiSessionId);
+
+      if (historyScrollRestoreRef.current) {
+        window.cancelAnimationFrame(historyScrollRestoreRef.current);
+      }
+      historyScrollRestoreRef.current = window.requestAnimationFrame(() => {
+        historyScrollRestoreRef.current = window.requestAnimationFrame(() => {
+          window.scrollTo(0, snapshot.scrollY);
+          historyScrollRestoreRef.current = 0;
+        });
+      });
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      if (historyScrollRestoreRef.current) {
+        window.cancelAnimationFrame(historyScrollRestoreRef.current);
+        historyScrollRestoreRef.current = 0;
+      }
+      window.history.scrollRestoration = previousScrollRestoration;
+      webNavigationSessionRef.current = null;
+    };
+  }, [app.initialized, clearBackHint]);
+
+  useEffect(() => {
+    if (!app.initialized || !isDesktopPlatform()) {
+      return undefined;
+    }
+    return window.studyJournalDesktop?.onBackupFlushRequested(async () => {
+      await flushDesktopPendingChanges();
+      await onAppBackgroundAutoBackup();
+      await app.refresh();
+    });
+  }, [app.initialized, app.refresh]);
 
   useEffect(() => {
     if (!app.initialized || app.dueRecordReviews.length === 0) {
@@ -354,7 +531,8 @@ export const App = () => {
       return;
     }
 
-    const state = getRecordState(activeTab, tabMemory);
+    const current = navigationStateRef.current;
+    const state = getRecordState(current.activeTab, current.tabMemory);
     const openError = recordReferenceOpenError(state, recordId);
     if (openError === "cycle") {
       setBackToast("检测到循环引用，已停止打开");
@@ -370,34 +548,28 @@ export const App = () => {
 
     clearBackHint();
     const scrollY = window.scrollY;
-    setTabMemory((current) => {
-      const currentState = getRecordState(activeTab, current);
-      if (recordReferenceOpenError(currentState, recordId)) {
-        return current;
-      }
-      const currentStack = currentState.referenceStack ?? [];
-      return {
-        ...current,
-        [activeTab]: {
-          ...currentState,
-          recordId: recordId,
-          highlightAssetId: undefined,
-          recordEditing: false,
-          referenceStack: [
-            ...currentStack,
-            {
-              kind: "record",
-              recordId: currentState.recordId,
-              highlightAssetId: currentState.highlightAssetId,
-              recordEditing: currentState.recordEditing,
-              scrollY,
-            },
-          ],
-          restoreScrollY: undefined,
-        },
-      };
-    });
-    window.scrollTo(0, 0);
+    const currentStack = state.referenceStack ?? [];
+    const nextMemory: TabMemory = {
+      ...current.tabMemory,
+      [current.activeTab]: {
+        ...state,
+        recordId,
+        highlightAssetId: undefined,
+        recordEditing: false,
+        referenceStack: [
+          ...currentStack,
+          {
+            kind: "record",
+            recordId: state.recordId,
+            highlightAssetId: state.highlightAssetId,
+            recordEditing: state.recordEditing,
+            scrollY,
+          },
+        ],
+        restoreScrollY: undefined,
+      },
+    };
+    commitNavigation({ ...current, tabMemory: nextMemory }, { scrollToTop: true });
   };
 
   const openReviewQueueRecordReference = (sourceRecordId: string, recordId: string) => {
@@ -407,7 +579,8 @@ export const App = () => {
       return;
     }
 
-    const openError = reviewQueueReferenceOpenError(tabMemory.review, sourceRecordId, recordId);
+    const current = navigationStateRef.current;
+    const openError = reviewQueueReferenceOpenError(current.tabMemory.review, sourceRecordId, recordId);
     if (openError === "cycle") {
       setBackToast("检测到循环引用，已停止打开");
       return;
@@ -422,34 +595,29 @@ export const App = () => {
 
     clearBackHint();
     const scrollY = window.scrollY;
-    setTabMemory((current) => {
-      const currentReview = current.review;
-      if (reviewQueueReferenceOpenError(currentReview, sourceRecordId, recordId)) {
-        return current;
-      }
-      return {
-        ...current,
-        review: {
-          ...currentReview,
-          recordId,
-          highlightAssetId: undefined,
-          recordEditing: false,
-          referenceStack: [
-            ...(currentReview.referenceStack ?? []),
-            { kind: "review-queue", sourceRecordId, scrollY },
-          ],
-          restoreScrollY: undefined,
-        },
-      };
-    });
-    window.scrollTo(0, 0);
+    const currentReview = current.tabMemory.review;
+    const nextMemory: TabMemory = {
+      ...current.tabMemory,
+      review: {
+        ...currentReview,
+        recordId,
+        highlightAssetId: undefined,
+        recordEditing: false,
+        referenceStack: [
+          ...(currentReview.referenceStack ?? []),
+          { kind: "review-queue", sourceRecordId, scrollY },
+        ],
+        restoreScrollY: undefined,
+      },
+    };
+    commitNavigation({ ...current, tabMemory: nextMemory }, { scrollToTop: true });
   };
 
   const openAiForDate = async (date: string) => {
     const attachment = await buildDayLogAiContextAsync(date, app.blocks, app.assets);
     const session = await createAiSessionForDate(date, attachment);
     if (session) {
-      setActiveAiSessionId(session.id);
+      updateNavigationState((current) => ({ ...current, activeAiSessionId: session.id }));
       openMoreSubRoute("ai");
     }
   };
@@ -513,30 +681,79 @@ export const App = () => {
             playerAssetId={tabMemory.more.recordingsState.playerAssetId}
             query={tabMemory.more.recordingsState.query}
             searchOpen={tabMemory.more.recordingsState.searchOpen}
-            onSelectedSubjectChange={(selectedSubject) =>
-              setTabMemory((current) => ({
+            onSelectedSubjectChange={(selectedSubject) => {
+              const current = navigationStateRef.current;
+              if (!selectedSubject && current.tabMemory.more.recordingsState.selectedSubject) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.more.recordingsState.selectedSubject === selectedSubject) {
+                return;
+              }
+              commitNavigation({
                 ...current,
-                more: { ...current.more, recordingsState: { ...current.more.recordingsState, selectedSubject } },
-              }))
-            }
-            onPlayerChange={(playerAssetId) =>
-              setTabMemory((current) => ({
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: {
+                    ...current.tabMemory.more,
+                    recordingsState: { ...current.tabMemory.more.recordingsState, selectedSubject },
+                  },
+                },
+              });
+            }}
+            onPlayerChange={(playerAssetId) => {
+              const current = navigationStateRef.current;
+              if (!playerAssetId && current.tabMemory.more.recordingsState.playerAssetId) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.more.recordingsState.playerAssetId === playerAssetId) {
+                return;
+              }
+              commitNavigation({
                 ...current,
-                more: { ...current.more, recordingsState: { ...current.more.recordingsState, playerAssetId } },
-              }))
-            }
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: {
+                    ...current.tabMemory.more,
+                    recordingsState: { ...current.tabMemory.more.recordingsState, playerAssetId },
+                  },
+                },
+              });
+            }}
             onQueryChange={(query) =>
-              setTabMemory((current) => ({
+              updateNavigationState((current) => ({
                 ...current,
-                more: { ...current.more, recordingsState: { ...current.more.recordingsState, query } },
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: {
+                    ...current.tabMemory.more,
+                    recordingsState: { ...current.tabMemory.more.recordingsState, query },
+                  },
+                },
               }))
             }
-            onSearchOpenChange={(searchOpen) =>
-              setTabMemory((current) => ({
+            onSearchOpenChange={(searchOpen) => {
+              const current = navigationStateRef.current;
+              if (!searchOpen && current.tabMemory.more.recordingsState.searchOpen) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.more.recordingsState.searchOpen === searchOpen) {
+                return;
+              }
+              commitNavigation({
                 ...current,
-                more: { ...current.more, recordingsState: { ...current.more.recordingsState, searchOpen } },
-              }))
-            }
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: {
+                    ...current.tabMemory.more,
+                    recordingsState: { ...current.tabMemory.more.recordingsState, searchOpen },
+                  },
+                },
+              });
+            }}
+            onBack={popCurrentTabDepth}
             onRenameAudio={app.renameAssetTitle}
             onDurationKnown={app.updateAssetDuration}
           />
@@ -547,6 +764,9 @@ export const App = () => {
             settings={settings}
             onSaveSettings={(nextSettings) => void app.persistSettings(nextSettings)}
             onRestored={app.refresh}
+            onOpenBackup={() => openMoreSubRoute("backup")}
+            onOpenAiTools={() => openMoreSubRoute("aiTools")}
+            onOpenOcrSettings={() => openMoreSubRoute("ocrSettings")}
           />
         );
       case "favorites":
@@ -608,14 +828,14 @@ export const App = () => {
             blocks={app.blocks}
             assets={app.assets}
             onOpenSession={(sessionId) => {
-              setActiveAiSessionId(sessionId);
+              updateNavigationState((current) => ({ ...current, activeAiSessionId: sessionId }));
               openMoreSubRoute("ai");
             }}
             onDeletedSession={() => {
-              setActiveAiSessionId(null);
+              updateNavigationState((current) => ({ ...current, activeAiSessionId: null }));
               openMoreSubRoute("ai");
             }}
-            onOpenSettings={() => openMoreSubRoute(null)}
+            onOpenSettings={() => openMoreSubRoute("aiTools")}
           />
         );
       case null:
@@ -670,11 +890,12 @@ export const App = () => {
             assets={app.assets}
             query={tabMemory.journal.searchQuery}
             onQueryChange={(searchQuery) =>
-              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchQuery } }))
+              updateNavigationState((current) => ({
+                ...current,
+                tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, searchQuery } },
+              }))
             }
-            onBack={() =>
-              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchOpen: false } }))
-            }
+            onBack={popCurrentTabDepth}
             onOpenRecord={(recordId, assetId) => {
               const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === recordId);
               if (record) {
@@ -690,21 +911,55 @@ export const App = () => {
             selectedDate={tabMemory.journal.selectedDate}
             selectedSubject={tabMemory.journal.selectedSubject}
             onMonthChange={(month) =>
-              setTabMemory((current) => ({ ...current, journal: { ...current.journal, month } }))
-            }
-            onSelectedDateChange={(selectedDate) =>
-              setTabMemory((current) => ({
+              updateNavigationState((current) => ({
                 ...current,
-                journal: { ...current.journal, selectedDate, selectedSubject: undefined },
+                tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, month } },
               }))
             }
-            onSelectedSubjectChange={(selectedSubject) =>
-              setTabMemory((current) => ({ ...current, journal: { ...current.journal, selectedSubject } }))
-            }
+            onSelectedDateChange={(selectedDate) => {
+              const current = navigationStateRef.current;
+              if (!selectedDate && current.tabMemory.journal.selectedDate) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.journal.selectedDate === selectedDate) {
+                return;
+              }
+              commitNavigation({
+                ...current,
+                tabMemory: {
+                  ...current.tabMemory,
+                  journal: { ...current.tabMemory.journal, selectedDate, selectedSubject: undefined },
+                },
+              });
+            }}
+            onSelectedSubjectChange={(selectedSubject) => {
+              const current = navigationStateRef.current;
+              if (!selectedSubject && current.tabMemory.journal.selectedSubject) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.journal.selectedSubject === selectedSubject) {
+                return;
+              }
+              commitNavigation({
+                ...current,
+                tabMemory: {
+                  ...current.tabMemory,
+                  journal: { ...current.tabMemory.journal, selectedSubject },
+                },
+              });
+            }}
             onOpenRecord={(record) => openRecordInTab(record, "journal")}
-            onOpenSearch={() =>
-              setTabMemory((current) => ({ ...current, journal: { ...current.journal, searchOpen: true } }))
-            }
+            onOpenSearch={() => {
+              const current = navigationStateRef.current;
+              if (!current.tabMemory.journal.searchOpen) {
+                commitNavigation({
+                  ...current,
+                  tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, searchOpen: true } },
+                });
+              }
+            }}
             onAskAi={(date) => void openAiForDate(date)}
             onToggleFavorite={(record, favorite) => void app.toggleRecordFavorite(record.id, favorite)}
             reviewStatesByRecord={recordReviewsByRecord}
@@ -726,12 +981,34 @@ export const App = () => {
             subjects={app.subjects}
             activeSubject={tabMemory.categories.activeSubject}
             managing={tabMemory.categories.managing}
-            onActiveSubjectChange={(activeSubject) =>
-              setTabMemory((current) => ({ ...current, categories: { ...current.categories, activeSubject } }))
-            }
-            onManagingChange={(managing) =>
-              setTabMemory((current) => ({ ...current, categories: { ...current.categories, managing } }))
-            }
+            onActiveSubjectChange={(activeSubject) => {
+              const current = navigationStateRef.current;
+              if (!activeSubject && current.tabMemory.categories.activeSubject) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.categories.activeSubject === activeSubject) {
+                return;
+              }
+              commitNavigation({
+                ...current,
+                tabMemory: { ...current.tabMemory, categories: { ...current.tabMemory.categories, activeSubject } },
+              });
+            }}
+            onManagingChange={(managing) => {
+              const current = navigationStateRef.current;
+              if (!managing && current.tabMemory.categories.managing) {
+                popCurrentTabDepth();
+                return;
+              }
+              if (current.tabMemory.categories.managing === managing) {
+                return;
+              }
+              commitNavigation({
+                ...current,
+                tabMemory: { ...current.tabMemory, categories: { ...current.tabMemory.categories, managing } },
+              });
+            }}
             onOpenRecord={(record) => openRecordInTab(record, "categories")}
             onAskAi={(date) => void openAiForDate(date)}
             onAddSubject={app.addSubject}
@@ -757,20 +1034,33 @@ export const App = () => {
             queueIds={tabMemory.review.queueIds}
             currentRecordId={tabMemory.review.currentRecordId}
             onModeChange={(mode) =>
-              setTabMemory((current) =>
-                current.review.mode === mode ? current : { ...current, review: { ...current.review, mode } },
+              updateNavigationState((current) =>
+                current.tabMemory.review.mode === mode
+                  ? current
+                  : {
+                    ...current,
+                    tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, mode } },
+                  },
               )
             }
             onQueueChange={(queueIds) =>
-              setTabMemory((current) =>
-                sameIds(current.review.queueIds, queueIds) ? current : { ...current, review: { ...current.review, queueIds } },
+              updateNavigationState((current) =>
+                sameIds(current.tabMemory.review.queueIds, queueIds)
+                  ? current
+                  : {
+                    ...current,
+                    tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, queueIds } },
+                  },
               )
             }
             onCurrentRecordChange={(currentRecordId) =>
-              setTabMemory((current) =>
-                current.review.currentRecordId === currentRecordId
+              updateNavigationState((current) =>
+                current.tabMemory.review.currentRecordId === currentRecordId
                   ? current
-                  : { ...current, review: { ...current.review, currentRecordId } },
+                  : {
+                    ...current,
+                    tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, currentRecordId } },
+                  },
               )
             }
             onEnsureDay={app.ensureRecordReviewDay}
@@ -808,9 +1098,17 @@ export const App = () => {
 
   const shellClassName = [
     "app-shell",
+    isDesktopPlatform() ? "desktop-app" : "",
     keyboardVisible ? "keyboard-open" : "",
     activeTab === "more" && tabMemory.more.subRoute === "ai" ? "ai-chat-active" : "",
   ].filter(Boolean).join(" ");
+  const showWebNavigationBack = !Capacitor.isNativePlatform()
+    && getTabDepth(activeTab, tabMemory) > 0
+    && !currentRecord
+    && !(activeTab === "journal" && tabMemory.journal.searchOpen)
+    && !(activeTab === "journal" && tabMemory.journal.selectedSubject)
+    && !(activeTab === "categories" && (tabMemory.categories.activeSubject || tabMemory.categories.managing))
+    && !(activeTab === "more" && tabMemory.more.subRoute === "recordings");
 
   return (
     <div className={shellClassName}>
@@ -851,6 +1149,14 @@ export const App = () => {
         </section>
       </aside>
       <div className="content-area">
+        {showWebNavigationBack && (
+          <div className="web-navigation-back-row">
+            <button type="button" className="secondary-button web-navigation-back" onClick={popCurrentTabDepth}>
+              <ArrowLeft size={18} />
+              返回
+            </button>
+          </div>
+        )}
         <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>
       </div>
       {backToast && (
@@ -861,6 +1167,19 @@ export const App = () => {
       {reviewToast && (
         <div className="app-toast review-toast" role="status" aria-live="polite">
           {reviewToast}
+        </div>
+      )}
+      {desktopMigrationOpen && (
+        <div className="desktop-migration-backdrop" role="presentation">
+          <section className="desktop-migration-dialog" role="dialog" aria-modal="true" aria-labelledby="desktop-migration-title">
+            <p className="eyebrow">Desktop Migration</p>
+            <h2 id="desktop-migration-title">从 Web 端迁移日志</h2>
+            <p>桌面版拥有独立本地数据库。请先在原 Web 地址导出完整备份或日志互通包，再在这里导入。</p>
+            <div className="desktop-migration-actions">
+              <button type="button" className="primary-button" onClick={openDesktopMigration}>打开导入页面</button>
+              <button type="button" className="secondary-button" onClick={dismissDesktopMigration}>稍后处理</button>
+            </div>
+          </section>
         </div>
       )}
       <nav className="bottom-nav">

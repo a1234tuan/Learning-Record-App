@@ -265,9 +265,42 @@ describe("tabNavigation", () => {
 
     const next = popTabDepth(memory, "more");
 
-    expect(next.more.subRoute).toBeNull();
-    expect(next.more.recordingsState.searchOpen).toBe(true);
+    expect(next.more.subRoute).toBe("recordings");
+    expect(next.more.recordingsState.searchOpen).toBe(false);
     expect(next.more.recordingsState.query).toBe("讲解");
+    expect(popTabDepth(next, "more").more.subRoute).toBeNull();
+  });
+
+  it("unwinds recording player, folder and search before leaving the recordings page", () => {
+    const playerMemory = {
+      ...createInitialTabMemory(),
+      more: {
+        ...createInitialTabMemory().more,
+        subRoute: "recordings" as const,
+        recordingsState: {
+          selectedSubject: "英语",
+          playerAssetId: "audio-1",
+          query: "听力",
+          searchOpen: true,
+        },
+      },
+    };
+
+    expect(getTabDepth("more", playerMemory)).toBe(3);
+
+    const folder = popTabDepth(playerMemory, "more");
+    expect(folder.more.recordingsState.playerAssetId).toBeUndefined();
+    expect(getTabDepth("more", folder)).toBe(2);
+
+    const recordings = popTabDepth(folder, "more");
+    expect(recordings.more.recordingsState.selectedSubject).toBeUndefined();
+    expect(getTabDepth("more", recordings)).toBe(2);
+
+    const rootRecordings = popTabDepth(recordings, "more");
+    expect(rootRecordings.more.recordingsState.searchOpen).toBe(false);
+    expect(getTabDepth("more", rootRecordings)).toBe(1);
+
+    expect(popTabDepth(rootRecordings, "more").more.subRoute).toBeNull();
   });
 
   it("pops more subpages back to the More root", () => {

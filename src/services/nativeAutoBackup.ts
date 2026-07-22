@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 import type { ExportOptions } from "../types";
+import { isDesktopPlatform } from "../lib/platform";
 import { blobToBase64Chunks } from "./nativeFileWriter";
 
 export interface NativeAutoBackupWriteResult {
@@ -120,14 +121,25 @@ interface NativeAutoBackupPlugin {
 
 const NativeAutoBackup = registerPlugin<NativeAutoBackupPlugin>("NativeAutoBackup");
 
+const desktopBackup = () => window.studyJournalDesktop?.backup;
+
+const requireDesktopBackup = () => {
+  const backup = desktopBackup();
+  if (!backup) {
+    throw new Error("桌面自动备份服务尚未就绪，请重新打开应用后重试。");
+  }
+  return backup;
+};
+
 export const canUseNativeAutoBackup = (): boolean =>
-  Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
+  (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") ||
+  (isDesktopPlatform() && Boolean(desktopBackup()));
 
 export const bindNativeAutoBackupFolder = async (): Promise<{ folderName: string }> =>
-  NativeAutoBackup.bindFolder();
+  isDesktopPlatform() ? requireDesktopBackup().bindFolder() : NativeAutoBackup.bindFolder();
 
 export const getNativeAutoBackupStatus = async (): Promise<{ bound: boolean; folderName?: string }> =>
-  NativeAutoBackup.isBound();
+  isDesktopPlatform() ? requireDesktopBackup().getStatus() : NativeAutoBackup.isBound();
 
 export const writeNativeLatestBackup = async (
   blob: Blob,
@@ -192,40 +204,54 @@ export const diagnoseNativeAutoBackupFolder = async (
 export const ensureNativeBackupRepository = async (
   repositoryName: string,
 ): Promise<{ folderName?: string; repositoryName: string }> =>
-  NativeAutoBackup.ensureRepository({ repositoryName });
+  isDesktopPlatform()
+    ? requireDesktopBackup().ensureRepository()
+    : NativeAutoBackup.ensureRepository({ repositoryName });
 
 export const listNativeBackupRepositoryFiles = async (
   repositoryName: string,
   directory: string,
 ): Promise<NativeRepositoryFile[]> =>
-  (await NativeAutoBackup.listRepositoryFiles({ repositoryName, directory })).files;
+  isDesktopPlatform()
+    ? requireDesktopBackup().listFiles(directory)
+    : (await NativeAutoBackup.listRepositoryFiles({ repositoryName, directory })).files;
 
 export const beginNativeBackupRepositoryFileWrite = async (
   repositoryName: string,
   path: string,
   mimeType: string,
 ): Promise<{ sessionId: string; path: string; uri?: string }> =>
-  NativeAutoBackup.beginRepositoryFileWrite({ repositoryName, path, mimeType });
+  isDesktopPlatform()
+    ? requireDesktopBackup().beginWrite(path)
+    : NativeAutoBackup.beginRepositoryFileWrite({ repositoryName, path, mimeType });
 
 export const appendNativeBackupRepositoryFileWrite = async (
   sessionId: string,
   data: string,
 ): Promise<{ size: number }> =>
-  NativeAutoBackup.appendRepositoryFileWrite({ sessionId, data });
+  isDesktopPlatform()
+    ? requireDesktopBackup().appendWrite(sessionId, data)
+    : NativeAutoBackup.appendRepositoryFileWrite({ sessionId, data });
 
 export const finishNativeBackupRepositoryFileWrite = async (
   sessionId: string,
 ): Promise<NativeRepositoryWriteResult> =>
-  NativeAutoBackup.finishRepositoryFileWrite({ sessionId });
+  isDesktopPlatform()
+    ? requireDesktopBackup().finishWrite(sessionId)
+    : NativeAutoBackup.finishRepositoryFileWrite({ sessionId });
 
 export const cancelNativeBackupRepositoryFileWrite = async (sessionId: string): Promise<void> =>
-  NativeAutoBackup.cancelRepositoryFileWrite({ sessionId });
+  isDesktopPlatform()
+    ? requireDesktopBackup().cancelWrite(sessionId)
+    : NativeAutoBackup.cancelRepositoryFileWrite({ sessionId });
 
 export const readNativeBackupRepositoryTextFile = async (
   repositoryName: string,
   path: string,
 ): Promise<{ text: string; size: number }> =>
-  NativeAutoBackup.readRepositoryTextFile({ repositoryName, path });
+  isDesktopPlatform()
+    ? requireDesktopBackup().readText(path)
+    : NativeAutoBackup.readRepositoryTextFile({ repositoryName, path });
 
 export const readNativeBackupRepositoryFileChunk = async (
   repositoryName: string,
@@ -233,10 +259,14 @@ export const readNativeBackupRepositoryFileChunk = async (
   offset: number,
   length: number,
 ): Promise<{ data: string; bytesRead: number; done: boolean }> =>
-  NativeAutoBackup.readRepositoryFileChunk({ repositoryName, path, offset, length });
+  isDesktopPlatform()
+    ? requireDesktopBackup().readChunk(path, offset, length)
+    : NativeAutoBackup.readRepositoryFileChunk({ repositoryName, path, offset, length });
 
 export const deleteNativeBackupRepositoryFile = async (
   repositoryName: string,
   path: string,
 ): Promise<void> =>
-  NativeAutoBackup.deleteRepositoryFile({ repositoryName, path });
+  isDesktopPlatform()
+    ? requireDesktopBackup().deleteFile(path)
+    : NativeAutoBackup.deleteRepositoryFile({ repositoryName, path });

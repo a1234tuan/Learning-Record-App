@@ -57,6 +57,7 @@
 - TipTap
 - JSZip
 - Capacitor Android
+- Electron Windows Desktop
 - Vite PWA
 - ts-fsrs
 - KaTeX / lowlight / highlight.js
@@ -67,6 +68,8 @@
 
 推荐使用 Node.js 20+。
 
+Windows 下可直接双击项目根目录的 `启动网页版.cmd`。它会固定打开 `http://127.0.0.1:5173`，自动复用或启动本项目的 Web 服务；请始终使用这个地址，避免与 `localhost` 或其他端口分裂为不同的浏览器本地数据库。
+
 ```powershell
 npm ci
 npm run dev
@@ -75,7 +78,7 @@ npm run dev
 默认开发地址通常为：
 
 ```text
-http://localhost:5173/
+http://127.0.0.1:5173/
 ```
 
 运行测试：
@@ -90,6 +93,27 @@ npm run test
 npm run build
 npm run preview
 ```
+
+## Windows 桌面版
+
+桌面版是独立的 Windows 安装应用。安装后从桌面或开始菜单打开，不需要启动 Vite、本地服务器或浏览器。
+
+构建 Windows x64 安装包：
+
+```powershell
+npm ci
+npm run desktop:build
+```
+
+安装包输出到 `release/desktop/`。开发期间可使用下列命令直接打开桌面窗口；它同样读取本地构建产物，不启动 Vite 服务：
+
+```powershell
+npm run desktop:dev
+```
+
+桌面版的 IndexedDB 与浏览器 Web/PWA、Android 应用相互独立。首次打开空桌面版时会提供迁移入口：先在原端导出完整备份或“日志互通”ZIP，再在桌面版的“更多 → 备份与恢复”中导入。不要通过清理浏览器站点数据或直接复制浏览器配置文件迁移数据。
+
+桌面版的应用程序默认安装到 `D:\\StudyJournal\\App`；索引数据、资源、Chromium 缓存、日志、临时文件与崩溃报告都在 `D:\\StudyJournal\\Data\\`。安装向导仍可改为其他 D 盘目录。若从旧桌面版升级，程序会先将旧的 C 盘用户数据，以及早期版本写入 `D:\\StudyJournal\\` 根目录的数据复制到 `Data`，不会自动删除旧副本。
 
 ## Android 构建
 
@@ -163,6 +187,9 @@ npm run test
 
 # 构建 Web/PWA
 npm run build
+
+# 构建 Windows 桌面安装包
+npm run desktop:build
 
 # 同步 Web 构建到 Android
 npm run android:sync

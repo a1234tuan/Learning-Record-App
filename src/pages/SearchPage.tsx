@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Search } from "lucide-react";
 
 import type { Asset, Block, DayEntry, SearchResult } from "../types";
 import { searchAllAsync } from "../lib/search";
+import { isDesktopPlatform } from "../lib/platform";
 
 interface SearchPageProps {
   entries: DayEntry[];
@@ -18,6 +19,9 @@ const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_RESULT_LIMIT = 200;
 
 export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBack, onOpenRecord }: SearchPageProps) => {
+  const desktop = isDesktopPlatform();
+  const [inputValue, setInputValue] = useState(query);
+  const composingRef = useRef(false);
   const [deferredQuery, setDeferredQuery] = useState(query);
   const [rawResults, setRawResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -30,6 +34,13 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBa
     const timer = window.setTimeout(() => setDeferredQuery(query), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => {
+    if (!desktop || composingRef.current) {
+      return;
+    }
+    setInputValue(query);
+  }, [desktop, query]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -79,8 +90,32 @@ export const SearchPage = ({ entries, blocks, assets, query, onQueryChange, onBa
       <label className="search-box">
         <Search size={20} />
         <input
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
+          value={desktop ? inputValue : query}
+          onCompositionStart={() => {
+            if (desktop) {
+              composingRef.current = true;
+            }
+          }}
+          onCompositionEnd={(event) => {
+            if (!desktop) {
+              return;
+            }
+            composingRef.current = false;
+            const nextValue = event.currentTarget.value;
+            setInputValue(nextValue);
+            onQueryChange(nextValue);
+          }}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            if (!desktop) {
+              onQueryChange(nextValue);
+              return;
+            }
+            setInputValue(nextValue);
+            if (!(event.nativeEvent as InputEvent).isComposing && !composingRef.current) {
+              onQueryChange(nextValue);
+            }
+          }}
           placeholder="搜索中值定理、页面置换、录音标题、PDF 文件名..."
         />
       </label>
