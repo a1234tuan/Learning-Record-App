@@ -36,6 +36,8 @@ import { PageTransition } from "./components/PageTransition";
 import type { RecordBlock, Subject } from "./types";
 import { buildDayLogAiContextAsync } from "./services/dayLogAiContextService";
 import { createAiSessionForDate } from "./services/aiSessionService";
+import { exportRecordTransferPackage } from "./services/recordTransferService";
+import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
 import {
@@ -489,6 +491,7 @@ export const App = () => {
       onRemoveReview={async (recordId) => {
         await app.removeRecordFromReview(recordId);
       }}
+      onExportRecord={(recordId) => exportRecordTransferPackage(storage, [recordId])}
     />
   );
 
@@ -711,6 +714,7 @@ export const App = () => {
               const result = await app.addRecordsToReview(recordIds);
               return `成功加入 ${result.added} 条，重置 ${result.reset} 条，跳过 ${result.skippedActive} 条已在复习中的记录。`;
             }}
+            onExportRecords={(recordIds) => exportRecordTransferPackage(storage, recordIds)}
           />
         );
       case "categories":

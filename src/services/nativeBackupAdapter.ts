@@ -188,6 +188,15 @@ const pickNativeBackupFile = async (options: ImportOptions): Promise<PickedBacku
   return result.files[0];
 };
 
+/** Reuse Android's native document picker for any ZIP-based import flow. */
+export const pickNativeZipFile = async (options: ImportOptions = {}): Promise<File | undefined> => {
+  if (!isNativePlatform()) {
+    throw new Error("原生文件选择器只在 Android App 内可用。");
+  }
+  const picked = await pickNativeBackupFile(options);
+  return picked ? pickedToFile(picked, options) : undefined;
+};
+
 export class NativeBackupAdapter implements SyncAdapter {
   readonly kind = "manual-zip" as const;
 

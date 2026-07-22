@@ -24,6 +24,7 @@ import type {
   RecordReviewUndoToken,
   ReviewSchedule,
   StorageAdapter,
+  RecordTransferSummary,
   StorageSnapshot,
   StreamableBackupSnapshot,
   StreamedAssetReader,
@@ -150,6 +151,9 @@ const reviewStateBeforeLog = (current: RecordReviewState, log: RecordReviewLog):
 export class DexieStorageAdapter implements StorageAdapter {
   async initialize(): Promise<void> {
     await db.open();
+    // Staging is only meaningful while the current JS process is committing a
+    // restore/import. A previous process cannot resume it safely.
+    await db.restoreStagingAssets.clear();
     const settings = await db.settings.get("settings");
     if (!settings) {
       await db.settings.put(DEFAULT_SETTINGS);
@@ -1105,6 +1109,123 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   async listAssets(): Promise<Asset[]> {
     return db.assets.toArray();
+  }
+
+  async stageRecordTransferAsset(sessionId: string, asset: Asset): Promise<void> {
+    await db.restoreStagingAssets.put({
+      stagingId: `${sessionId}:${asset.id}`,
+      sessionId,
+      asset,
+    });
+  }
+
+  async discardRecordTransfer(sessionId: string): Promise<void> {
+    await db.restoreStagingAssets.where("sessionId").equals(sessionId).delete();
+  }
+
+  async commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary> {
+    try {
+      return await db.transaction("rw", [db.entries, db.blocks, db.assets, db.settings, db.restoreStagingAssets], async () => {
+        const staged = await db.restoreStagingAssets.where("sessionId").equals(sessionId).toArray();
+        const stagedAssets = staged.map((entry) => entry.asset);
+        const stagedAssetIds = new Set(stagedAssets.map((asset) => asset.id));
+        if (stagedAssetIds.size !== stagedAssets.length) {
+          throw new Error("导入资源暂存不完整，已取消导入。");
+        }
+
+        const [existingBlocks, existingAssets, settings, existingEntries] = await Promise.all([
+          db.blocks.toArray(),
+          db.assets.toArray(),
+          db.settings.get("settings"),
+          db.entries.toArray(),
+        ]);
+        const existingRecordIds = new Set(existingBlocks.map((block) => block.id));
+        const existingAssetIds = new Set(existingAssets.map((asset) => asset.id));
+        const importedRecordIds = new Set<string>();
+        for (const record of records) {
+          if (existingRecordIds.has(record.id) || importedRecordIds.has(record.id)) {
+            throw new Error(`导入记录 ID 冲突：${record.title}。`);
+          }
+          importedRecordIds.add(record.id);
+          const synced = syncRecordRefsFromContent({ ...record, mistakeRefs: [] });
+          for (const ref of synced.assets) {
+            if (!stagedAssetIds.has(ref.id) && !existingAssetIds.has(ref.id)) {
+              throw new Error(`导入记录“${record.title}”缺少资源 ${ref.id}。`);
+            }
+          }
+        }
+        for (const asset of stagedAssets) {
+          if (existingAssetIds.has(asset.id)) {
+            throw new Error(`导入资源 ID 冲突：${asset.fileName}。`);
+          }
+        }
+
+        const activeRecords = existingBlocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
+        const titleKeys = new Set(activeRecords.map((record) => `${normalizeSubjectName(record.subject)}\u0000${record.title.trim()}`));
+        const nextOrderByDate = new Map<string, number>();
+        for (const record of activeRecords) {
+          nextOrderByDate.set(record.date, Math.max(nextOrderByDate.get(record.date) ?? -1, record.order));
+        }
+        const imported = [...records]
+          .sort((left, right) => left.date.localeCompare(right.date) || left.order - right.order)
+          .map((record) => {
+            const subject = normalizeSubjectName(record.subject);
+            const originalTitle = record.title.trim() || "未命名日志";
+            let title = originalTitle;
+            let suffix = 1;
+            while (titleKeys.has(`${subject}\u0000${title}`)) {
+              title = suffix === 1 ? `${originalTitle}（导入副本）` : `${originalTitle}（导入副本 ${suffix}）`;
+              suffix += 1;
+            }
+            titleKeys.add(`${subject}\u0000${title}`);
+            const order = (nextOrderByDate.get(record.date) ?? -1) + 1;
+            nextOrderByDate.set(record.date, order);
+            return syncRecordRefsFromContent({
+              ...record,
+              subject,
+              title,
+              order,
+              deletedAt: undefined,
+              mistakeRefs: [],
+              updatedAt: title === record.title ? record.updatedAt : nowISO(),
+            });
+          });
+
+        const existingDates = new Set(existingEntries.map((entry) => entry.date));
+        const newEntries = Array.from(new Set(imported.map((record) => record.date)))
+          .filter((date) => !existingDates.has(date))
+          .map((date) => createDayEntry(date));
+        const ensuredSettings = ensureSettingsSubjects(
+          { ...(settings ?? DEFAULT_SETTINGS), schemaVersion: 4 },
+          [...activeRecords, ...imported],
+        );
+        // Subject normalization must not roll a current database schema back.
+        const nextSettings = {
+          ...ensuredSettings,
+          schemaVersion: settings?.schemaVersion ?? 4,
+        };
+
+        await Promise.all([
+          db.entries.bulkPut(newEntries),
+          db.blocks.bulkPut(imported),
+          db.assets.bulkPut(stagedAssets),
+          db.settings.put(nextSettings),
+          db.restoreStagingAssets.where("sessionId").equals(sessionId).delete(),
+        ]);
+
+        return {
+          records: imported.length,
+          assets: stagedAssets.length,
+          images: stagedAssets.filter((asset) => asset.kind === "image").length,
+          audio: stagedAssets.filter((asset) => asset.kind === "audio").length,
+          attachments: stagedAssets.filter((asset) => asset.kind === "attachment").length,
+          subjects: new Set(imported.map((record) => record.subject)).size,
+        };
+      });
+    } catch (error) {
+      await this.discardRecordTransfer(sessionId);
+      throw error;
+    }
   }
 
   async createSnapshot(): Promise<StorageSnapshot> {

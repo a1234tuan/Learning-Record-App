@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Block, SubjectConfig } from "../types";
@@ -94,5 +94,33 @@ describe("JournalPage", () => {
     fireEvent.click(within(oldCard as HTMLElement).getByRole("button", { name: "AI问答" }));
 
     expect(onAskAi).toHaveBeenCalledWith("2026-06-01");
+  });
+
+  it("exports selected records through the existing multi-select mode", async () => {
+    const onExportRecords = vi.fn(async () => "已开始下载日志互通包。");
+
+    render(
+      <JournalPage
+        blocks={[record("r1", "2026-06-21")]}
+        subjects={subjects}
+        month={new Date("2026-06-01")}
+        selectedDate="2026-06-21"
+        selectedSubject="OS"
+        onMonthChange={vi.fn()}
+        onSelectedDateChange={vi.fn()}
+        onSelectedSubjectChange={vi.fn()}
+        onOpenRecord={vi.fn()}
+        onOpenSearch={vi.fn()}
+        onAskAi={vi.fn()}
+        onToggleFavorite={vi.fn()}
+        onExportRecords={onExportRecords}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "选择" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择记录" }));
+    fireEvent.click(screen.getByRole("button", { name: "导出选中日志" }));
+
+    await waitFor(() => expect(onExportRecords).toHaveBeenCalledWith(["r1"]));
   });
 });

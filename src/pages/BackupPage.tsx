@@ -1,16 +1,17 @@
-import { DatabaseBackup, Download, Upload } from "lucide-react";
-import { useState } from "react";
+import { CheckSquare, DatabaseBackup, Download, FileArchive, Square, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import type { AppSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary } from "../types";
+import type { AppSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary, RecordTransferPackage } from "../types";
 import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
 import { importAndRestoreSnapshot } from "../services/importRestoreService";
-import { nativeBackupAdapter } from "../services/nativeBackupAdapter";
+import { nativeBackupAdapter, pickNativeZipFile } from "../services/nativeBackupAdapter";
 import { restoreNativeRepositoryBackup } from "../services/nativeRepositoryBackupService";
 import { storage } from "../services/storageAdapter";
 import { manualZipSyncAdapter } from "../services/syncAdapters";
 import { isNativePlatform } from "../lib/platform";
 import { AutoBackupPanel } from "../components/AutoBackupPanel";
 import { PageHeader, SurfaceCard } from "../components/ui";
+import { importRecordTransferPackage, parseRecordTransferPackage } from "../services/recordTransferService";
 
 interface BackupPageProps {
   settings: AppSettings;
@@ -76,8 +77,14 @@ const ImportStatusCard = ({ status }: { status: ImportStatus }) => {
 export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
   const [message, setMessage] = useState("");
   const [importStatus, setImportStatus] = useState<ImportStatus>({ state: "idle" });
-  const [busy, setBusy] = useState<ExportKind | "import" | "repository-import" | null>(null);
+  const [busy, setBusy] = useState<ExportKind | "import" | "repository-import" | "record-transfer-parse" | "record-transfer-import" | null>(null);
+  const [transfer, setTransfer] = useState<RecordTransferPackage>();
+  const [selectedTransferRecordIds, setSelectedTransferRecordIds] = useState<string[]>([]);
+  const transferInputRef = useRef<HTMLInputElement>(null);
+  const transferAbortRef = useRef<AbortController>();
   const native = isNativePlatform();
+
+  useEffect(() => () => transferAbortRef.current?.abort(), []);
 
   const run = async (action: ExportKind | "import" | "repository-import", task: () => Promise<string | void>) => {
     setBusy(action);
@@ -218,6 +225,88 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
       }
     });
 
+  const chooseTransfer = async () => {
+    if (!native) {
+      transferInputRef.current?.click();
+      return;
+    }
+    setBusy("record-transfer-parse");
+    setMessage("");
+    try {
+      const file = await pickNativeZipFile({
+        onProgress: (progress) => setMessage(progressDetail(progress)),
+      });
+      if (file) {
+        await parseTransfer(file);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "日志互通包选择失败。");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const parseTransfer = async (file: File) => {
+    const controller = new AbortController();
+    transferAbortRef.current?.abort();
+    transferAbortRef.current = controller;
+    setBusy("record-transfer-parse");
+    setMessage("");
+    try {
+      const parsed = await parseRecordTransferPackage(file, {
+        onProgress: (progress) => setMessage(progressDetail(progress)),
+        signal: controller.signal,
+      });
+      setTransfer(parsed);
+      setSelectedTransferRecordIds(parsed.payload.records.map((record) => record.id));
+      setMessage(`已找到 ${parsed.payload.records.length} 条日志和 ${parsed.payload.assets.length} 个资源，请确认要导入的内容。`);
+    } catch (error) {
+      setTransfer(undefined);
+      setSelectedTransferRecordIds([]);
+      setMessage(error instanceof Error ? error.message : "日志互通包解析失败。");
+    } finally {
+      if (transferAbortRef.current === controller) {
+        transferAbortRef.current = undefined;
+      }
+      setBusy(null);
+    }
+  };
+
+  const toggleTransferRecord = (recordId: string) => {
+    setSelectedTransferRecordIds((current) =>
+      current.includes(recordId) ? current.filter((id) => id !== recordId) : [...current, recordId],
+    );
+  };
+
+  const importTransfer = async () => {
+    if (!transfer) {
+      return;
+    }
+    const controller = new AbortController();
+    transferAbortRef.current = controller;
+    setBusy("record-transfer-import");
+    setMessage("");
+    try {
+      const summary = await importRecordTransferPackage(storage, transfer, selectedTransferRecordIds, {
+        onProgress: (progress) => setMessage(progressDetail(progress)),
+        signal: controller.signal,
+      });
+      await onRestored();
+      setTransfer(undefined);
+      setSelectedTransferRecordIds([]);
+      setMessage(`已导入 ${summary.records} 条日志、${summary.assets} 个资源；导入日志默认未加入复习计划。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "日志导入失败。");
+    } finally {
+      if (transferAbortRef.current === controller) {
+        transferAbortRef.current = undefined;
+      }
+      setBusy(null);
+    }
+  };
+
+  const cancelTransfer = () => transferAbortRef.current?.abort();
+
   return (
     <main className="page backup-page">
       <PageHeader
@@ -269,6 +358,80 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
           )}
         </div>
         <ImportStatusCard status={importStatus} />
+      </section>
+
+      <section className="more-section backup-actions-section">
+        <h2>日志互通</h2>
+        <div className="more-grid backup-action-grid">
+          <SurfaceCard className="more-action-card backup-action-card" variant="raised">
+            <div>
+              <FileArchive size={20} />
+              <h3>导入日志互通包</h3>
+              <p>追加单条或多条日志及其图片、录音、附件和 OCR，不覆盖当前本地数据。</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={() => void chooseTransfer()} disabled={busy !== null}>
+              <Upload size={18} />
+              {busy === "record-transfer-parse" ? "解析中..." : "选择互通 zip"}
+            </button>
+            <input
+              ref={transferInputRef}
+              type="file"
+              accept=".zip,application/zip,application/x-zip-compressed"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) {
+                  void parseTransfer(file);
+                }
+              }}
+            />
+          </SurfaceCard>
+        </div>
+        {(busy === "record-transfer-parse" || busy === "record-transfer-import") && (
+          <button type="button" className="subtle-button" onClick={cancelTransfer}>
+            取消日志导入
+          </button>
+        )}
+        {transfer && (
+          <section className="import-status-card import-status-parsing" aria-live="polite">
+            <div>
+              <strong>选择要导入的日志</strong>
+              <p>已选 {selectedTransferRecordIds.length}/{transfer.payload.records.length} 条。重名日志会创建“导入副本”，不会覆盖当前内容。</p>
+            </div>
+            <div className="record-list">
+              {transfer.payload.records.map((record) => {
+                const selected = selectedTransferRecordIds.includes(record.id);
+                return (
+                  <button
+                    type="button"
+                    key={record.id}
+                    className={`selectable-record-row ${selected ? "selected" : ""}`}
+                    onClick={() => toggleTransferRecord(record.id)}
+                    aria-pressed={selected}
+                  >
+                    {selected ? <CheckSquare size={18} /> : <Square size={18} />}
+                    <span>{record.date} / {record.subject} / {record.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="record-action-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setSelectedTransferRecordIds((current) => current.length === transfer.payload.records.length ? [] : transfer.payload.records.map((record) => record.id))}
+                disabled={busy !== null}
+              >
+                {selectedTransferRecordIds.length === transfer.payload.records.length ? "取消全选" : "全选"}
+              </button>
+              <button type="button" className="primary-button" onClick={() => void importTransfer()} disabled={busy !== null || selectedTransferRecordIds.length === 0}>
+                <Upload size={18} />
+                {busy === "record-transfer-import" ? "导入中..." : `导入 ${selectedTransferRecordIds.length} 条`}
+              </button>
+            </div>
+          </section>
+        )}
       </section>
 
       <AutoBackupPanel settings={settings} onChanged={onRestored} />

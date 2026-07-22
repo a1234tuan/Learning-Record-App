@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarCheck, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
@@ -53,6 +53,7 @@ interface RecordEditorPageProps {
   onSetReviewKind?: (recordId: string, kind: RecordReviewKind) => Promise<void> | void;
   onResetReview?: (recordId: string) => Promise<void> | void;
   onRemoveReview?: (recordId: string) => Promise<void> | void;
+  onExportRecord?: (recordId: string) => Promise<string> | string;
 }
 
 const cloneRecord = (record: RecordBlock): RecordBlock =>
@@ -129,6 +130,7 @@ export const RecordEditorPage = ({
   onSetReviewKind,
   onResetReview,
   onRemoveReview,
+  onExportRecord,
 }: RecordEditorPageProps) => {
   const native = isNativePlatform();
   const restoreLocked = useRestoreInProgress();
@@ -154,6 +156,8 @@ export const RecordEditorPage = ({
   const leavingRef = useRef(false);
   const stoppingRecordingRef = useRef<Promise<void> | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     if (draftLoading || restoreScrollY === undefined) {
@@ -487,6 +491,22 @@ export const RecordEditorPage = ({
     editorRef.current?.commands.cancelMarkdownPasteConversion?.();
   }, []);
 
+  const exportCurrentRecord = useCallback(async () => {
+    if (!onExportRecord || exporting) {
+      return;
+    }
+    setExporting(true);
+    setExportMessage(null);
+    try {
+      setExportMessage(await onExportRecord(record.id));
+    } catch (error) {
+      setExportMessage(error instanceof Error ? error.message : "日志导出失败。");
+    } finally {
+      setExporting(false);
+      setMoreActionsOpen(false);
+    }
+  }, [exporting, onExportRecord, record.id]);
+
   useEffect(() => () => {
     void stopRecordingIntoDraft();
   }, [stopRecordingIntoDraft]);
@@ -666,6 +686,12 @@ export const RecordEditorPage = ({
                       {reviewButtonText}
                     </button>
                   )}
+                  {onExportRecord && (
+                    <button type="button" onClick={() => void exportCurrentRecord()} disabled={exporting || interactionLocked}>
+                      <Download size={16} />
+                      {exporting ? "导出中..." : "导出此日志"}
+                    </button>
+                  )}
                    <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving || interactionLocked}>
                     <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
                     {record.favorite ? "取消收藏" : "收藏记录"}
@@ -732,6 +758,12 @@ export const RecordEditorPage = ({
                       {reviewButtonText}
                     </button>
                   )}
+                  {onExportRecord && (
+                    <button type="button" onClick={() => void exportCurrentRecord()} disabled={exporting}>
+                      <Download size={16} />
+                      {exporting ? "导出中..." : "导出此日志"}
+                    </button>
+                  )}
                   <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)}>
                     <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
                     {record.favorite ? "取消收藏" : "收藏记录"}
@@ -751,6 +783,7 @@ export const RecordEditorPage = ({
         <>
           {draftRestored && <p className="status-message draft-status">已恢复未保存草稿，点击保存后才会写入正式记录。</p>}
           {saveError && <p className="status-message draft-status">{saveError}</p>}
+          {exportMessage && <p className="status-message draft-status">{exportMessage}</p>}
           <section className="record-editor-head">
             <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" disabled={interactionLocked} />
             <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} disabled={interactionLocked} />
@@ -852,6 +885,7 @@ export const RecordEditorPage = ({
             referenceSubjects={subjects}
             onOpenRecordReference={onOpenRecordReference}
           />
+          {exportMessage && <p className="status-message">{exportMessage}</p>}
           {(reviewState || reviewLogs.length > 0) && (
             <section className="record-review-panel">
               <details open>

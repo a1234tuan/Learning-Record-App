@@ -156,4 +156,51 @@ describe("DexieStorageAdapter stream restore", () => {
     expect(await fakeDb.assets.get("old-asset")).toEqual(oldAsset);
     expect(await fakeDb.restoreStagingAssets.toArray()).toEqual([]);
   });
+
+  it("appends imported records with a conflict-safe title and no review state", async () => {
+    vi.resetModules();
+    const settings = {
+      id: "settings",
+      examDate: "2026-12-27",
+      theme: "system",
+      accentColor: "#2f6f5e",
+      backupReminderDays: 7,
+      fontScale: 1,
+      lineHeight: 1.7,
+      schemaVersion: 4,
+    };
+    const imported: RecordBlock = {
+      ...oldRecord,
+      id: "imported-record",
+      title: oldRecord.title,
+      contentHtml: '<p><record-asset data-asset-id="imported-asset" data-kind="image" data-title="one.png"></record-asset></p>',
+    };
+    const importedAsset = { ...oldAsset, id: "imported-asset", fileName: "one.png" };
+    const fakeDb = {
+      entries: new MemoryTable(),
+      blocks: new MemoryTable<StoredRow>([oldRecord]),
+      assets: new MemoryTable<StoredRow>([oldAsset]),
+      settings: new MemoryTable<StoredRow>([settings]),
+      restoreStagingAssets: new MemoryTable<StoredRow>([], "stagingId"),
+      transaction: async (_mode: string, ...args: unknown[]) => {
+        const callback = args.at(-1) as () => Promise<unknown>;
+        return callback();
+      },
+    };
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+
+    await adapter.stageRecordTransferAsset("transfer", importedAsset);
+    const summary = await adapter.commitRecordTransfer("transfer", [imported]);
+    const blocks = await fakeDb.blocks.toArray() as RecordBlock[];
+    const inserted = blocks.find((block) => block.id === imported.id);
+    const nextSettings = await fakeDb.settings.get("settings") as typeof settings & { subjects?: Array<{ name: string }> };
+
+    expect(summary).toMatchObject({ records: 1, assets: 1, images: 1 });
+    expect(inserted).toMatchObject({ title: "恢复前记录（导入副本）", order: 1, assets: [{ id: "imported-asset", kind: "image", title: "one.png" }] });
+    expect(nextSettings.schemaVersion).toBe(4);
+    expect(nextSettings.subjects?.some((subject) => subject.name === "数学")).toBe(true);
+    expect(await fakeDb.restoreStagingAssets.toArray()).toEqual([]);
+  });
 });

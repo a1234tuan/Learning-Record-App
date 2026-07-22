@@ -422,6 +422,39 @@ export interface Asset extends BaseEntity {
   };
 }
 
+export interface RecordTransferManifest {
+  format: "study-journal-record-transfer";
+  version: 1;
+  exportedAt: ISODateTime;
+  appVersion: string;
+  counts: {
+    records: number;
+    assets: number;
+  };
+}
+
+export interface RecordTransferPayload {
+  manifest: RecordTransferManifest;
+  records: RecordBlock[];
+  subjects: Subject[];
+  assets: Array<Omit<Asset, "data"> & { path: string }>;
+}
+
+export interface RecordTransferPackage {
+  payload: RecordTransferPayload;
+  /** Reads one validated resource on demand without retaining every Blob. */
+  readAsset: (id: EntityId, signal?: AbortSignal) => Promise<File>;
+}
+
+export interface RecordTransferSummary {
+  records: number;
+  assets: number;
+  images: number;
+  audio: number;
+  attachments: number;
+  subjects: number;
+}
+
 export interface MistakeCard extends BaseEntity {
   title: string;
   subject: Subject;
@@ -563,6 +596,7 @@ export interface ImportProgress {
 
 export interface ImportOptions {
   onProgress?: (progress: ImportProgress) => void;
+  signal?: AbortSignal;
 }
 
 export interface ExportProgress {
@@ -574,6 +608,7 @@ export interface ExportProgress {
 
 export interface ExportOptions {
   onProgress?: (progress: ExportProgress) => void;
+  signal?: AbortSignal;
 }
 
 export interface StreamingExportOptions extends ExportOptions {}
@@ -650,6 +685,9 @@ export interface StorageAdapter {
   resetStaleOcrJobs?(maxAgeMs: number): Promise<void>;
   listAssets(): Promise<Asset[]>;
   getAsset(id: EntityId): Promise<Asset | undefined>;
+  stageRecordTransferAsset(sessionId: string, asset: Asset): Promise<void>;
+  commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary>;
+  discardRecordTransfer(sessionId: string): Promise<void>;
   createSnapshot(): Promise<StorageSnapshot>;
   createStreamableSnapshot(): Promise<StreamableBackupSnapshot>;
   restoreSnapshot(snapshot: StorageSnapshot): Promise<void>;

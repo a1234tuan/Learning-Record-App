@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckSquare, Search, Square, X } from "lucide-react";
+import { CheckSquare, Download, Search, Square, X } from "lucide-react";
 
 import type { Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { MonthlyHeatmap } from "../components/MonthlyHeatmap";
@@ -25,6 +25,7 @@ interface JournalPageProps {
   reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
   onAddToReview?: (recordId: string) => void;
   onAddManyToReview?: (recordIds: string[]) => Promise<string> | string;
+  onExportRecords?: (recordIds: string[]) => Promise<string> | string;
 }
 
 export const JournalPage = ({
@@ -44,6 +45,7 @@ export const JournalPage = ({
   reviewLogsByRecord = {},
   onAddToReview = () => undefined,
   onAddManyToReview = () => "",
+  onExportRecords = () => "",
 }: JournalPageProps) => {
   const [selecting, setSelecting] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
@@ -63,6 +65,13 @@ export const JournalPage = ({
 
   const addSelected = async () => {
     const message = await onAddManyToReview(selectedRecordIds);
+    setBatchMessage(message);
+    setSelectedRecordIds([]);
+    setSelecting(false);
+  };
+
+  const exportSelected = async () => {
+    const message = await onExportRecords(selectedRecordIds);
     setBatchMessage(message);
     setSelectedRecordIds([]);
     setSelecting(false);
@@ -138,6 +147,10 @@ export const JournalPage = ({
               <span>已选 {selectedRecordIds.length} 条</span>
               <button type="button" className="primary-button" onClick={() => void addSelected()} disabled={selectedRecordIds.length === 0}>
                 加入复习
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void exportSelected()} disabled={selectedRecordIds.length === 0}>
+                <Download size={17} />
+                导出选中日志
               </button>
             </div>
           )}
