@@ -56,7 +56,11 @@ public class NativeOcrPlugin extends Plugin {
                 result.put("text", text.trim());
                 call.resolve(result);
             } catch (Exception error) {
-                call.reject(error.getMessage() != null ? error.getMessage() : "OCR 识别失败。", error);
+                if (error instanceof OcrQueueFullException) {
+                    call.reject(error.getMessage(), "OCR_QUEUE_FULL", error);
+                } else {
+                    call.reject(error.getMessage() != null ? error.getMessage() : "OCR 识别失败。", error);
+                }
             }
         });
     }
@@ -81,8 +85,13 @@ public class NativeOcrPlugin extends Plugin {
         }
 
         String body = readResponse(connection);
-        if (connection.getResponseCode() != 200) {
-            throw new Exception("OCR 提交失败：" + connection.getResponseCode() + " " + body);
+        int responseCode = connection.getResponseCode();
+        if (responseCode != 200) {
+            JSONObject errorJson = new JSONObject(body);
+            if (errorJson.optInt("code", -1) == 10010) {
+                throw new OcrQueueFullException(errorJson.optString("traceId", ""));
+            }
+            throw new Exception("OCR 提交失败：" + responseCode + " " + body);
         }
         JSONObject json = new JSONObject(body);
         String jobId = json.optJSONObject("data") != null ? json.getJSONObject("data").optString("jobId", "") : "";
@@ -260,5 +269,14 @@ public class NativeOcrPlugin extends Plugin {
             builder.append("\n\n");
         }
         builder.append(trimmed);
+    }
+
+    private static class OcrQueueFullException extends Exception {
+        OcrQueueFullException(String traceId) {
+            super(
+                "OCR_QUEUE_FULL: 百度 OCR 服务端任务队列已满，请稍后重试" +
+                (traceId.isEmpty() ? "。" : "。traceId=" + traceId)
+            );
+        }
     }
 }

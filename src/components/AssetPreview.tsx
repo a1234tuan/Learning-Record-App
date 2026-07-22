@@ -166,6 +166,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
   };
   const ocrDone = asset.kind === "image" && asset.ocrStatus === "done" && Boolean(asset.ocrText?.trim());
   const ocrBusy = asset.ocrStatus === "running" || asset.ocrStatus === "queued";
+  const ocrBusyLabel = asset.ocrStatus === "queued" ? "排队中" : "识别中";
   const canRetryOcr = asset.kind === "image" && !ocrBusy && !ocrDone;
   const ocrDiagnostic = describeOcrForAi(asset);
   const viewTitle = title === asset.fileName && asset.kind === "image" ? "" : title;
@@ -173,7 +174,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
     ? ocrDone
       ? "OCR✅"
       : ocrBusy
-        ? "识别中"
+        ? ocrBusyLabel
         : asset.ocrStatus === "failed" || asset.ocrStatus === "timeout"
           ? "OCR失败"
           : "OCR未完成"
@@ -315,7 +316,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
         </button>
         <div className="ocr-row">
           <span>
-            {ocrDone ? "OCR✅" : `OCR：${ocrBusy ? "识别中" : asset.ocrStatus === "failed" ? "失败" : asset.ocrStatus === "timeout" ? "超时" : "未识别"}`}
+            {ocrDone ? "OCR✅" : `OCR：${ocrBusy ? ocrBusyLabel : asset.ocrStatus === "failed" ? "失败" : asset.ocrStatus === "timeout" ? "超时" : "未识别"}`}
           </span>
           {showOcrDetails && (
             <button type="button" className="subtle-button" onClick={() => setOcrDetailsOpen((value) => !value)}>
