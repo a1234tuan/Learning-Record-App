@@ -4,8 +4,9 @@ import { Extension, type JSONContent } from "@tiptap/core";
 import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import * as pmView from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
-import { TextSelection, type SelectionBookmark } from "@tiptap/pm/state";
-import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, X } from "lucide-react";
+import { redoDepth, undoDepth } from "@tiptap/pm/history";
+import { TextSelection, type SelectionBookmark, type Transaction } from "@tiptap/pm/state";
+import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, Redo2, Undo2, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -53,6 +54,7 @@ import { TrailingEditableParagraph } from "../lib/trailingEditableParagraph";
 import {
   MARKDOWN_PASTE_LIMITS,
   assessMarkdownPaste,
+  isUndoablePasteSource,
   type MarkdownPasteChunk,
 } from "../lib/markdownPasteWork";
 import type { RecordAssetRef, RecordBlock, SubjectConfig } from "../types";
@@ -143,6 +145,9 @@ type ClipboardSnapshot = {
 
 const ANDROID_IME_PASTE_DEBOUNCE_MS = 120;
 const ANDROID_IME_PASTE_GUARD_MS = 2_000;
+const EDITOR_HISTORY_DEPTH = 50;
+const EDITOR_HISTORY_GROUP_DELAY_MS = 500;
+const RECORD_EDITOR_RESET_HISTORY_META = "recordEditorResetHistory";
 const ANDROID_IME_SESSION_CANCEL_KEYS = new Set([
   "ArrowDown",
   "ArrowLeft",
@@ -201,6 +206,51 @@ type MarkdownPasteInsertOptions = {
   bookmark?: SelectionBookmark;
   range?: ChangedDocumentRange;
   native: boolean;
+  resetHistory?: boolean;
+};
+
+type PasteHistoryMode = "record" | "skip" | "reset";
+
+const pasteHistoryMode = (source: string, resetHistory = false): PasteHistoryMode => {
+  if (isUndoablePasteSource(source)) {
+    return "record";
+  }
+  return resetHistory ? "reset" : "skip";
+};
+
+const selectHistoryBoundedPasteSource = (candidates: readonly (string | undefined)[]): string | undefined => {
+  const markdownSource = selectMarkdownPasteSources(candidates)[0];
+  if (markdownSource) {
+    return markdownSource;
+  }
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const normalized = normalizeClipboardText(candidate);
+    if (normalized && !isUndoablePasteSource(normalized)) {
+      return normalized;
+    }
+  }
+  return undefined;
+};
+
+const applyPasteHistoryMode = (transaction: Transaction, mode: PasteHistoryMode): Transaction => {
+  if (mode === "record") {
+    return transaction;
+  }
+  transaction.setMeta("addToHistory", false);
+  if (mode === "reset") {
+    transaction.setMeta(RECORD_EDITOR_RESET_HISTORY_META, true);
+  }
+  return transaction;
+};
+
+const resetEditorHistory = (view: EditorView) => {
+  const transaction = view.state.tr
+    .setMeta("addToHistory", false)
+    .setMeta(RECORD_EDITOR_RESET_HISTORY_META, true);
+  view.dispatch(transaction);
 };
 
 declare module "@tiptap/core" {
@@ -638,6 +688,7 @@ const insertRawMarkdownChunks = (
   chunks: readonly MarkdownPasteChunk[],
   bookmark?: SelectionBookmark,
   range?: ChangedDocumentRange,
+  historyMode: PasteHistoryMode = "record",
 ): number[] | undefined => {
   const nodes = chunks.map((chunk) => view.state.schema.nodeFromJSON(rawMarkdownChunkNode(chunk.source)));
   const transaction = view.state.tr;
@@ -666,7 +717,7 @@ const insertRawMarkdownChunks = (
     }
     transaction.replaceSelection(new Slice(Fragment.fromArray(nodes), 0, 0));
   }
-  view.dispatch(transaction.scrollIntoView());
+  view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
   return findRawMarkdownChunkPositions(view.state.doc, chunks);
 };
 
@@ -674,6 +725,7 @@ const replaceSelectionWithContent = (
   view: EditorView,
   content: unknown[],
   bookmark?: SelectionBookmark,
+  historyMode: PasteHistoryMode = "record",
 ) => {
   const nodes = content.map((item) => view.state.schema.nodeFromJSON(item));
   const transaction = view.state.tr;
@@ -681,7 +733,7 @@ const replaceSelectionWithContent = (
     transaction.setSelection(bookmark.resolve(view.state.doc));
   }
   transaction.replaceSelection(Slice.maxOpen(Fragment.fromArray(nodes)));
-  view.dispatch(transaction.scrollIntoView());
+  view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
 };
 
 const replaceRangeWithContent = (
@@ -689,6 +741,7 @@ const replaceRangeWithContent = (
   content: unknown[],
   from: number,
   to: number,
+  historyMode: PasteHistoryMode = "record",
 ) => {
   const nodes = content.map((item) => view.state.schema.nodeFromJSON(item));
   const docSize = view.state.doc.content.size;
@@ -718,20 +771,21 @@ const replaceRangeWithContent = (
     // A block-only replacement can leave no inline endpoint. ProseMirror's
     // mapped selection remains the safest fallback in that case.
   }
-  view.dispatch(transaction.scrollIntoView());
+  view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
 };
 
 const replaceSelectionWithSlice = (
   view: EditorView,
   slice: Slice,
   bookmark?: SelectionBookmark,
+  historyMode: PasteHistoryMode = "record",
 ) => {
   const transaction = view.state.tr;
   if (bookmark) {
     transaction.setSelection(bookmark.resolve(view.state.doc));
   }
   transaction.replaceSelection(slice);
-  view.dispatch(transaction.scrollIntoView());
+  view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
 };
 
 export const RichTextEditor = ({
@@ -749,6 +803,8 @@ export const RichTextEditor = ({
   referenceSubjects = [],
   onOpenRecordReference,
 }: RichTextEditorProps) => {
+  const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+  const historyAvailabilityRef = useRef(historyAvailability);
   const onPasteImageRef = useRef(onPasteImage);
   const onChangeRef = useRef(onChange);
   const recordReferenceTargetsRef = useRef<Map<string, RecordReferenceTarget>>(recordReferenceTargetMap(referenceRecords));
@@ -756,6 +812,7 @@ export const RichTextEditor = ({
   const onOpenRecordReferenceRef = useRef(onOpenRecordReference);
   const editorViewRef = useRef<EditorView | undefined>();
   const editorInstanceRef = useRef<Editor | undefined>();
+  const currentRecordIdRef = useRef(currentRecordId);
   const pasteRequestRef = useRef(0);
   const pasteAnchorRef = useRef<PasteAnchor | undefined>();
   const bulkMarkdownConversionRef = useRef<MarkdownPasteConversionSession | undefined>();
@@ -771,6 +828,20 @@ export const RichTextEditor = ({
   const [markdownConversionProgress, setMarkdownConversionProgress] = useState<MarkdownConversionProgress | undefined>();
   const [imageGallery, setImageGallery] = useState<ImageGalleryState | undefined>();
   const [referencePicker, setReferencePicker] = useState<ReferencePickerState | undefined>();
+
+  const updateHistoryAvailability = useCallback((target: Editor) => {
+    const next = {
+      canUndo: undoDepth(target.state) > 0,
+      canRedo: redoDepth(target.state) > 0,
+    };
+    const current = historyAvailabilityRef.current;
+    if (current.canUndo === next.canUndo && current.canRedo === next.canRedo) {
+      return;
+    }
+    historyAvailabilityRef.current = next;
+    setHistoryAvailability(next);
+  }, []);
+
   useEffect(() => {
     onPasteImageRef.current = onPasteImage;
   }, [onPasteImage]);
@@ -1017,10 +1088,10 @@ export const RichTextEditor = ({
     }
   };
 
-  const cancelPendingPaste = (view?: EditorView) => {
+  const cancelPendingPaste = (view?: EditorView, emitMarkdown = true) => {
     pasteRequestRef.current += 1;
     pasteAnchorRef.current = undefined;
-    cancelMarkdownPasteConversion(view);
+    cancelMarkdownPasteConversion(view, emitMarkdown);
     const session = nativeInputSessionRef.current;
     if (session && view) {
       releaseNativeInputSession(session, false, view);
@@ -1100,6 +1171,7 @@ export const RichTextEditor = ({
     options: MarkdownPasteInsertOptions,
   ): boolean => {
     const normalizedSource = normalizeClipboardText(source);
+    const historyMode = pasteHistoryMode(normalizedSource, options.resetHistory);
     const assessment = assessMarkdownPaste(normalizedSource, options.native);
     if (assessment.retainRaw) {
       const rawOnly: MarkdownPasteChunk[] = [{
@@ -1107,7 +1179,7 @@ export const RichTextEditor = ({
         kind: "paragraph",
         formulaCount: assessment.formulaCount,
       }];
-      const positions = insertRawMarkdownChunks(view, rawOnly, options.bookmark, options.range);
+      const positions = insertRawMarkdownChunks(view, rawOnly, options.bookmark, options.range, historyMode);
       if (positions) {
         setMarkdownConversionProgress({ completed: 0, total: 0, retainedRaw: true });
         return true;
@@ -1116,7 +1188,7 @@ export const RichTextEditor = ({
     }
 
     if (assessment.shouldStream) {
-      const positions = insertRawMarkdownChunks(view, assessment.chunks, options.bookmark, options.range);
+      const positions = insertRawMarkdownChunks(view, assessment.chunks, options.bookmark, options.range, historyMode);
       return positions ? startMarkdownPasteConversion(view, assessment.chunks, positions) : false;
     }
 
@@ -1125,9 +1197,9 @@ export const RichTextEditor = ({
       return false;
     }
     if (options.range) {
-      replaceRangeWithContent(view, parsedMarkdown, options.range.from, options.range.to);
+      replaceRangeWithContent(view, parsedMarkdown, options.range.from, options.range.to, historyMode);
     } else {
-      replaceSelectionWithContent(view, parsedMarkdown, options.bookmark);
+      replaceSelectionWithContent(view, parsedMarkdown, options.bookmark, historyMode);
     }
     return true;
   };
@@ -1161,7 +1233,7 @@ export const RichTextEditor = ({
     if (!targetBookmark) {
       return;
     }
-    const markdownSource = selectMarkdownPasteSources([nativeText, clipboard.markdown, clipboard.plainText])[0];
+    const markdownSource = selectHistoryBoundedPasteSource([nativeText, clipboard.markdown, clipboard.plainText]);
     if (!isPasteAnchorCurrent(view, anchor)) {
       return;
     }
@@ -1171,18 +1243,19 @@ export const RichTextEditor = ({
     if (!handledMarkdown) {
       const normalizedNativeText = nativeText ? normalizeClipboardText(nativeText) : "";
       const fallbackText = clipboard.plainText ? normalizeClipboardText(clipboard.plainText) : normalizedNativeText;
+      const historyMode = pasteHistoryMode(fallbackText);
       const slice = (clipboard.htmlText || fallbackText.length <= MAX_MARKDOWN_PASTE_LENGTH)
         ? parseClipboardSlice(view, fallbackText, clipboard.htmlText, !clipboard.htmlText)
         : undefined;
       if (slice) {
-        replaceSelectionWithSlice(view, slice, targetBookmark);
+        replaceSelectionWithSlice(view, slice, targetBookmark, historyMode);
       } else if (fallbackText) {
         const transaction = view.state.tr;
         if (targetBookmark) {
           transaction.setSelection(targetBookmark.resolve(view.state.doc));
         }
         transaction.insertText(fallbackText);
-        view.dispatch(transaction.scrollIntoView());
+        view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
       }
     }
 
@@ -1301,7 +1374,7 @@ export const RichTextEditor = ({
             return;
           }
           session.clipboardReadPending = false;
-          session.expectedMarkdown = selectMarkdownPasteSources([nativeText])[0] ?? null;
+          session.expectedMarkdown = selectHistoryBoundedPasteSource([nativeText]) ?? null;
           finalizeNativeInputSession(view, session);
           return;
         }
@@ -1328,8 +1401,12 @@ export const RichTextEditor = ({
         const handledMarkdown = insertMarkdownPaste(view, expectedMarkdown, {
           native: true,
           range: changedRange,
+          resetHistory: true,
         });
         if (!handledMarkdown) {
+          if (!isUndoablePasteSource(expectedMarkdown)) {
+            resetEditorHistory(view);
+          }
           releaseNativeInputSession(session, true, view);
           return;
         }
@@ -1343,6 +1420,10 @@ export const RichTextEditor = ({
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        history: {
+          depth: EDITOR_HISTORY_DEPTH,
+          newGroupDelay: EDITOR_HISTORY_GROUP_DELAY_MS,
+        },
       }),
       MarkdownLinkMark,
       MarkdownTypingExtension.configure({
@@ -1471,7 +1552,7 @@ export const RichTextEditor = ({
         }
 
         const clipboard = snapshotClipboardData(event.clipboardData);
-        const markdownSource = selectMarkdownPasteSources([clipboard.markdown, clipboard.plainText])[0];
+        const markdownSource = selectHistoryBoundedPasteSource([clipboard.markdown, clipboard.plainText]);
         if (markdownSource) {
           event.preventDefault();
           const anchor = beginPasteOperation(view);
@@ -1483,7 +1564,8 @@ export const RichTextEditor = ({
             const transaction = view.state.tr;
             transaction.setSelection(anchor.bookmark.resolve(view.state.doc));
             transaction.insertText(normalizeClipboardText(markdownSource));
-            view.dispatch(transaction.scrollIntoView());
+            const historyMode = pasteHistoryMode(normalizeClipboardText(markdownSource));
+            view.dispatch(applyPasteHistoryMode(transaction, historyMode).scrollIntoView());
           }
           const assetAnchor = refreshPasteAnchor(view, anchor.requestId);
           void insertPastedAssets(view, clipboard.files, assetAnchor);
@@ -1536,6 +1618,10 @@ export const RichTextEditor = ({
     onCreate: ({ editor }) => {
       editorInstanceRef.current = editor;
       editorViewRef.current = editor.view;
+      updateHistoryAvailability(editor);
+    },
+    onTransaction: ({ editor }) => {
+      updateHistoryAvailability(editor);
     },
     onUpdate: ({ editor }) => {
       if (!bulkMarkdownConversionRef.current) {
@@ -1548,13 +1634,27 @@ export const RichTextEditor = ({
     if (!editor) {
       return;
     }
-    if (!bulkMarkdownConversionRef.current && value !== editor.getHTML()) {
-      editor.commands.setContent(value, false);
+    const recordChanged = currentRecordIdRef.current !== currentRecordId;
+    const contentChanged = value !== editor.getHTML();
+    const shouldSync = recordChanged || (!bulkMarkdownConversionRef.current && contentChanged);
+    if (shouldSync) {
+      cancelPendingPaste(editor.view, false);
+      const chain = editor.chain()
+        .setMeta("addToHistory", false)
+        .setMeta(RECORD_EDITOR_RESET_HISTORY_META, true);
+      if (contentChanged) {
+        chain.setContent(value, false);
+      }
+      chain.run();
     }
     if (!readOnly) {
       editor.commands.ensureTrailingEditableParagraph();
     }
-  }, [editor, readOnly, value]);
+    if (shouldSync) {
+      resetEditorHistory(editor.view);
+    }
+    currentRecordIdRef.current = currentRecordId;
+  }, [currentRecordId, editor, readOnly, value]);
 
   useEffect(() => {
     editor?.setEditable(!readOnly);
@@ -1565,6 +1665,16 @@ export const RichTextEditor = ({
   }
 
   const codeLanguage = normalizeCodeLanguage(String(editor.getAttributes("codeBlock").language ?? "")) ?? "";
+
+  const undo = () => {
+    cancelPendingPaste(editor.view);
+    editor.chain().focus().undo().run();
+  };
+
+  const redo = () => {
+    cancelPendingPaste(editor.view);
+    editor.chain().focus().redo().run();
+  };
 
   const insertRecordReference = (record: RecordBlock) => {
     const referenceNode = editor.schema.nodes.recordReference;
@@ -1590,6 +1700,24 @@ export const RichTextEditor = ({
     <div className={readOnly ? "editor-shell read-only" : "editor-shell"}>
       {!readOnly && (
         <div className="editor-toolbar" aria-label="编辑工具栏">
+          <button
+            type="button"
+            title="撤回（Ctrl+Z）"
+            aria-label="撤回"
+            disabled={!historyAvailability.canUndo}
+            onClick={undo}
+          >
+            <Undo2 size={16} />
+          </button>
+          <button
+            type="button"
+            title="重做（Ctrl+Y）"
+            aria-label="重做"
+            disabled={!historyAvailability.canRedo}
+            onClick={redo}
+          >
+            <Redo2 size={16} />
+          </button>
           <button type="button" title="加粗" onClick={() => editor.chain().focus().toggleBold().run()}>
             B
           </button>

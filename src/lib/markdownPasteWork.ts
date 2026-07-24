@@ -15,6 +15,15 @@ export type MarkdownPasteAssessment = {
   retainRaw: boolean;
 };
 
+export const MAX_UNDOABLE_PASTE_BYTES = 512 * 1024;
+
+const textEncoder = new TextEncoder();
+
+export const pasteSourceByteLength = (source: string): number => textEncoder.encode(source).byteLength;
+
+export const isUndoablePasteSource = (source: string): boolean =>
+  pasteSourceByteLength(source) <= MAX_UNDOABLE_PASTE_BYTES;
+
 export const MARKDOWN_PASTE_LIMITS = {
   maxSourceLength: 262_144,
   maxStreamBlocks: 500,

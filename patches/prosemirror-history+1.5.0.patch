@@ -1,0 +1,37 @@
+diff --git a/node_modules/prosemirror-history/dist/index.cjs b/node_modules/prosemirror-history/dist/index.cjs
+index e0e1020..82b6fc5 100644
+--- a/node_modules/prosemirror-history/dist/index.cjs
++++ b/node_modules/prosemirror-history/dist/index.cjs
+@@ -235,10 +235,12 @@ var HistoryState = _createClass(function HistoryState(done, undone, prevRanges,
+   this.prevTime = prevTime;
+   this.prevComposition = prevComposition;
+ });
+-var DEPTH_OVERFLOW = 20;
++var DEPTH_OVERFLOW = 0;
++var RECORD_EDITOR_RESET_HISTORY_META = "recordEditorResetHistory";
+ function applyTransaction(history, state, tr, options) {
+   var historyTr = tr.getMeta(historyKey),
+     rebased;
++  if (tr.getMeta(RECORD_EDITOR_RESET_HISTORY_META)) return new HistoryState(Branch.empty, Branch.empty, null, 0, -1);
+   if (historyTr) return historyTr.historyState;
+   if (tr.getMeta(closeHistoryKey)) history = new HistoryState(history.done, history.undone, null, 0, -1);
+   var appended = tr.getMeta("appendedTransaction");
+diff --git a/node_modules/prosemirror-history/dist/index.js b/node_modules/prosemirror-history/dist/index.js
+index acd29d9..029ba14 100644
+--- a/node_modules/prosemirror-history/dist/index.js
++++ b/node_modules/prosemirror-history/dist/index.js
+@@ -253,10 +253,13 @@ class HistoryState {
+         this.prevComposition = prevComposition;
+     }
+ }
+-const DEPTH_OVERFLOW = 20;
++const DEPTH_OVERFLOW = 0;
++const RECORD_EDITOR_RESET_HISTORY_META = "recordEditorResetHistory";
+ // Record a transformation in undo history.
+ function applyTransaction(history, state, tr, options) {
+     let historyTr = tr.getMeta(historyKey), rebased;
++    if (tr.getMeta(RECORD_EDITOR_RESET_HISTORY_META))
++        return new HistoryState(Branch.empty, Branch.empty, null, 0, -1);
+     if (historyTr)
+         return historyTr.historyState;
+     if (tr.getMeta(closeHistoryKey))

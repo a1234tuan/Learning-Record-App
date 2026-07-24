@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { assessMarkdownPaste, splitMarkdownPasteSource } from "./markdownPasteWork";
+import {
+  assessMarkdownPaste,
+  isUndoablePasteSource,
+  MAX_UNDOABLE_PASTE_BYTES,
+  pasteSourceByteLength,
+  splitMarkdownPasteSource,
+} from "./markdownPasteWork";
 
 describe("markdown paste work assessment", () => {
   it("keeps fenced code, display formulas, tables and list groups as complete chunks", () => {
@@ -48,5 +54,14 @@ describe("markdown paste work assessment", () => {
 
     expect(assessMarkdownPaste(tooManyFormulas, true).retainRaw).toBe(true);
     expect(assessMarkdownPaste(oversizedCode, false).retainRaw).toBe(true);
+  });
+
+  it("uses UTF-8 bytes rather than JavaScript character count for undoable paste limits", () => {
+    const atLimit = "a".repeat(MAX_UNDOABLE_PASTE_BYTES);
+    const overLimit = `${atLimit}a`;
+
+    expect(pasteSourceByteLength("中文")).toBe(6);
+    expect(isUndoablePasteSource(atLimit)).toBe(true);
+    expect(isUndoablePasteSource(overLimit)).toBe(false);
   });
 });

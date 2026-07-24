@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Editor } from "@tiptap/react";
+import { closeHistory, redoDepth, undoDepth } from "@tiptap/pm/history";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +10,7 @@ import {
   serializeStructureData,
 } from "../lib/recordStructureBlocks";
 import { readClipboardTextFallback } from "../lib/clipboard";
+import { MAX_UNDOABLE_PASTE_BYTES } from "../lib/markdownPasteWork";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import type { RecordBlock, SubjectConfig } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
@@ -58,6 +60,11 @@ const setSelectionInsideText = (editor: Editor, text: string) => {
   editor.commands.setTextSelection(targetPos);
 };
 
+const appendHistoryEvent = (editor: Editor, text: string) => {
+  const position = editor.state.doc.content.size - 1;
+  editor.view.dispatch(closeHistory(editor.state.tr.insertText(text, position)));
+};
+
 const nativeInputEvent = (type: "beforeinput" | "input", inputType: string): InputEvent => {
   const event = new Event(type, { bubbles: true, cancelable: true }) as InputEvent;
   Object.defineProperty(event, "inputType", { configurable: true, value: inputType });
@@ -73,6 +80,23 @@ const androidMarkdownSample = [
   "- **破折号插入**：主语后紧跟一个由双破折号括起来的**名词短语同位语**。",
   "  - **被动不定式**：need **to be** encouraged",
 ].join("\r\n");
+
+const inlineMathPasteSample = "$\\arcsin(\\sin\\theta)$ 真的等于 $\\theta$ 吗？";
+
+const expectInlineMathPasteParagraph = (html: string) => {
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const inlineMathNodes = Array.from(document.querySelectorAll("p > record-inline-math"));
+
+  expect(inlineMathNodes).toHaveLength(2);
+  expect(document.querySelectorAll("record-formula")).toHaveLength(0);
+  expect(inlineMathNodes.map((node) => node.getAttribute("data-latex"))).toEqual([
+    "\\arcsin(\\sin\\theta)",
+    "\\theta",
+  ]);
+  expect(inlineMathNodes[0].nextSibling?.textContent).toBe(" 真的等于 ");
+  expect(inlineMathNodes[1].nextSibling?.textContent).toBe(" 吗？");
+  expect(inlineMathNodes[0].parentElement).toBe(inlineMathNodes[1].parentElement);
+};
 
 const referenceRecord = (id: string, title: string, subject = "数学"): RecordBlock => ({
   id,
@@ -101,10 +125,370 @@ describe("RichTextEditor", () => {
   it("renders an ordered-list toolbar action", () => {
     render(<RichTextEditor value="<p>Item</p>" onChange={vi.fn()} />);
 
+    expect(screen.getByRole("button", { name: "撤回" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重做" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "有序列表" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
+  });
+
+  it("uses the toolbar to undo and redo a deleted formula node", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={'<p>结论</p><record-formula data-formula-id="formula-1" data-title="公式" data-latex="x^2"></record-formula>'}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const scrollableView = editorRef!.view as unknown as { scrollToSelection: () => void };
+    const originalScrollToSelection = scrollableView.scrollToSelection;
+    scrollableView.scrollToSelection = () => undefined;
+    let formulaPosition: number | undefined;
+    let formulaSize = 0;
+    editorRef!.state.doc.descendants((node, position) => {
+      if (node.type.name === "recordFormula") {
+        formulaPosition = position;
+        formulaSize = node.nodeSize;
+        return false;
+      }
+      return true;
+    });
+    expect(formulaPosition).toBeDefined();
+
+    act(() => {
+      editorRef!.view.dispatch(editorRef!.state.tr.delete(formulaPosition!, formulaPosition! + formulaSize));
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "撤回" })).toBeEnabled());
+    expect(editorRef?.getHTML()).not.toContain("record-formula");
+
+    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-formula"));
+    expect(screen.getByRole("button", { name: "重做" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "重做" }));
+    await waitFor(() => expect(editorRef?.getHTML()).not.toContain("record-formula"));
+    scrollableView.scrollToSelection = originalScrollToSelection;
+  });
+
+  it("caps history at 50 entries to bound editor memory", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p>内容</p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const history = editorRef!.extensionManager.extensions.find((extension) => extension.name === "history");
+
+    expect(history?.options).toMatchObject({ depth: 50, newGroupDelay: 500 });
+  });
+
+  it("keeps exactly 50 history events and discards the oldest event immediately", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const changes = Array.from({ length: 51 }, (_, index) => String.fromCharCode(65 + index));
+    act(() => {
+      changes.forEach((change) => appendHistoryEvent(editorRef!, change));
+    });
+
+    expect(undoDepth(editorRef!.state)).toBe(50);
+    act(() => {
+      Array.from({ length: 50 }).forEach(() => editorRef!.commands.undo());
+    });
+    expect(undoDepth(editorRef!.state)).toBe(0);
+    expect(redoDepth(editorRef!.state)).toBe(50);
+    expect(editorRef!.getText().trim()).toBe(changes[0]);
+
+    act(() => {
+      Array.from({ length: 50 }).forEach(() => editorRef!.commands.redo());
+    });
+    expect(redoDepth(editorRef!.state)).toBe(0);
+    expect(editorRef!.getText().trim()).toBe(changes.join("\n\n"));
+  });
+
+  it("groups adjacent input inside 500ms and starts a new event after the delay", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef!.view.dispatch(editorRef!.state.tr.insertText("A", 1).setTime(1_000));
+      editorRef!.view.dispatch(editorRef!.state.tr.insertText("B", 2).setTime(1_499));
+      editorRef!.view.dispatch(editorRef!.state.tr.insertText("C", 3).setTime(2_000));
+    });
+
+    expect(undoDepth(editorRef!.state)).toBe(2);
+    act(() => editorRef!.commands.undo());
+    expect(editorRef!.getText().trim()).toBe("AB");
+  });
+
+  it("clears undo and redo history when external content or the record changes", async () => {
+    let editorRef: Editor | undefined;
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <RichTextEditor
+        value="<p>本地内容</p>"
+        onChange={onChange}
+        currentRecordId="record-a"
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => appendHistoryEvent(editorRef!, "!"));
+    await waitFor(() => expect(undoDepth(editorRef!.state)).toBe(1));
+
+    rerender(
+      <RichTextEditor
+        value="<p>服务器内容</p>"
+        onChange={onChange}
+        currentRecordId="record-a"
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    await waitFor(() => expect(editorRef!.getHTML()).toBe("<p>服务器内容</p><p></p>"));
+    expect(undoDepth(editorRef!.state)).toBe(0);
+    expect(redoDepth(editorRef!.state)).toBe(0);
+
+    act(() => appendHistoryEvent(editorRef!, "!"));
+    const currentHtml = editorRef!.getHTML();
+    rerender(
+      <RichTextEditor
+        value={currentHtml}
+        onChange={onChange}
+        currentRecordId="record-b"
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    await waitFor(() => expect(undoDepth(editorRef!.state)).toBe(0));
+    expect(redoDepth(editorRef!.state)).toBe(0);
+  });
+
+  it("does not write a cancelled Markdown conversion into externally supplied record content", async () => {
+    const onChange = vi.fn();
+    const streamedMarkdown = Array.from({ length: 81 }, (_, index) => `### 第 ${index} 节\n\n转换内容`).join("\n\n");
+    const { rerender } = render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={onChange}
+        currentRecordId="record-a"
+      />,
+    );
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? streamedMarkdown : "",
+        items: [],
+      },
+    });
+    await waitFor(() => expect(screen.getByText(/正在转换 Markdown/)).toBeInTheDocument());
+    onChange.mockClear();
+
+    rerender(
+      <RichTextEditor
+        value="<p>服务器内容</p>"
+        onChange={onChange}
+        currentRecordId="record-b"
+      />,
+    );
+
+    await waitFor(() => expect(document.querySelector(".rich-editor")?.textContent).toContain("服务器内容"));
+    expect(onChange.mock.calls.some(([html]) => String(html).includes("第 0 节"))).toBe(false);
+  });
+
+  it("supports keyboard undo and redo without being intercepted by paste handling", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => appendHistoryEvent(editorRef!, "A"));
+    const editorElement = document.querySelector(".rich-editor")!;
+
+    fireEvent.keyDown(editorElement, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(editorRef!.getText().trim()).toBe(""));
+    fireEvent.keyDown(editorElement, { key: "z", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(editorRef!.getText().trim()).toBe("A"));
+  });
+
+  it("restores the same image asset reference when undoing and redoing its deletion", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={'<record-asset data-asset-id="ocr-complete-image" data-kind="image" data-title="OCR 完成"></record-asset><p></p>'}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    let assetPosition: number | undefined;
+    let assetSize = 0;
+    editorRef!.state.doc.descendants((node, position) => {
+      if (node.type.name === "recordAsset") {
+        assetPosition = position;
+        assetSize = node.nodeSize;
+        return false;
+      }
+      return true;
+    });
+
+    act(() => editorRef!.view.dispatch(editorRef!.state.tr.delete(assetPosition!, assetPosition! + assetSize)));
+    act(() => editorRef!.commands.undo());
+    expect(editorRef!.getHTML()).toContain('data-asset-id="ocr-complete-image"');
+    act(() => editorRef!.commands.redo());
+    expect(editorRef!.getHTML()).not.toContain("ocr-complete-image");
+  });
+
+  it("does not retain oversized Web Markdown pastes in undo history", async () => {
+    let editorRef: Editor | undefined;
+    const oversizedPaste = "x".repeat(MAX_UNDOABLE_PASTE_BYTES + 1);
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    expect(undoDepth(editorRef!.state)).toBe(0);
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? oversizedPaste : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(editorRef!.getText()).toContain(oversizedPaste));
+    expect(undoDepth(editorRef!.state)).toBe(0);
+  });
+
+  it("does not retain oversized Android clipboard pastes in undo history", async () => {
+    let editorRef: Editor | undefined;
+    const oversizedPaste = "x".repeat(MAX_UNDOABLE_PASTE_BYTES + 1);
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(oversizedPaste);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      fireEvent.paste(document.querySelector(".rich-editor")!, {
+        clipboardData: {
+          getData: () => "",
+          items: [],
+        },
+      });
+
+      await waitFor(() => expect(editorRef!.getText()).toContain(oversizedPaste));
+      expect(undoDepth(editorRef!.state)).toBe(0);
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("clears existing history for oversized Android IME pastes without a paste event", async () => {
+    let editorRef: Editor | undefined;
+    const oversizedPaste = "x".repeat(MAX_UNDOABLE_PASTE_BYTES + 1);
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(oversizedPaste);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => appendHistoryEvent(editorRef!, "A"));
+      expect(undoDepth(editorRef!.state)).toBe(1);
+
+      const editorElement = document.querySelector(".rich-editor")!;
+      fireEvent(editorElement, nativeInputEvent("beforeinput", "insertText"));
+      act(() => editorRef!.commands.insertContent(oversizedPaste));
+      fireEvent(editorElement, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(editorRef!.getText()).toContain(oversizedPaste));
+      await waitFor(() => expect(undoDepth(editorRef!.state)).toBe(0));
+      expect(redoDepth(editorRef!.state)).toBe(0);
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
   });
 
   it("uses desktop heading shortcuts and preserves a visible tab stop in content", async () => {
@@ -515,6 +899,28 @@ describe("RichTextEditor", () => {
     }
   });
 
+  it("keeps native Android clipboard inline formulas in one paragraph when DOM data is empty", async () => {
+    const onChange = vi.fn();
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(inlineMathPasteSample);
+
+    try {
+      render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+      fireEvent.paste(document.querySelector(".rich-editor")!, {
+        clipboardData: {
+          getData: () => "",
+          items: [],
+        },
+      });
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+      expectInlineMathPasteParagraph(onChange.mock.calls.at(-1)?.[0] ?? "");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
   it("converts an Android beforeinput paste when no paste event is emitted", async () => {
     const onChange = vi.fn();
     vi.mocked(isNativePlatform).mockReturnValue(true);
@@ -610,6 +1016,39 @@ describe("RichTextEditor", () => {
       expect(html).toContain("<ul>");
       expect(html).toContain("<strong>名词短语同位语</strong>");
       expect(html).not.toContain("### 整体规律总结");
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(readClipboardTextFallback).mockReset();
+    }
+  });
+
+  it("keeps inline formulas in one paragraph when an Android IME omits the paste event", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    vi.mocked(readClipboardTextFallback).mockResolvedValue(inlineMathPasteSample);
+
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={onChange}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const editor = document.querySelector(".rich-editor")!;
+      fireEvent(editor, nativeInputEvent("beforeinput", "insertText"));
+      act(() => {
+        editorRef?.commands.insertContent(inlineMathPasteSample);
+      });
+      fireEvent(editor, nativeInputEvent("input", "insertText"));
+
+      await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+      expectInlineMathPasteParagraph(onChange.mock.calls.at(-1)?.[0] ?? "");
     } finally {
       vi.mocked(isNativePlatform).mockReturnValue(false);
       vi.mocked(readClipboardTextFallback).mockReset();
@@ -1279,6 +1718,21 @@ describe("RichTextEditor", () => {
     expect(html).toContain("<record-inline-math");
     expect(html).toContain('data-latex="= \\lim_{x \\to 0^+} \\frac{-x^4}{ab x^{b-1}}"');
     expect(html).not.toContain("</p><p><record-inline-math");
+  });
+
+  it("keeps pasted inline formulas and surrounding text inside one paragraph", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p></p>" onChange={onChange} />);
+
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? inlineMathPasteSample : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
+    expectInlineMathPasteParagraph(onChange.mock.calls.at(-1)?.[0] ?? "");
   });
 
   it("creates a block formula on Enter and leaves Markdown literal inside code", async () => {

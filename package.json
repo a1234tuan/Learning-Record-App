@@ -17,7 +17,8 @@
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "android:build:debug": "npm run android:sync && powershell -ExecutionPolicy Bypass -File scripts/android-debug-build.ps1",
-    "android:build:release": "npm run android:sync && powershell -ExecutionPolicy Bypass -File scripts/android-release-build.ps1"
+    "android:build:release": "npm run android:sync && powershell -ExecutionPolicy Bypass -File scripts/android-release-build.ps1",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
@@ -47,6 +48,7 @@
     "lucide-react": "^0.468.0",
     "markdown-it": "^14.3.0",
     "nanoid": "^5.0.9",
+    "prosemirror-history": "1.5.0",
     "prosemirror-markdown": "^1.13.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -68,6 +70,7 @@
     "electron": "^43.2.0",
     "electron-builder": "26.0.12",
     "jsdom": "^25.0.1",
+    "patch-package": "^8.0.0",
     "png-to-ico": "^2.1.0",
     "sharp": "^0.34.4",
     "typescript": "^5.7.2",
