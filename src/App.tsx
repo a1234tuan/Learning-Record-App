@@ -94,10 +94,14 @@ const useKeyboardVisible = () => {
 
     const update = () => {
       const activeEditable = isEditableElement(document.activeElement);
+      const aiWorkspaceActive = Boolean(document.querySelector(".app-shell.ai-chat-active"));
+      const activeAiInput = document.activeElement instanceof Element
+        && Boolean(document.activeElement.closest(".ai-chat-page, .ai-scope-page"));
+      const keyboardEditable = activeEditable && (!aiWorkspaceActive || activeAiInput);
       const currentHeight = readViewportHeight();
-      restingHeight = nextKeyboardBaselineHeight(restingHeight, currentHeight, activeEditable);
+      restingHeight = nextKeyboardBaselineHeight(restingHeight, currentHeight, keyboardEditable);
       const mobileViewport = window.matchMedia("(max-width: 920px)").matches;
-      setKeyboardVisible(mobileViewport && isKeyboardViewportVisible(activeEditable, restingHeight, currentHeight));
+      setKeyboardVisible(mobileViewport && isKeyboardViewportVisible(keyboardEditable, restingHeight, currentHeight));
     };
 
     const updateAfterFocus = () => {

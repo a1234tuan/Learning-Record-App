@@ -107,9 +107,14 @@ button:disabled {
 }
 
 .app-shell.ai-chat-active {
-  height: var(--ai-chat-viewport-height, 100dvh);
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
+}
+
+.app-shell.ai-chat-active.keyboard-open:has(.ai-chat-page textarea:focus),
+.app-shell.ai-chat-active.keyboard-open:has(.ai-scope-page input:focus) {
+  height: var(--ai-chat-viewport-height, 100dvh);
 }
 
 .app-shell.ai-chat-active .content-area,
@@ -4089,11 +4094,8 @@ button:disabled {
 .ai-scope-record-list {
   display: grid;
   min-height: 0;
-  max-height: min(34dvh, 310px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  max-height: none;
+  overflow: visible;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -4626,9 +4628,6 @@ button:disabled {
     width: 100%;
   }
 
-  .ai-scope-record-list {
-    max-height: 32dvh;
-  }
 }
 
 .structure-insert-menu {
