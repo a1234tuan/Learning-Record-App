@@ -121,7 +121,7 @@ describe("AiChatPage", () => {
     expect(screen.getByText(/最近 14 天/)).toBeInTheDocument();
   });
 
-  it("labels the automatic focused retrieval budget in the context strip", async () => {
+  it("keeps retrieval parameters inside the expandable scope details", async () => {
     const scopedSession: AiChatSession = { ...session, attachment: contextAttachment };
     vi.spyOn(storage, "listAiSessions").mockResolvedValue([scopedSession]);
     vi.spyOn(storage, "getAiSession").mockResolvedValue(scopedSession);
@@ -139,6 +139,56 @@ describe("AiChatPage", () => {
       />,
     );
 
+    expect(screen.queryByText("聚焦检索 16K")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "打开范围详情" }));
     expect(await screen.findByText("聚焦检索 16K")).toBeInTheDocument();
+  });
+
+  it("shows only two preset recommendations before the first message and fills the composer", async () => {
+    const scopedSession: AiChatSession = { ...session, attachment: contextAttachment };
+    const firstPreset = DEFAULT_SETTINGS.ai!.presets[0];
+    vi.spyOn(storage, "listAiSessions").mockResolvedValue([scopedSession]);
+    vi.spyOn(storage, "getAiSession").mockResolvedValue(scopedSession);
+    vi.spyOn(storage, "listAiMessages").mockResolvedValue([]);
+    vi.spyOn(storage, "listAiAttachments").mockResolvedValue([]);
+    render(
+      <AiChatPage
+        sessionId={scopedSession.id}
+        settings={DEFAULT_SETTINGS}
+        blocks={[]}
+        assets={[]}
+        onOpenSession={vi.fn()}
+        onDeletedSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(firstPreset.title) }));
+
+    expect(screen.getByRole("textbox")).toHaveValue(firstPreset.prompt);
+    expect(screen.getByRole("button", { name: "更多学习方式" })).toBeInTheDocument();
+  });
+
+  it("keeps all learning modes available from the composer", async () => {
+    const scopedSession: AiChatSession = { ...session, attachment: contextAttachment };
+    vi.spyOn(storage, "listAiSessions").mockResolvedValue([scopedSession]);
+    vi.spyOn(storage, "getAiSession").mockResolvedValue(scopedSession);
+    vi.spyOn(storage, "listAiMessages").mockResolvedValue([assistantMessage]);
+    vi.spyOn(storage, "listAiAttachments").mockResolvedValue([]);
+    render(
+      <AiChatPage
+        sessionId={scopedSession.id}
+        settings={DEFAULT_SETTINGS}
+        blocks={[]}
+        assets={[]}
+        onOpenSession={vi.fn()}
+        onDeletedSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择学习方式" }));
+    expect(await screen.findByRole("dialog", { name: "选择学习方式" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /抽测此范围/ })).toBeInTheDocument();
   });
 });
