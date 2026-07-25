@@ -35,6 +35,7 @@ const record = (id: string, title: string, subject: string): RecordBlock => ({
   date: "2026-06-20",
   order: 0,
   subject,
+  tags: [],
   title,
   contentHtml: "<p>content</p>",
   assets: [],
@@ -158,6 +159,19 @@ describe("ReviewPage", () => {
   beforeEach(() => {
     window.localStorage.clear();
     richTextEditorMock.props = [];
+  });
+
+  it("shows record tags on a review card", () => {
+    renderReviewPage({
+      mode: "queue",
+      records: records.map((item) => item.id === "active" ? { ...item, tags: ["队列", "重点"] } : item),
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      queueIds: ["active"],
+      currentRecordId: "active",
+    });
+
+    expect(screen.getByLabelText("日志标签：队列、重点")).toBeInTheDocument();
   });
 
   it("passes queue card references to the read-only editor without enabling queue editing", () => {

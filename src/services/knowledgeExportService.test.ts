@@ -93,6 +93,7 @@ const snapshot: StorageSnapshot = {
         date: "2026-06-21",
         order: 0,
         subject: "数据结构",
+        tags: ["树", "重点"],
         title: "树",
         contentHtml: "<h2>遍历</h2><p>先序和后序</p>",
         assets: [{ id: "a1", title: "树截图", kind: "image" }],
@@ -107,6 +108,7 @@ const snapshot: StorageSnapshot = {
         date: "2026-06-20",
         order: 0,
         subject: "OS",
+        tags: [],
         title: "进程",
         contentHtml: "<p>同步互斥</p>",
         assets: [],
@@ -172,6 +174,7 @@ describe("knowledge export", () => {
 
     expect(dataStructure).toContain("# 数据结构");
     expect(dataStructure).toContain("## 2026-06-21 树");
+    expect(dataStructure).toContain("标签：树、重点");
     expect(dataStructure).toContain("二叉树遍历 OCR 文本");
     expect(os).toContain("## 2026-06-20 进程");
   });
@@ -182,6 +185,7 @@ describe("knowledge export", () => {
     expect(payload.records[0]).toMatchObject({
       id: "r1",
       subject: "数据结构",
+      tags: ["树", "重点"],
       formulas: ["T(n)=O(n)"],
       ocrTexts: ["二叉树遍历 OCR 文本"],
     });
@@ -217,6 +221,7 @@ describe("knowledge export", () => {
 
     expect(text).toContain("学习日志知识库");
     expect(text).toContain("2026-06-21｜数据结构｜树");
+    expect(text).toContain("标签：树、重点");
     expect(text).toContain("图片文字");
   });
 
@@ -313,6 +318,7 @@ describe("knowledge export", () => {
             date: "2026-06-19",
             order: 0,
             subject: "数学",
+            tags: [],
             title: "回收站记录",
             contentHtml: "<p></p>",
             assets: [{ id: "missing", title: "缺失图片", kind: "image" }],

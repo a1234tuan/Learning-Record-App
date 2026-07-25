@@ -319,6 +319,7 @@ export const useAppData = () => {
         date,
         order: dayBlocks.length,
         subject: normalizedSubject,
+        tags: [],
         title: nextRecordTitle(normalizedSubject, subjectCount),
         contentHtml,
         assets: [],

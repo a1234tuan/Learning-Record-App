@@ -106,6 +106,7 @@ const referenceRecord = (id: string, title: string, subject = "数学"): RecordB
   date: "2026-07-21",
   order: 0,
   subject,
+  tags: [],
   title,
   contentHtml: "<p></p>",
   assets: [],

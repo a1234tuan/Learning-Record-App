@@ -14,6 +14,7 @@ const record = (id: string, title: string, subject: string, date: string): Recor
   date,
   order: 0,
   subject,
+  tags: [],
   title,
   contentHtml: "<p></p>",
   assets: [],

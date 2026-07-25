@@ -19,6 +19,7 @@ const record = (id: string, subject: string): RecordBlock => ({
   date: "2026-06-21",
   order: 0,
   subject,
+  tags: [],
   title: `${subject} 记录`,
   contentHtml: "<p>内容</p>",
   assets: [],

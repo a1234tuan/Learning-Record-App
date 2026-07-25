@@ -213,6 +213,7 @@ export const createTemplateBlocks = (date: string, existingCount = 0): Block[] =
       date,
       order: existingCount,
       subject: DEFAULT_SUBJECT,
+      tags: [],
       title: nextRecordTitle(DEFAULT_SUBJECT, existingCount),
       contentHtml:
         "<h2>今日学了什么</h2><p></p><h2>卡点疑问</h2><p></p><h2>明日计划</h2><p></p>",

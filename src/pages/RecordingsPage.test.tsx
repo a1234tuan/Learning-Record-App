@@ -76,6 +76,7 @@ const record: RecordBlock = {
   date: "2026-06-21",
   order: 0,
   subject: "OS",
+  tags: [],
   title: "进程同步",
   contentHtml: "<p></p>",
   assets: [{ id: "audio-1", title: "调度讲解", kind: "audio" }],

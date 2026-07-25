@@ -20,6 +20,7 @@ const record = (id: string, title: string, content = "目标关键词"): RecordB
   date: "2026-06-21",
   order: 0,
   subject: "数学",
+  tags: [],
   title,
   contentHtml: `<p>${content}</p>`,
   assets: [],

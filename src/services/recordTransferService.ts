@@ -101,6 +101,7 @@ const assertTransferPayload = (payload: RecordTransferPayload) => {
       !Array.isArray(record.assets) ||
       !Array.isArray(record.formulas) ||
       !Array.isArray(record.mistakeRefs) ||
+      (record.tags !== undefined && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) ||
       typeof record.createdAt !== "string" ||
       typeof record.updatedAt !== "string"
     ) {

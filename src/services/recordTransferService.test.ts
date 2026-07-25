@@ -29,6 +29,7 @@ const makeRecord = (id: string, assetId: string): RecordBlock => ({
   date: "2026-07-22",
   order: 0,
   subject: "数学",
+  tags: ["积分", "重点"],
   title: "二重积分",
   contentHtml: `<p>公式 <record-asset data-asset-id="${assetId}" data-kind="image" data-title="图"></record-asset> <record-reference data-record-id="${id}" data-title="二重积分"></record-reference></p>`,
   assets: [{ id: assetId, kind: "image", title: "图" }],
@@ -74,6 +75,7 @@ describe("recordTransferService", () => {
     const parsed = await parseRecordTransferPackage(new File([blob], "records.zip", { type: "application/zip" }));
 
     expect(parsed.payload.records[0].contentHtml).toBe(record.contentHtml);
+    expect(parsed.payload.records[0].tags).toEqual(["积分", "重点"]);
     expect(parsed.payload.subjects).toEqual(["数学"]);
     const parsedAsset = await parsed.readAsset(asset.id);
     expect(parsedAsset.name).toBe(asset.fileName);
@@ -105,6 +107,29 @@ describe("recordTransferService", () => {
     expect(committed[0].contentHtml).toContain(`data-asset-id="${staged[0].id}"`);
     expect(committed[0].contentHtml).toContain(`data-record-id="${committed[0].id}"`);
     expect(committed[0].assets).toEqual([{ id: staged[0].id, kind: "image", title: "图" }]);
+    expect(committed[0].tags).toEqual(["积分", "重点"]);
+  });
+
+  it("accepts a legacy transfer record without tags and normalizes it on import", async () => {
+    const source = makeRecord("legacy-source", "legacy-asset");
+    const legacySource = { ...source } as Omit<RecordBlock, "tags"> & { tags?: string[] };
+    delete legacySource.tags;
+    let committed: RecordBlock[] = [];
+    const store = {
+      listBlocks: vi.fn(async () => []),
+      listDeletedBlocks: vi.fn(async () => []),
+      getAsset: vi.fn(async () => undefined),
+      stageRecordTransferAsset: vi.fn(async () => undefined),
+      commitRecordTransfer: vi.fn(async (_sessionId: string, records: RecordBlock[]) => {
+        committed = records;
+        return { records: 1, assets: 1, images: 1, audio: 0, attachments: 0, subjects: 1 };
+      }),
+      discardRecordTransfer: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await importRecordTransferPackage(store, transfer(legacySource as RecordBlock, makeAsset("legacy-asset")), [legacySource.id]);
+
+    expect(committed[0]?.tags).toEqual([]);
   });
 
   it("cleans staged resources when cancellation happens before commit", async () => {

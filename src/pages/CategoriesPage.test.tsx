@@ -25,6 +25,7 @@ const record = (subject: string, overrides: Partial<RecordBlock> = {}): RecordBl
   date: overrides.date ?? "2026-06-21",
   order: overrides.order ?? 0,
   subject,
+  tags: [],
   title: overrides.title ?? `${subject}记录`,
   contentHtml: "<p></p>",
   assets: [],
@@ -127,5 +128,33 @@ describe("CategoriesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /显示更多/ }));
 
     expect(screen.getAllByText(/七月记录 /)).toHaveLength(60);
+  });
+
+  it("groups a multi-tag record under every tag without creating an untagged group", () => {
+    renderPage([
+      record("数学", { id: "multi", title: "双标签记录", tags: ["重点", "积分"] }),
+      record("数学", { id: "single", title: "重点记录", tags: ["重点"] }),
+    ], createSaveSubjectsMock(), { activeSubject: "数学", managing: false });
+
+    fireEvent.click(screen.getByRole("tab", { name: "按标签" }));
+
+    const toggles = screen.getAllByRole("button", { name: /日志标签：/ });
+    expect(toggles).toHaveLength(2);
+    for (const toggle of toggles) {
+      if (toggle.getAttribute("aria-expanded") !== "true") {
+        fireEvent.click(toggle);
+      }
+    }
+
+    expect(screen.getAllByText("双标签记录")).toHaveLength(2);
+    expect(screen.queryByText("未分类")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty tag view when no saved record has a tag", () => {
+    renderPage([record("数学")], createSaveSubjectsMock(), { activeSubject: "数学", managing: false });
+
+    fireEvent.click(screen.getByRole("tab", { name: "按标签" }));
+
+    expect(screen.getByText("这个学科还没有标签。")).toBeInTheDocument();
   });
 });

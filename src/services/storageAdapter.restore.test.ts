@@ -63,6 +63,7 @@ const oldRecord: RecordBlock = {
   date: "2026-06-21",
   order: 0,
   subject: "数学",
+  tags: [],
   title: "恢复前记录",
   contentHtml: "<p>保留的旧数据</p>",
   assets: [],

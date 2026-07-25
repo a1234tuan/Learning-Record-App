@@ -150,6 +150,7 @@ const snapshot = (assetIds: string[] = ["asset-1"]): StreamableBackupSnapshot =>
         date: "2026-06-21",
         order: 0,
         subject: "数学",
+        tags: [],
         title: "测试记录",
         contentHtml: "<p>内容</p>",
         assets: assetIds.map((id) => ({ id, title: id, kind: "image" as const })),

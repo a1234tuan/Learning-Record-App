@@ -1,5 +1,6 @@
 import type { Asset, Block, DayEntry, RecordBlock, SearchResult } from "../types";
 import { recordToPlainText } from "./recordContent";
+import { normalizeRecordTags } from "./recordTags";
 
 const normalize = (value: string): string => value.toLocaleLowerCase("zh-CN");
 const DEFAULT_SEARCH_LIMIT = Number.POSITIVE_INFINITY;
@@ -24,6 +25,7 @@ const recordTextCacheKey = (record: RecordBlock, assetMap: Map<string, Asset>): 
   [
     record.id,
     record.updatedAt,
+    ...normalizeRecordTags(record.tags),
     ...record.assets.map((ref) => `${ref.id}:${assetMap.get(ref.id)?.updatedAt ?? "missing"}`),
   ].join("|");
 
@@ -60,6 +62,7 @@ const blockToTextWithAssetMap = (block: Block, assetMap: Map<string, Asset>): st
       return cacheRecordText(cacheKey, [
         block.title,
         block.subject,
+        ...normalizeRecordTags(block.tags),
         recordToPlainText(block, recordAssets),
         block.assets.map((asset) => `${asset.title} ${assetTitle(asset.id)}`).join(" "),
         block.formulas.map((formula) => `${formula.title ?? ""} ${formula.latex}`).join(" "),
@@ -157,7 +160,7 @@ export const searchAll = (
         title: block.type === "record" ? block.title : `${block.date} 的记录`,
         excerpt: excerpt(text, query),
         date: block.date,
-        tags: block.type === "record" ? [block.subject] : [],
+        tags: block.type === "record" ? [block.subject, ...normalizeRecordTags(block.tags)] : [],
         recordId: block.type === "record" ? block.id : undefined,
         assetId: matchedAsset?.id,
         matchSource,
@@ -238,7 +241,7 @@ export const searchAllAsync = async (
         title: block.type === "record" ? block.title : `${block.date} 的记录`,
         excerpt: excerpt(text, query),
         date: block.date,
-        tags: block.type === "record" ? [block.subject] : [],
+        tags: block.type === "record" ? [block.subject, ...normalizeRecordTags(block.tags)] : [],
         recordId: block.type === "record" ? block.id : undefined,
         assetId: matchedAsset?.id,
         matchSource,

@@ -8,7 +8,9 @@ import {
   getRecordsBySubject,
   getSubjectCounts,
 } from "../lib/journalSelectors";
+import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
 import { RecordCard } from "../components/RecordCard";
+import { RecordTagChips } from "../components/RecordTagChips";
 
 const MONTH_RECORD_STEP = 50;
 
@@ -35,6 +37,12 @@ type MonthRecordGroup = {
   records: RecordBlock[];
 };
 
+type TagRecordGroup = {
+  key: string;
+  tag: string;
+  records: RecordBlock[];
+};
+
 const monthKey = (date: string) => date.slice(0, 7);
 
 const monthLabel = (month: string) => {
@@ -50,6 +58,29 @@ const groupRecordsByMonth = (records: RecordBlock[]): MonthRecordGroup[] => {
   }
   return Array.from(groups, ([month, monthRecords]) => ({ month, records: monthRecords }))
     .sort((a, b) => b.month.localeCompare(a.month));
+};
+
+const groupRecordsByTag = (records: RecordBlock[]): TagRecordGroup[] => {
+  const groups = new Map<string, TagRecordGroup>();
+  for (const record of records) {
+    for (const tag of normalizeRecordTags(record.tags)) {
+      const key = recordTagKey(tag);
+      const group = groups.get(key);
+      if (group) {
+        group.records.push(record);
+      } else {
+        groups.set(key, { key, tag, records: [record] });
+      }
+    }
+  }
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      records: [...group.records].sort((left, right) =>
+        right.date.localeCompare(left.date) || right.updatedAt.localeCompare(left.updatedAt),
+      ),
+    }))
+    .sort((left, right) => left.tag.localeCompare(right.tag, "zh-CN"));
 };
 
 export const CategoriesPage = ({
@@ -82,13 +113,22 @@ export const CategoriesPage = ({
     [activeSubject, records],
   );
   const monthGroups = useMemo(() => groupRecordsByMonth(activeRecords), [activeRecords]);
+  const tagGroups = useMemo(() => groupRecordsByTag(activeRecords), [activeRecords]);
+  const [recordGrouping, setRecordGrouping] = useState<"month" | "tag">("month");
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set());
   const [monthVisibleCounts, setMonthVisibleCounts] = useState<Record<string, number>>({});
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(() => new Set());
+  const [tagVisibleCounts, setTagVisibleCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setExpandedMonths(monthGroups[0] ? new Set([monthGroups[0].month]) : new Set());
     setMonthVisibleCounts({});
   }, [activeSubject, monthGroups]);
+
+  useEffect(() => {
+    setExpandedTags(tagGroups[0] ? new Set([tagGroups[0].key]) : new Set());
+    setTagVisibleCounts({});
+  }, [activeSubject, tagGroups]);
 
   const addSubject = async () => {
     const name = newSubject.trim();
@@ -210,6 +250,25 @@ export const CategoriesPage = ({
     setMonthVisibleCounts((current) => ({
       ...current,
       [month]: (current[month] ?? MONTH_RECORD_STEP) + MONTH_RECORD_STEP,
+    }));
+  };
+
+  const toggleTag = (tag: string) => {
+    setExpandedTags((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) {
+        next.delete(tag);
+      } else {
+        next.add(tag);
+      }
+      return next;
+    });
+  };
+
+  const showMoreTagRecords = (tag: string) => {
+    setTagVisibleCounts((current) => ({
+      ...current,
+      [tag]: (current[tag] ?? MONTH_RECORD_STEP) + MONTH_RECORD_STEP,
     }));
   };
 
@@ -354,6 +413,28 @@ export const CategoriesPage = ({
               <p>从今天页新建一个记录块后，它会出现在这里。</p>
             </div>
           ) : (
+            <>
+              <div className="record-grouping-control" role="tablist" aria-label="记录分组方式">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={recordGrouping === "month"}
+                  className={recordGrouping === "month" ? "active" : ""}
+                  onClick={() => setRecordGrouping("month")}
+                >
+                  按月份
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={recordGrouping === "tag"}
+                  className={recordGrouping === "tag" ? "active" : ""}
+                  onClick={() => setRecordGrouping("tag")}
+                >
+                  按标签
+                </button>
+              </div>
+              {recordGrouping === "month" ? (
             <div className="subject-record-timeline">
               {monthGroups.map((group) => {
                 const expanded = expandedMonths.has(group.month);
@@ -402,6 +483,62 @@ export const CategoriesPage = ({
                 );
               })}
             </div>
+              ) : tagGroups.length === 0 ? (
+                <div className="empty-state subject-tag-empty-state">
+                  <h2>这个学科还没有标签。</h2>
+                  <p>请在日志编辑页的标题下添加标签后，再按标签查看记录。</p>
+                </div>
+              ) : (
+                <div className="subject-record-timeline">
+                  {tagGroups.map((group) => {
+                    const expanded = expandedTags.has(group.key);
+                    const visibleCount = tagVisibleCounts[group.key] ?? MONTH_RECORD_STEP;
+                    const visibleRecords = group.records.slice(0, visibleCount);
+                    const hiddenCount = group.records.length - visibleRecords.length;
+                    return (
+                      <section key={group.key} className="subject-tag-group">
+                        <button
+                          type="button"
+                          className="subject-tag-toggle"
+                          onClick={() => toggleTag(group.key)}
+                          aria-expanded={expanded}
+                        >
+                          <RecordTagChips subject={activeSubject} tags={[group.tag]} className="subject-tag-title" />
+                          <small>{group.records.length} 条</small>
+                        </button>
+                        {expanded && (
+                          <div className="subject-tag-records">
+                            {visibleRecords.map((record) => (
+                              <div key={record.id} className="dated-record-row">
+                                <small>{formatChineseDate(record.date)}</small>
+                                <RecordCard
+                                  record={record}
+                                  onOpen={onOpenRecord}
+                                  onAskAi={onAskAi}
+                                  onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                                  reviewState={reviewStatesByRecord[record.id]}
+                                  reviewLogs={reviewLogsByRecord[record.id]}
+                                  onAddReview={() => onAddToReview(record.id)}
+                                />
+                              </div>
+                            ))}
+                            {hiddenCount > 0 && (
+                              <button
+                                type="button"
+                                className="secondary-button subject-month-more"
+                                onClick={() => showMoreTagRecords(group.key)}
+                              >
+                                显示更多（剩余 {hiddenCount} 条）
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </section>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </section>
       )}

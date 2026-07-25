@@ -61,6 +61,7 @@ const snapshot: StreamableBackupSnapshot = {
         date: "2026-06-21",
         order: 0,
         subject: "数据结构",
+        tags: [],
         title: "结构内容",
         contentHtml: "<p>正文内容</p>",
         assets: [],

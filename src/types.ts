@@ -63,6 +63,7 @@ export interface RecordBlock extends BaseEntity {
   assets: RecordAssetRef[];
   formulas: RecordFormula[];
   mistakeRefs: EntityId[];
+  tags: string[];
   favorite?: boolean;
 }
 
@@ -620,6 +621,7 @@ export interface KnowledgeRecord {
   date: ISODate;
   subject: Subject;
   title: string;
+  tags: string[];
   contentText: string;
   contentMarkdown: string;
   formulas: string[];

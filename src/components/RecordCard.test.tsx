@@ -17,6 +17,7 @@ const record: RecordBlock = {
   date: "2026-06-01",
   order: 0,
   subject: "操作系统",
+  tags: [],
   title: "进程同步与互斥",
   contentHtml: "<p>信号量机制实现</p>",
   assets: [],
@@ -59,6 +60,13 @@ const reviewLog = (patch: Partial<RecordReviewLog> = {}): RecordReviewLog => ({
 });
 
 describe("RecordCard", () => {
+  it("renders all record tags below the title", () => {
+    render(<RecordCard record={{ ...record, tags: ["同步", "重点"] }} onOpen={vi.fn()} />);
+
+    expect(screen.getByLabelText("日志标签：同步、重点")).toHaveTextContent("同步");
+    expect(screen.getByLabelText("日志标签：同步、重点")).toHaveTextContent("重点");
+  });
+
   it("keeps action buttons from opening the record", () => {
     const onOpen = vi.fn();
     const onAskAi = vi.fn();

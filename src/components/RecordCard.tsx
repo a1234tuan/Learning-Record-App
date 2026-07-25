@@ -3,6 +3,7 @@ import { BrainCircuit, FileText, MessageSquare, RefreshCw, Star } from "lucide-r
 import type { RecordBlock, RecordReviewLog, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
 import { isReviewDueOn, reviewKindLabel } from "../lib/reviewScheduler";
+import { RecordTagChips } from "./RecordTagChips";
 
 interface RecordCardProps {
   record: RecordBlock;
@@ -92,6 +93,7 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
         </span>
         <div className="record-card-copy">
           <strong>{record.title}</strong>
+          <RecordTagChips subject={record.subject} tags={record.tags} />
           <small>
             {record.date} · {assetText} · {formulaText}
           </small>

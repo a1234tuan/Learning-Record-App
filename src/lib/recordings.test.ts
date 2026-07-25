@@ -25,6 +25,7 @@ const record = (patch: Partial<RecordBlock>): RecordBlock => ({
   date: "2026-06-21",
   order: 0,
   subject: "OS",
+  tags: [],
   title: "进程同步",
   contentHtml: "<p></p>",
   assets: [],

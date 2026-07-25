@@ -13,6 +13,7 @@ const record: RecordBlock = {
   date: "2026-07-19",
   order: 0,
   subject: "数学",
+  tags: ["几何", "重点"],
   title: "勾股定理",
   contentHtml: '<p>直角三角形 <record-inline-math data-formula-id="f1" data-latex="a^2+b^2=c^2"></record-inline-math></p>',
   assets: [],
@@ -26,6 +27,13 @@ describe("searchAllAsync", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ recordId: "record-1", matchSource: "content" });
+  });
+
+  it("finds a record by its tag and returns the subject with all record tags", async () => {
+    const results = await searchAllAsync("重点", [] as DayEntry[], [record], [] as Asset[]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ recordId: "record-1", tags: ["数学", "几何", "重点"] });
   });
 
   it("honors cancellation before a large scan", async () => {

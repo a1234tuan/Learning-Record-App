@@ -99,6 +99,7 @@ const record: RecordBlock = {
   date: "2026-06-21",
   order: 0,
   subject: "Math",
+  tags: [],
   title: "Math note 1",
   contentHtml: "<p></p>",
   assets: [],
@@ -234,6 +235,27 @@ describe("RecordEditorPage", () => {
       contentHtml: "<record-collapse-block><p>body</p></record-collapse-block>",
     }));
     expect(screen.getByRole("heading", { name: "Math note 1" })).toBeInTheDocument();
+  });
+
+  it("suggests subject tags and saves a pending new tag", async () => {
+    const referenceRecord: RecordBlock = {
+      ...record,
+      id: "reference-record",
+      title: "已标记记录",
+      tags: ["复习", "定义"],
+    };
+    const { onGetDraft, onSave, saveButton } = renderEditor({ referenceRecords: [referenceRecord] });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+
+    const tagInput = screen.getByRole("textbox", { name: "日志标签" });
+    fireEvent.change(tagInput, { target: { value: "复" } });
+    fireEvent.click(screen.getByRole("option", { name: "复习" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "日志标签" }), { target: { value: "新标签" } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ tags: ["复习", "新标签"] });
   });
 
   it("does not write an initialization change before an asynchronous draft has loaded", async () => {

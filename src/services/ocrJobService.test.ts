@@ -70,6 +70,7 @@ describe("ocrJobService", () => {
       date: "2026-06-21",
       order: 0,
       subject: "数据结构",
+      tags: [],
       title: "数据结构记录块1",
       contentHtml: "<p></p>",
       assets: [

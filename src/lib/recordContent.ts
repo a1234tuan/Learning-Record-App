@@ -1,4 +1,5 @@
 import type { Asset, RecordAssetRef, RecordBlock, RecordFormula } from "../types";
+import { normalizeRecordTags } from "./recordTags";
 import { structureBlockMarkdownFromElement, structureBlockPlainTextFromElement } from "./recordStructureBlocks";
 
 export type LinearNode =
@@ -118,6 +119,7 @@ export const syncRecordRefsFromContent = (record: RecordBlock, options: RecordCo
   const refs = extractRecordRefsFromContent(contentHtml);
   return {
     ...record,
+    tags: normalizeRecordTags(record.tags),
     contentHtml,
     assets: refs.assets,
     formulas: refs.formulas,

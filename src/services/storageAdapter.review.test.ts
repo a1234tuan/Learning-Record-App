@@ -60,6 +60,7 @@ const record = (patch: Partial<RecordBlock> = {}): RecordBlock => ({
   date: "2026-06-20",
   order: 0,
   subject: "数据结构",
+  tags: [],
   title: "BFS 队列",
   contentHtml: "<p>content</p>",
   assets: [],

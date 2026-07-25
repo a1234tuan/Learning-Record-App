@@ -13,6 +13,7 @@ const record = (patch: Partial<RecordBlock> = {}): RecordBlock => ({
   date: "2026-06-22",
   order: 0,
   subject: "数学",
+  tags: [],
   title: "极限",
   contentHtml: [
     "<p>今天复习了洛必达法则。</p>",

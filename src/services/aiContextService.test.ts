@@ -13,6 +13,7 @@ const record = (patch: Partial<RecordBlock> = {}): RecordBlock => ({
   date: "2026-06-22",
   order: 0,
   subject: "数据结构",
+  tags: [],
   title: "B树索引",
   contentHtml: [
     "<p>B树用于减少磁盘 IO，节点里可以存多个 key。</p>",

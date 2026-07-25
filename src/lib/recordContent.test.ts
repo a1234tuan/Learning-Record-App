@@ -26,6 +26,7 @@ const record: RecordBlock = {
   date: "2026-06-21",
   order: 0,
   subject: "数据结构",
+  tags: [],
   title: "树",
   contentHtml: "<p>先写文字</p>",
   assets: [{ id: "a1", title: "树截图", kind: "image" }],

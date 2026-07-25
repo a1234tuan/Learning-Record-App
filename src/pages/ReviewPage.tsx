@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
+import { RecordTagChips } from "../components/RecordTagChips";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
 import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
@@ -601,6 +602,7 @@ export const ReviewPage = ({
               <header className="record-view-header">
                 <p className="eyebrow">{currentRecord.date}</p>
                 <h1>{currentRecord.title}</h1>
+                <RecordTagChips subject={currentRecord.subject} tags={currentRecord.tags} className="review-record-tags" />
                 <span>{currentRecord.subject} · {reviewKindLabel(currentReview?.reviewKind)}</span>
               </header>
               <RichTextEditor
@@ -731,6 +733,7 @@ export const ReviewPage = ({
                     <span className="record-subject-chip">{record.subject}</span>
                     <div>
                       <strong>{record.title}</strong>
+                      <RecordTagChips subject={record.subject} tags={record.tags} />
                       <small>
                         {record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次
                         {hasEvaluation && (

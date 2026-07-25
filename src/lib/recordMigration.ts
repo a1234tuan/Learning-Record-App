@@ -56,6 +56,7 @@ export const migrateBlocksToRecords = (blocks: Block[]): Block[] => {
       date: block.date,
       order: block.order,
       subject,
+      tags: [],
       title: titleFromBlock(block, subject, index),
       contentHtml: "<p></p>",
       assets: [],

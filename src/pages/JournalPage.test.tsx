@@ -24,6 +24,7 @@ const record = (id: string, date: string): Block => ({
   date,
   order: 0,
   subject: "OS",
+  tags: [],
   title: `${date} 记录`,
   contentHtml: "<p>内容</p>",
   assets: [],

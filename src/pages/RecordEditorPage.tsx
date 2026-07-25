@@ -1,11 +1,12 @@
-import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
 import type { Asset, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
+import { RecordTagChips, recordTagStyle } from "../components/RecordTagChips";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
 import { StructureInsertMenu } from "../components/StructureInsertMenu";
 import { newId } from "../lib/entity";
@@ -13,6 +14,7 @@ import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
+import { getSubjectRecordTags, normalizeRecordTag, normalizeRecordTags, recordTagKey } from "../lib/recordTags";
 import { ratingLabel, reviewKindLabel } from "../lib/reviewScheduler";
 import {
   createDefaultComparisonTable,
@@ -103,6 +105,7 @@ const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
   draft.title !== record.title ||
   draft.subject !== record.subject ||
   draft.contentHtml !== record.contentHtml ||
+  JSON.stringify(draft.tags) !== JSON.stringify(record.tags) ||
   JSON.stringify(draft.assets) !== JSON.stringify(record.assets) ||
   JSON.stringify(draft.formulas) !== JSON.stringify(record.formulas);
 
@@ -142,6 +145,8 @@ export const RecordEditorPage = ({
   const [draftLoading, setDraftLoading] = useState(true);
   const interactionLocked = restoreLocked || draftLoading;
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+  const [editingTagIndex, setEditingTagIndex] = useState<number | null>(null);
   const recordIdRef = useRef(record.id);
   const draftRef = useRef<RecordBlock>(cloneRecord(record));
   const draftLoadingRef = useRef(true);
@@ -292,6 +297,8 @@ export const RecordEditorPage = ({
     recordIdRef.current = loadingRecordId;
     setDraftRestored(false);
     setMoreActionsOpen(false);
+    setTagInput("");
+    setEditingTagIndex(null);
     setEditingState(false);
     onEditingChange?.(false);
 
@@ -375,6 +382,59 @@ export const RecordEditorPage = ({
       return;
     }
     setCurrentDraft({ ...draftRef.current, ...patch, mistakeRefs: [] });
+  };
+
+  const applyTagInput = (target: RecordBlock, value = tagInput, editIndex = editingTagIndex): RecordBlock => {
+    const candidates = value.split(/[，,]/).map(normalizeRecordTag).filter(Boolean);
+    const tags = normalizeRecordTags(target.tags);
+    if (editIndex !== null) {
+      if (!tags[editIndex] || !candidates[0]) {
+        return { ...target, tags };
+      }
+      tags[editIndex] = candidates[0];
+      return { ...target, tags: normalizeRecordTags(tags) };
+    }
+    return candidates.length > 0 ? { ...target, tags: normalizeRecordTags([...tags, ...candidates]) } : { ...target, tags };
+  };
+
+  const commitTagInput = () => {
+    const next = applyTagInput(draftRef.current);
+    if (JSON.stringify(next.tags) !== JSON.stringify(draftRef.current.tags)) {
+      setCurrentDraft(next);
+    }
+    setTagInput("");
+    setEditingTagIndex(null);
+  };
+
+  const draftTags = normalizeRecordTags(draft.tags);
+  const tagSuggestions = useMemo(() => {
+    const query = recordTagKey(tagInput);
+    if (!query) {
+      return [];
+    }
+    const selected = new Set(draftTags.map(recordTagKey));
+    return getSubjectRecordTags(referenceRecords, draft.subject)
+      .filter((tag) => !selected.has(recordTagKey(tag)) && recordTagKey(tag).includes(query))
+      .slice(0, 8);
+  }, [draft.subject, draftTags, referenceRecords, tagInput]);
+
+  const addSuggestedTag = (tag: string) => {
+    update({ tags: normalizeRecordTags([...draftRef.current.tags, tag]) });
+    setTagInput("");
+    setEditingTagIndex(null);
+  };
+
+  const removeTag = (index: number) => {
+    update({ tags: draftTags.filter((_, tagIndex) => tagIndex !== index) });
+    if (editingTagIndex === index) {
+      setTagInput("");
+      setEditingTagIndex(null);
+    }
+  };
+
+  const beginTagEdit = (index: number) => {
+    setEditingTagIndex(index);
+    setTagInput(draftTags[index] ?? "");
   };
 
   const insertAfterCurrentBlock = useCallback((editor: Editor, node: Record<string, unknown>) => {
@@ -539,11 +599,13 @@ export const RecordEditorPage = ({
 
       const editor = editorRef.current;
       draftToSave = syncEditableRecord({
-        ...draftRef.current,
+        ...applyTagInput(draftRef.current),
         contentHtml: editor && !editor.isDestroyed ? editor.getHTML() : draftRef.current.contentHtml,
       });
       draftRef.current = draftToSave;
       setDraft(draftToSave);
+      setTagInput("");
+      setEditingTagIndex(null);
 
       await onSave(draftToSave);
       await waitForDraftSaves();
@@ -797,6 +859,46 @@ export const RecordEditorPage = ({
           {exportMessage && <p className="status-message draft-status">{exportMessage}</p>}
           <section className="record-editor-head">
             <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" disabled={interactionLocked} />
+            <div className="record-tag-editor">
+              <div className="record-tag-input-wrap">
+                {draftTags.map((tag, index) => (
+                  <span key={tag} className="record-tag-editor-item" style={recordTagStyle(draft.subject, tag)}>
+                    <button type="button" className="record-tag-editor-name" onClick={() => beginTagEdit(index)} disabled={interactionLocked}>
+                      {tag}
+                    </button>
+                    <button type="button" className="record-tag-editor-remove" onClick={() => removeTag(index)} aria-label={`移除标签 ${tag}`} disabled={interactionLocked}>
+                      <X size={13} />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  className="record-tag-input"
+                  value={tagInput}
+                  onChange={(event) => setTagInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing) {
+                      return;
+                    }
+                    if (event.key === "Enter" || event.key === "," || event.key === "，") {
+                      event.preventDefault();
+                      commitTagInput();
+                    }
+                  }}
+                  placeholder={editingTagIndex === null ? "添加标签" : "修改标签"}
+                  aria-label="日志标签"
+                  disabled={interactionLocked}
+                />
+              </div>
+              {tagSuggestions.length > 0 && (
+                <div className="record-tag-suggestions" role="listbox" aria-label="已有标签">
+                  {tagSuggestions.map((tag) => (
+                    <button key={tag} type="button" role="option" onClick={() => addSuggestedTag(tag)}>
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} disabled={interactionLocked} />
           </section>
           <RichTextEditor
@@ -882,6 +984,7 @@ export const RecordEditorPage = ({
             <p className="eyebrow">{record.date}</p>
             <h1>{record.title}</h1>
             <span>{record.subject}</span>
+            <RecordTagChips subject={record.subject} tags={record.tags} />
           </header>
           <RichTextEditor
             value={normalizeRecordContent(record)}

@@ -47,6 +47,7 @@ export const createKnowledgeRecords = (snapshot: StorageSnapshot): KnowledgeReco
       date: record.date,
       subject: record.subject,
       title: record.title,
+      tags: record.tags,
       contentText: recordToPlainText(record, assetList),
       contentMarkdown: recordToLinearMarkdown(record, assetList),
       formulas: record.formulas.map((formula) => formula.latex),
@@ -74,6 +75,7 @@ const recordToMarkdown = (record: KnowledgeRecord): string => {
     `## ${record.date} ${record.title}`,
     "",
     `- 学科：${record.subject}`,
+    record.tags.length > 0 ? `- 标签：${record.tags.join("、")}` : "",
     `- 更新时间：${record.updatedAt}`,
     "",
     record.contentMarkdown || record.contentText,
@@ -118,6 +120,7 @@ export const createPlainText = (snapshot: StorageSnapshot): string => {
     ...records.map((record) =>
       [
         `${record.date}｜${record.subject}｜${record.title}`,
+        record.tags.length > 0 ? `标签：${record.tags.join("、")}` : "",
         record.contentText,
         record.formulas.length > 0 ? `公式：\n${record.formulas.join("\n\n")}` : "",
         record.assetTexts.length > 0 ? `资源：${record.assetTexts.join("；")}` : "",
