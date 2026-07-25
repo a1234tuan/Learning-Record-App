@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import type { Asset, RecordBlock } from "../types";
-import { buildAiContextPack, buildAiContextPackAsync, selectRelevantChunks } from "./aiContextService";
+import type { AiContextChunk, Asset, RecordBlock } from "../types";
+import {
+  buildAiContextPack,
+  buildAiContextPackAsync,
+  buildAiKnowledgeContextPack,
+  clearAiContextCache,
+  estimateAiContextSourceTokens,
+  estimateAiTokens,
+  selectRelevantChunks,
+} from "./aiContextService";
 
 const stamp = "2026-06-22T00:00:00.000Z";
 
@@ -42,6 +50,7 @@ const asset = (patch: Partial<Asset>): Asset => ({
 });
 
 describe("aiContextService", () => {
+  beforeEach(() => clearAiContextCache());
   it("builds text, formula, and OCR chunks while skipping unusable assets", () => {
     const pack = buildAiContextPack(
       "2026-06-22",
@@ -101,5 +110,108 @@ describe("aiContextService", () => {
 
     expect(pack.selectedChunks.map((chunk) => chunk.content).join("\n")).toContain("$x^2$");
     expect(pack.contextHash).toBeTruthy();
+  });
+
+  it("filters tag scopes by both subject and normalized tag while retaining tag source metadata", () => {
+    const pack = buildAiKnowledgeContextPack(
+      { kind: "tag", subject: "数学", tag: "专项突破" },
+      [
+        record({ id: "math-hit", subject: "数学", tags: ["专项突破", "训练"], title: "极限" }),
+        record({ id: "math-miss", subject: "数学", tags: ["基础"], title: "导数" }),
+        record({ id: "other-subject", subject: "物理", tags: ["专项突破"], title: "力学" }),
+      ],
+      [],
+      "B树",
+    );
+
+    expect(pack.scope).toEqual({ kind: "tag", subject: "数学", tag: "专项突破" });
+    expect(pack.scopeTitle).toBe("数学 / #专项突破");
+    expect(pack.recordIds).toEqual(["math-hit"]);
+    expect(pack.allChunks[0]).toMatchObject({ tags: ["专项突破", "训练"] });
+    expect(pack.markdown).toContain("标签：#专项突破 #训练");
+  });
+
+  it("uses calendar-day boundaries for recent scopes and excludes deleted records", () => {
+    const pack = buildAiKnowledgeContextPack(
+      { kind: "recent", days: 7 },
+      [
+        record({ id: "start", date: "2026-07-04", title: "起始日" }),
+        record({ id: "today", date: "2026-07-10", title: "当天" }),
+        record({ id: "older", date: "2026-07-03", title: "更早" }),
+        record({ id: "deleted", date: "2026-07-08", deletedAt: stamp, title: "已删除" }),
+      ],
+      [],
+      "",
+      { referenceDate: "2026-07-10" },
+    );
+
+    expect(pack.scopeTitle).toBe("最近 7 天（2026-07-04 至 2026-07-10）");
+    expect(pack.recordIds).toEqual(["start", "today"]);
+  });
+
+  it("matches Chinese bigrams and preserves Markdown in selected structure chunks", () => {
+    const pack = buildAiKnowledgeContextPack(
+      { kind: "tag", subject: "数学", tag: "训练" },
+      [record({
+        subject: "数学",
+        tags: ["训练"],
+        contentHtml: '<record-collapse data-title="积分表"><p>积分计算规律</p></record-collapse>',
+      })],
+      [],
+      "积分法",
+    );
+
+    expect(pack.selectedChunks).toHaveLength(1);
+    expect(pack.selectedChunks[0].content).toContain("积分计算");
+    expect(pack.selectedChunks[0].markdown).toContain("积分表");
+  });
+
+  it("counts source labels and Markdown when enforcing a token retrieval budget", () => {
+    const chunk: AiContextChunk = {
+      chunkId: "with-source",
+      recordId: "record-1",
+      date: "2026-06-22",
+      subject: "数学",
+      tags: ["专项突破"],
+      title: "积分表",
+      kind: "text",
+      content: "积分计算规律",
+      markdown: "### 积分表\n\n积分计算规律",
+      sourceLabel: "2026-06-22 / 数学 / 积分表 / 标签：#专项突破 / 结构块",
+      order: 0,
+    };
+
+    expect(estimateAiContextSourceTokens(chunk, 0)).toBeGreaterThan(estimateAiTokens(chunk.markdown!));
+  });
+
+  it("uses one best chunk from each record before filling coverage-mode retrieval", () => {
+    const chunks: AiContextChunk[] = ["A", "B", "C"].flatMap((recordId, recordIndex) => [
+      {
+        chunkId: `${recordId}-first`,
+        recordId,
+        date: "2026-06-22",
+        subject: "数学",
+        title: `记录${recordId}`,
+        kind: "text" as const,
+        content: `抽测重点 ${recordId} ${"内容".repeat(240)}`,
+        sourceLabel: `数学 / 记录${recordId} / 正文`,
+        order: recordIndex * 2,
+      },
+      {
+        chunkId: `${recordId}-second`,
+        recordId,
+        date: "2026-06-22",
+        subject: "数学",
+        title: `记录${recordId}`,
+        kind: "text" as const,
+        content: `抽测补充 ${recordId} ${"内容".repeat(240)}`,
+        sourceLabel: `数学 / 记录${recordId} / 正文2`,
+        order: recordIndex * 2 + 1,
+      },
+    ]);
+
+    const selected = selectRelevantChunks(chunks, "请抽测这些重点", { maxTokens: 4_000, retrievalMode: "coverage" });
+
+    expect(new Set(selected.map((chunk) => chunk.recordId))).toEqual(new Set(["A", "B", "C"]));
   });
 });

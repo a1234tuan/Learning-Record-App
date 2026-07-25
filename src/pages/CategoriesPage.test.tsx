@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, type Mock } from "vitest";
 
 import { CategoriesPage } from "./CategoriesPage";
-import type { Block, RecordBlock, SubjectConfig } from "../types";
+import type { AiKnowledgeScope, Block, RecordBlock, SubjectConfig } from "../types";
 
 vi.mock("../components/RecordCard", () => ({
   RecordCard: ({ record }: { record: RecordBlock }) => <article>{record.title}</article>,
@@ -40,7 +40,7 @@ const createSaveSubjectsMock = (): SaveSubjectsMock =>
 const renderPage = (
   blocks: Block[] = [],
   onSaveSubjects: SaveSubjectsMock = createSaveSubjectsMock(),
-  options: { activeSubject?: string | null; managing?: boolean } = {},
+  options: { activeSubject?: string | null; managing?: boolean; onAskAiScope?: (scope: AiKnowledgeScope) => void } = {},
 ) => render(
   <CategoriesPage
     blocks={blocks}
@@ -50,6 +50,7 @@ const renderPage = (
     onActiveSubjectChange={vi.fn()}
     onManagingChange={vi.fn()}
     onOpenRecord={vi.fn()}
+    onAskAiScope={options.onAskAiScope}
     onAddSubject={vi.fn()}
     onRenameSubject={vi.fn()}
     onSaveSubjects={onSaveSubjects}
@@ -156,5 +157,19 @@ describe("CategoriesPage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "按标签" }));
 
     expect(screen.getByText("这个学科还没有标签。")).toBeInTheDocument();
+  });
+
+  it("opens a tag-scoped AI session from a tag group shortcut", () => {
+    const onAskAiScope = vi.fn();
+    renderPage(
+      [record("数学", { id: "tagged", tags: ["专项突破"] })],
+      createSaveSubjectsMock(),
+      { activeSubject: "数学", managing: false, onAskAiScope },
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "按标签" }));
+    fireEvent.click(screen.getByRole("button", { name: "针对标签 专项突破 进行 AI 问答" }));
+
+    expect(onAskAiScope).toHaveBeenCalledWith({ kind: "tag", subject: "数学", tag: "专项突破" });
   });
 });

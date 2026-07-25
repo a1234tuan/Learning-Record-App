@@ -314,6 +314,7 @@ export interface AiProviderProfile {
   model: string;
   temperature: number;
   maxTokens: number;
+  contextWindowTokens?: number;
   memoryTurns?: number;
   builtIn?: "deepseek" | "nvidia" | "aliyun" | "custom-proxy";
 }
@@ -340,6 +341,8 @@ export interface AiSkippedAsset {
 
 export interface AiLogContextAttachment {
   date: ISODate;
+  scope?: AiKnowledgeScope;
+  scopeTitle?: string;
   recordIds: EntityId[];
   markdown: string;
   warnings: string[];
@@ -356,9 +359,11 @@ export interface AiContextChunk {
   recordId: EntityId;
   date: ISODate;
   subject: Subject;
+  tags?: string[];
   title: string;
   kind: "text" | "formula" | "imageOcr";
   content: string;
+  markdown?: string;
   sourceLabel: string;
   order: number;
 }
@@ -375,6 +380,8 @@ export interface AiContextPack extends AiLogContextAttachment {
 export interface AiChatSession extends BaseEntity {
   title: string;
   sourceDate?: ISODate;
+  scope?: AiKnowledgeScope;
+  scopeTitle?: string;
   attachment?: AiContextPack;
   memorySummary?: string;
   lastContextHash?: string;
@@ -422,6 +429,11 @@ export interface Asset extends BaseEntity {
     parserVersion: string;
   };
 }
+
+export type AiKnowledgeScope =
+  | { kind: "date"; date: ISODate }
+  | { kind: "tag"; subject: Subject; tag: string }
+  | { kind: "recent"; days: 7 | 14 | 30 };
 
 export interface RecordTransferManifest {
   format: "study-journal-record-transfer";

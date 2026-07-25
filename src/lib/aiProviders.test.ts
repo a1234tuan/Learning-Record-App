@@ -9,6 +9,7 @@ describe("aiProviders", () => {
       providerName: "NVIDIA",
       baseUrl: "https://integrate.api.nvidia.com/v1",
       model: "meta/llama-3.3-70b-instruct",
+      contextWindowTokens: 65536,
     });
     expect(createAiProviderTemplate("aliyun")).toMatchObject({
       providerName: "阿里云百炼",
@@ -30,6 +31,7 @@ describe("aiProviders", () => {
       model: "deepseek-ai/DeepSeek-V3",
       temperature: 0.2,
       maxTokens: 2048,
+      contextWindowTokens: 32768,
       memoryTurns: 8,
     }, presets);
 

@@ -1,7 +1,16 @@
 import type { AiChatAttachment, AiChatMessage, AiContextPack, AiProviderProfile } from "../types";
-import { DEFAULT_AI_MEMORY_TURNS } from "../lib/aiProviders";
+import { DEFAULT_AI_CONTEXT_WINDOW_TOKENS, DEFAULT_AI_MEMORY_TURNS } from "../lib/aiProviders";
 import { blobToBase64 } from "./backup";
 import { canUseNativeAi, runNativeAiChat } from "./nativeAi";
+import {
+  COVERAGE_AI_RETRIEVAL_TOKENS,
+  estimateAiContextSourceTokens,
+  estimateAiTokens,
+  FOCUSED_AI_RETRIEVAL_TOKENS,
+  formatAiContextSource,
+  getAiRetrievalMode,
+  type AiRetrievalMode,
+} from "./aiContextService";
 
 export type AiChatPayloadContentPart =
   | { type: "text"; text: string }
@@ -56,6 +65,21 @@ const tryParseJson = (text: string): { ok: true; value: unknown } | { ok: false 
 };
 
 const MEMORY_SUMMARY_TURNS = 12;
+export const MAX_AI_HISTORY_TOKENS = 4_000;
+const SYSTEM_AND_SAFETY_RESERVE_TOKENS = 1_200;
+const CONTEXT_PROMPT_RESERVE_TOKENS = 600;
+const MIN_AI_RETRIEVAL_TOKENS = 2_000;
+
+export interface AiRequestBudget {
+  contextWindowTokens: number;
+  outputTokens: number;
+  historyTokens: number;
+  retrievalMode: AiRetrievalMode;
+  retrievalTargetTokens: number;
+  retrievalTokens: number;
+  selectedContextTokens: number;
+  estimatedInputTokens: number;
+}
 
 const plainTextForMemory = (message: AiChatMessage): string => {
   const attachmentNote = message.attachmentIds?.length ? `\n[用户上传了 ${message.attachmentIds.length} 张图片]` : "";
@@ -65,6 +89,7 @@ const plainTextForMemory = (message: AiChatMessage): string => {
 export const selectRecentChatContext = (
   history: AiChatMessage[],
   memoryTurns = DEFAULT_AI_MEMORY_TURNS,
+  maxTokens = MAX_AI_HISTORY_TOKENS,
 ): AiChatPayloadMessage[] => {
   const cleanHistory = history.filter((message) => message.role !== "system" && !message.error);
   const turns: AiChatPayloadMessage[][] = [];
@@ -93,9 +118,64 @@ export const selectRecentChatContext = (
     turns.push([pendingUser]);
   }
 
-  return turns
-    .slice(-Math.max(0, memoryTurns))
-    .flat();
+  const selected: AiChatPayloadMessage[][] = [];
+  let totalTokens = 0;
+  for (const turn of turns.slice(-Math.max(0, memoryTurns)).reverse()) {
+    const turnTokens = turn.reduce((sum, message) => sum + estimateAiTokens(
+      typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+    ), 0);
+    if (totalTokens + turnTokens > maxTokens) continue;
+    selected.unshift(turn);
+    totalTokens += turnTokens;
+    if (totalTokens >= maxTokens) break;
+  }
+  return selected.flat();
+};
+
+export const calculateAiRequestBudget = (options: {
+  provider: AiProviderProfile | undefined;
+  history: AiChatMessage[];
+  prompt: string;
+  memorySummary?: string;
+  attachment?: AiContextPack;
+}): AiRequestBudget => {
+  const provider = options.provider;
+  if (!provider) {
+    throw new Error("请先在“更多 → AI 设置”里配置 AI 供应商。");
+  }
+  const contextWindowTokens = provider.contextWindowTokens ?? DEFAULT_AI_CONTEXT_WINDOW_TOKENS;
+  const outputTokens = provider.maxTokens;
+  const retrievalMode = getAiRetrievalMode(options.prompt);
+  const retrievalTargetTokens = retrievalMode === "coverage"
+    ? COVERAGE_AI_RETRIEVAL_TOKENS
+    : FOCUSED_AI_RETRIEVAL_TOKENS;
+  const recent = selectRecentChatContext(options.history, provider.memoryTurns ?? DEFAULT_AI_MEMORY_TURNS);
+  const historyTokens = recent.reduce((sum, message) => sum + estimateAiTokens(
+    typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+  ), 0);
+  const summaryTokens = estimateAiTokens(options.memorySummary ?? "");
+  const promptTokens = estimateAiTokens(options.prompt);
+  const available = contextWindowTokens - outputTokens - SYSTEM_AND_SAFETY_RESERVE_TOKENS - CONTEXT_PROMPT_RESERVE_TOKENS - historyTokens - summaryTokens - promptTokens;
+  const retrievalTokens = Math.min(retrievalTargetTokens, Math.max(0, available));
+  if (retrievalTokens < MIN_AI_RETRIEVAL_TOKENS) {
+    throw new Error("当前供应商的 Context Window 不能为知识库检索保留至少 2K token。请降低 Max Tokens，或在 AI 设置中提高 Context Window Tokens。");
+  }
+  const selectedChunks = options.attachment?.selectedChunks?.length
+    ? options.attachment.selectedChunks
+    : options.attachment?.allChunks ?? [];
+  const selectedContextTokens = selectedChunks.length > 0
+    ? selectedChunks.reduce((sum, chunk, index) => sum + estimateAiContextSourceTokens(chunk, index), 0)
+    : retrievalTokens;
+  return {
+    contextWindowTokens,
+    outputTokens,
+    historyTokens,
+    retrievalMode,
+    retrievalTargetTokens,
+    retrievalTokens,
+    selectedContextTokens,
+    estimatedInputTokens: SYSTEM_AND_SAFETY_RESERVE_TOKENS + CONTEXT_PROMPT_RESERVE_TOKENS + historyTokens + summaryTokens + promptTokens + selectedContextTokens,
+  };
 };
 
 export const buildAiMessages = (
@@ -109,16 +189,13 @@ export const buildAiMessages = (
   const messages: AiChatPayloadMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
   if (attachment) {
     const selectedChunks = attachment.selectedChunks?.length ? attachment.selectedChunks : attachment.allChunks ?? [];
-    const sourceLines = selectedChunks.map((chunk, index) => [
-      `[[S${index + 1}]] ${chunk.sourceLabel}`,
-      chunk.content,
-    ].join("\n"));
+    const sourceLines = selectedChunks.map(formatAiContextSource);
     messages.push({
       role: "system",
       content: [
-        `以下是 ${attachment.date} 的学习日志上下文。后续回答请优先依据这些内容。`,
+        `以下是 ${attachment.scopeTitle ?? attachment.date} 的学习日志上下文。后续回答请优先依据这些内容。`,
         "",
-        "## 当天摘要",
+        "## 范围摘要",
         attachment.summary || "无摘要。",
         "",
         "## 可引用日志片段",
@@ -322,6 +399,7 @@ export const sendChatCompletion = async (options: {
   memorySummary?: string;
   imageInputMode?: "vision" | "local-ocr" | "disabled";
   imageAttachments?: AiChatAttachment[];
+  budget?: AiRequestBudget;
 }): Promise<string> => {
   const { provider, apiKey, attachment, history, prompt, memorySummary, imageInputMode, imageAttachments } = options;
   if (!provider) {
@@ -339,6 +417,7 @@ export const sendChatCompletion = async (options: {
     imageInputMode,
     imageAttachments,
   });
+  const budget = options.budget ?? calculateAiRequestBudget({ provider, history, prompt, memorySummary });
   const messages = buildAiMessages(
     attachment,
     history,
@@ -351,6 +430,7 @@ export const sendChatCompletion = async (options: {
     provider,
     apiKey: apiKey.trim(),
     messages,
+    maxTokens: budget.outputTokens,
   });
 };
 

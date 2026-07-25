@@ -5,10 +5,12 @@ import {
   buildAiMessages,
   buildUserPromptWithImages,
   buildSessionMemorySummary,
+  calculateAiRequestBudget,
   normalizeAiChatCompletionsUrl,
   selectRecentChatContext,
   testAiProviderConnection,
 } from "./aiClientService";
+import { estimateAiTokens } from "./aiContextService";
 
 const stamp = "2026-06-22T00:00:00.000Z";
 
@@ -136,6 +138,19 @@ describe("buildAiMessages", () => {
     expect(messages.map((item) => item.content)).toEqual(expect.arrayContaining(["新问题", "新回答", "继续"]));
   });
 
+  it("never exceeds the 4K history budget even when a single prior turn is very long", () => {
+    const context = selectRecentChatContext([
+      message("user", "旧问题".repeat(3000)),
+      message("assistant", "旧回答".repeat(3000)),
+      message("user", "最近问题"),
+      message("assistant", "最近回答"),
+    ]);
+
+    const tokens = context.reduce((sum, item) => sum + estimateAiTokens(String(item.content)), 0);
+    expect(tokens).toBeLessThanOrEqual(4000);
+    expect(context.map((item) => item.content)).toEqual(["最近问题", "最近回答"]);
+  });
+
   it("includes session memory summary before recent turns", () => {
     const messages = buildAiMessages(attachment, [], "继续", 12, "用户前面一直答错 B 树高度。");
 
@@ -256,5 +271,88 @@ describe("buildAiMessages", () => {
         imageAttachments: [imageAttachment()],
       }),
     ).rejects.toThrow("图片发送已关闭");
+  });
+
+  it("uses the focused 16K retrieval target for a normal question on a 64K model", () => {
+    const budget = calculateAiRequestBudget({
+      provider: {
+        id: "provider",
+        providerName: "测试",
+        baseUrl: "https://example.com/v1",
+        model: "test",
+        temperature: 0.7,
+        maxTokens: 4096,
+        contextWindowTokens: 65536,
+      },
+      history: Array.from({ length: 20 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `第 ${index} 轮`)),
+      prompt: "B树的阶是什么意思？",
+      memorySummary: "较早对话摘要",
+    });
+
+    expect(budget.retrievalMode).toBe("focused");
+    expect(budget.retrievalTargetTokens).toBe(16000);
+    expect(budget.retrievalTokens).toBe(16000);
+    expect(budget.historyTokens).toBeLessThanOrEqual(4000);
+    expect(budget.estimatedInputTokens + budget.outputTokens).toBeLessThanOrEqual(budget.contextWindowTokens);
+  });
+
+  it("uses the 24K coverage target for quizzes and counts source wrappers in the actual input estimate", () => {
+    const budget = calculateAiRequestBudget({
+      provider: {
+        id: "provider",
+        providerName: "测试",
+        baseUrl: "https://example.com/v1",
+        model: "test",
+        temperature: 0.7,
+        maxTokens: 4096,
+        contextWindowTokens: 65536,
+      },
+      attachment,
+      history: [],
+      prompt: "请抽测这个范围",
+    });
+
+    expect(budget.retrievalMode).toBe("coverage");
+    expect(budget.retrievalTargetTokens).toBe(24000);
+    expect(budget.retrievalTokens).toBe(24000);
+    expect(budget.selectedContextTokens).toBeGreaterThan(estimateAiTokens(attachment.selectedChunks[0].content));
+    expect(budget.estimatedInputTokens + budget.outputTokens).toBeLessThanOrEqual(budget.contextWindowTokens);
+  });
+
+  it("shrinks retrieval on a 32K provider without exceeding its context window", () => {
+    const budget = calculateAiRequestBudget({
+      provider: {
+        id: "provider-32k",
+        providerName: "测试",
+        baseUrl: "https://example.com/v1",
+        model: "test",
+        temperature: 0.7,
+        maxTokens: 4096,
+        contextWindowTokens: 32768,
+      },
+      history: Array.from({ length: 24 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `第 ${index} 轮`)),
+      prompt: "请总结这个范围",
+      memorySummary: "较早对话摘要",
+    });
+
+    expect(budget.retrievalTokens).toBeLessThanOrEqual(24000);
+    expect(budget.historyTokens).toBeLessThanOrEqual(4000);
+    expect(budget.estimatedInputTokens + budget.outputTokens).toBeLessThanOrEqual(32768);
+  });
+
+  it("blocks a provider configuration that cannot leave 2K tokens for retrieval", () => {
+    expect(() => calculateAiRequestBudget({
+      provider: {
+        id: "small",
+        providerName: "测试",
+        baseUrl: "https://example.com/v1",
+        model: "test",
+        temperature: 0.7,
+        maxTokens: 4096,
+        contextWindowTokens: 6000,
+      },
+      history: [],
+      prompt: "测试",
+    })).toThrow("至少 2K token");
   });
 });

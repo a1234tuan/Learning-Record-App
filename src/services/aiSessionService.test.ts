@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AiChatSession, AiContextPack } from "../types";
-import { createAiSessionForDate, titleFromFirstPrompt } from "./aiSessionService";
+import { createAiSessionForDate, createAiSessionForScope, titleFromFirstPrompt } from "./aiSessionService";
 
 const attachment: AiContextPack = {
   date: "2026-06-22",
@@ -42,5 +42,40 @@ describe("aiSessionService", () => {
   it("creates readable titles from first prompt", () => {
     expect(titleFromFirstPrompt("  请用苏格拉底式方法问我今天的知识点，并逐步追问  ")).toBe("请用苏格拉底式方法问我今天的知识点，并逐...");
     expect(titleFromFirstPrompt("随机抽问")).toBe("随机抽问");
+  });
+
+  it("persists a tag scope while omitting the full local retrieval index", async () => {
+    const saved: AiChatSession[] = [];
+    const store = {
+      saveAiSession: vi.fn(async (session: AiChatSession) => {
+        saved.push(session);
+        return session;
+      }),
+    };
+    const scopedAttachment: AiContextPack = {
+      ...attachment,
+      scope: { kind: "tag", subject: "数学", tag: "专项突破" },
+      scopeTitle: "数学 / #专项突破",
+      allChunks: [{
+        chunkId: "chunk",
+        recordId: "record-1",
+        date: "2026-06-22",
+        subject: "数学",
+        title: "极限",
+        kind: "text",
+        content: "极限定义",
+        sourceLabel: "数学 / 极限 / 正文",
+        order: 0,
+      }],
+    };
+
+    await createAiSessionForScope({ kind: "tag", subject: "数学", tag: "专项突破" }, scopedAttachment, store);
+
+    expect(saved[0]).toMatchObject({
+      scope: { kind: "tag", subject: "数学", tag: "专项突破" },
+      scopeTitle: "数学 / #专项突破",
+      sourceDate: undefined,
+    });
+    expect(saved[0].attachment?.allChunks).toEqual([]);
   });
 });

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Send,
   Settings,
+  Sparkles,
   Trash2,
   User,
   X,
@@ -16,17 +17,25 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AiMarkdown } from "../components/AiMarkdown";
-import type { AiChatAttachment, AiChatMessage, AiChatSession, AppSettings, Asset, Block } from "../types";
+import type { AiChatAttachment, AiChatMessage, AiChatSession, AiKnowledgeScope, AppSettings, Asset, Block, RecordBlock } from "../types";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
 import { isNativePlatform } from "../lib/platform";
 import { storage } from "../services/storageAdapter";
-import { buildSessionMemorySummary, sendChatCompletion } from "../services/aiClientService";
-import { buildAiContextPackAsync } from "../services/aiContextService";
+import { buildSessionMemorySummary, calculateAiRequestBudget, sendChatCompletion } from "../services/aiClientService";
+import {
+  aiKnowledgeScopeTitle,
+  buildAiKnowledgeContextPackAsync,
+  compactAiContextPack,
+  estimateAiTokens,
+  getAiKnowledgeScopeRecords,
+  sessionKnowledgeScope,
+} from "../services/aiContextService";
 import { createAiImageAttachment, runLocalOcrForAiAttachment } from "../services/aiChatAttachmentService";
-import { createAiSessionForDate, createAiSessionFromExistingAttachment, titleFromFirstPrompt } from "../services/aiSessionService";
+import { createAiSessionForScope, titleFromFirstPrompt } from "../services/aiSessionService";
 import { DEFAULT_AI_MEMORY_TURNS, getCurrentAiProvider } from "../lib/aiProviders";
 import { pickNativeCameraImageFile, pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
+import { getSubjectRecordTags } from "../lib/recordTags";
 
 interface AiChatPageProps {
   sessionId: string | null;
@@ -130,11 +139,53 @@ export const AiChatPage = ({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
+  const [scopeKind, setScopeKind] = useState<AiKnowledgeScope["kind"]>("tag");
+  const [scopeSubject, setScopeSubject] = useState("");
+  const [scopeTag, setScopeTag] = useState("");
+  const [recentDays, setRecentDays] = useState<7 | 14 | 30>(7);
+  const [creatingScope, setCreatingScope] = useState(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const presets = useMemo(() => sortedPresets(settings), [settings]);
   const imageInputMode = settings.ai?.imageInputMode ?? "local-ocr";
   const native = isNativePlatform();
+  const provider = useMemo(() => getCurrentAiProvider(settings.ai), [settings.ai]);
+  const savedRecords = useMemo(
+    () => blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt),
+    [blocks],
+  );
+  const scopeSubjects = useMemo(
+    () => Array.from(new Set(savedRecords.map((record) => record.subject))).sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [savedRecords],
+  );
+
+  useEffect(() => {
+    if (!scopeSubject && scopeSubjects[0]) setScopeSubject(scopeSubjects[0]);
+  }, [scopeSubject, scopeSubjects]);
+
+  const scopeTags = useMemo(() => getSubjectRecordTags(savedRecords, scopeSubject), [savedRecords, scopeSubject]);
+  useEffect(() => {
+    if (!scopeTags.some((tag) => tag === scopeTag)) setScopeTag(scopeTags[0] ?? "");
+  }, [scopeTag, scopeTags]);
+
+  const pendingScope = useMemo<AiKnowledgeScope | undefined>(() => {
+    if (scopeKind === "recent") return { kind: "recent", days: recentDays };
+    if (scopeKind === "tag" && scopeSubject && scopeTag) return { kind: "tag", subject: scopeSubject, tag: scopeTag };
+    return undefined;
+  }, [recentDays, scopeKind, scopeSubject, scopeTag]);
+  const pendingScopeRecords = useMemo(
+    () => pendingScope ? getAiKnowledgeScopeRecords(pendingScope, blocks) : [],
+    [blocks, pendingScope],
+  );
+  const pendingScopeOcrCount = useMemo(() => {
+    const assetIds = new Set(pendingScopeRecords.flatMap((record) => record.assets.map((asset) => asset.id)));
+    return assets.filter((asset) => assetIds.has(asset.id) && asset.kind === "image" && asset.ocrStatus === "done" && asset.ocrText?.trim()).length;
+  }, [assets, pendingScopeRecords]);
+  const pendingScopeEstimate = useMemo(
+    () => estimateAiTokens(pendingScopeRecords.map((record) => `${record.title}\n${record.contentHtml}`).join("\n")),
+    [pendingScopeRecords],
+  );
 
   const refresh = async () => {
     const nextSessions = await storage.listAiSessions?.() ?? [];
@@ -177,12 +228,33 @@ export const AiChatPage = ({
     if (!session?.attachment) {
       return;
     }
-    const nextSession = session.sourceDate
-      ? await createAiSessionForDate(session.sourceDate, await buildAiContextPackAsync(session.sourceDate, blocks, assets))
-      : await createAiSessionFromExistingAttachment(session);
+    const scope = sessionKnowledgeScope(session);
+    if (!scope) return;
+    const nextSession = await createAiSessionForScope(
+      scope,
+      await buildAiKnowledgeContextPackAsync(scope, blocks, assets),
+    );
     if (nextSession) {
       setHistoryOpen(false);
       onOpenSession(nextSession.id);
+    }
+  };
+
+  const createKnowledgeSession = async () => {
+    if (!pendingScope || creatingScope) return;
+    setCreatingScope(true);
+    setStatus("");
+    try {
+      const attachment = await buildAiKnowledgeContextPackAsync(pendingScope, blocks, assets);
+      const nextSession = await createAiSessionForScope(pendingScope, attachment);
+      if (nextSession) {
+        setScopePickerOpen(false);
+        onOpenSession(nextSession.id);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "创建知识库问答失败。");
+    } finally {
+      setCreatingScope(false);
     }
   };
 
@@ -280,18 +352,51 @@ export const AiChatPage = ({
     }
 
     const effectivePrompt = prompt || "请根据我上传的图片内容进行回答或批改。";
+    let requestBudget: ReturnType<typeof calculateAiRequestBudget>;
+    try {
+      requestBudget = calculateAiRequestBudget({
+        provider,
+        history: messages,
+        prompt: effectivePrompt,
+        memorySummary: session.memorySummary,
+      });
+    } catch (error) {
+      setBusy(false);
+      setStatus(error instanceof Error ? error.message : "无法为本轮问答分配上下文预算。");
+      return;
+    }
     const titleSession = await updateTitleFromFirstPrompt(effectivePrompt, session, messages.length);
-    const freshAttachment = titleSession.sourceDate
-      ? await buildAiContextPackAsync(titleSession.sourceDate, blocks, assets, effectivePrompt)
-      : titleSession.attachment
-        ? await buildAiContextPackAsync(titleSession.attachment.date, blocks, assets, effectivePrompt)
-        : undefined;
-    const contextSession = freshAttachment && freshAttachment.contextHash !== titleSession.lastContextHash
+    const scope = sessionKnowledgeScope(titleSession);
+    const freshAttachment = scope
+      ? await buildAiKnowledgeContextPackAsync(scope, blocks, assets, effectivePrompt, undefined, {
+        maxTokens: requestBudget.retrievalTokens,
+        retrievalMode: requestBudget.retrievalMode,
+        preferDiverse: requestBudget.retrievalMode === "coverage",
+      })
+      : undefined;
+    if (freshAttachment) {
+      requestBudget = calculateAiRequestBudget({
+        provider,
+        history: messages,
+        prompt: effectivePrompt,
+        memorySummary: titleSession.memorySummary,
+        attachment: freshAttachment,
+      });
+    }
+    const contextSession = freshAttachment
       ? await storage.saveAiSession?.({
         ...titleSession,
-        attachment: freshAttachment,
+        scope,
+        scopeTitle: freshAttachment.scopeTitle,
+        attachment: compactAiContextPack(freshAttachment),
         lastContextHash: freshAttachment.contextHash,
-      }) ?? { ...titleSession, attachment: freshAttachment, lastContextHash: freshAttachment.contextHash }
+      }) ?? {
+        ...titleSession,
+        scope,
+        scopeTitle: freshAttachment.scopeTitle,
+        attachment: compactAiContextPack(freshAttachment),
+        lastContextHash: freshAttachment.contextHash,
+      }
       : titleSession;
     const userMessage: AiChatMessage = {
       ...createBaseEntity(),
@@ -313,7 +418,6 @@ export const AiChatPage = ({
     }));
 
     try {
-      const provider = getCurrentAiProvider(settings.ai);
       const apiKey = provider ? (await storage.getAiSecret?.(provider.id))?.apiKey : undefined;
       const content = await sendChatCompletion({
         provider,
@@ -324,6 +428,7 @@ export const AiChatPage = ({
         memorySummary: contextSession.memorySummary,
         imageInputMode,
         imageAttachments: savedPreparedImages,
+        budget: requestBudget,
       });
       const assistantMessage: AiChatMessage = {
         ...createBaseEntity(),
@@ -373,16 +478,28 @@ export const AiChatPage = ({
   const selectedChunkCount = attachment?.selectedChunks?.length ?? 0;
   const totalChunkCount = attachment?.totalChunks ?? attachment?.selectedChunks?.length ?? 0;
   const skippedAssetCount = attachment?.skippedAssets.length ?? 0;
+  const composerBudget = (() => {
+    if (!session || !provider) return undefined;
+    try {
+      return calculateAiRequestBudget({ provider, history: messages, prompt: input, memorySummary: session.memorySummary, attachment });
+    } catch {
+      return undefined;
+    }
+  })();
+  const scopeLabel = attachment?.scopeTitle ?? session?.scopeTitle ?? (session ? aiKnowledgeScopeTitle(sessionKnowledgeScope(session) ?? { kind: "date", date: attachment?.date ?? session.updatedAt.slice(0, 10) }) : "AI Chat");
 
   return (
     <main className="page ai-chat-page immersive">
       <section className="ai-chat-shell">
         <header className="ai-topbar">
           <div className="ai-topbar-title">
-            <p>{attachment?.date ?? "AI Chat"}</p>
+            <p>{scopeLabel}</p>
             <h1>{session?.title ?? "AI 问答"}</h1>
           </div>
           <div className="ai-topbar-actions">
+            <button type="button" className="icon-button" onClick={() => setScopePickerOpen(true)} aria-label="新建知识库问答" title="新建知识库问答">
+              <Sparkles size={18} />
+            </button>
             {session?.attachment && (
               <button type="button" className="icon-button" onClick={() => void openNewChat()} aria-label="开启新对话">
                 <MessageSquarePlus size={18} />
@@ -399,7 +516,7 @@ export const AiChatPage = ({
 
         {attachment && (
           <section className="ai-context-strip">
-            <strong>{attachment.date} 日志附件</strong>
+            <strong>{attachment.scopeTitle ?? `${attachment.date} 日志附件`}</strong>
             <span>{attachment.recordIds.length} 条记录</span>
             <span>片段 {selectedChunkCount}/{totalChunkCount}</span>
             {attachment.ocrSummary && (
@@ -408,6 +525,13 @@ export const AiChatPage = ({
               </span>
             )}
             <span>跳过 {skippedAssetCount} 个资源</span>
+            <span>每轮自动刷新</span>
+            {composerBudget && (
+              <span>
+                {composerBudget.retrievalMode === "coverage" ? "覆盖检索" : "聚焦检索"} {Math.round(composerBudget.retrievalTargetTokens / 1000)}K
+              </span>
+            )}
+            {composerBudget && <span>预计输入 {composerBudget.estimatedInputTokens.toLocaleString()} token / 最大输出 {composerBudget.outputTokens.toLocaleString()} token</span>}
             {session?.memorySummary && <span>已启用长对话记忆</span>}
             {attachment.warnings.slice(0, 2).map((warning) => (
               <small key={warning}>{warning}</small>
@@ -419,8 +543,12 @@ export const AiChatPage = ({
         <section className="ai-thread">
           {!session ? (
             <div className="empty-state compact">
-              <h2>从日志卡片开启一个 AI 问答。</h2>
-              <p>右上角可以查看本机历史聊天记录。</p>
+              <h2>新建一个知识库问答。</h2>
+              <p>可以选择某个学科标签，或最近 7、14、30 天的学习记录。</p>
+              <button type="button" className="primary-button" onClick={() => setScopePickerOpen(true)}>
+                <Sparkles size={18} />
+                新建知识库问答
+              </button>
             </div>
           ) : messages.length === 0 ? (
             <div className="ai-welcome">
@@ -489,6 +617,18 @@ export const AiChatPage = ({
                 ))}
               </div>
             )}
+            <div className="ai-range-quiz-row">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => setInput("请抽测此范围：跨不同记录挑选核心知识点，每次只出 1 题，不要先给答案，等我作答后再批改。")}
+              >
+                <Sparkles size={16} />
+                抽测此范围
+              </button>
+              {composerBudget && <small>本轮检索预算 {composerBudget.retrievalTokens.toLocaleString()} token</small>}
+            </div>
             {pendingImages.length > 0 && (
               <div className="ai-pending-images">
                 {pendingImages.map((image) => (
@@ -548,6 +688,69 @@ export const AiChatPage = ({
         )}
       </section>
 
+      {scopePickerOpen && (
+        <div className="ai-history-backdrop" onClick={() => !creatingScope && setScopePickerOpen(false)}>
+          <section className="ai-scope-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="新建知识库问答">
+            <header>
+              <div>
+                <p className="eyebrow">Knowledge Base</p>
+                <h2>新建知识库问答</h2>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setScopePickerOpen(false)} disabled={creatingScope} aria-label="关闭">
+                <X size={18} />
+              </button>
+            </header>
+            <div className="ai-scope-mode-control" role="tablist" aria-label="知识范围">
+              <button type="button" role="tab" aria-selected={scopeKind === "tag"} className={scopeKind === "tag" ? "active" : ""} onClick={() => setScopeKind("tag")}>
+                学科标签
+              </button>
+              <button type="button" role="tab" aria-selected={scopeKind === "recent"} className={scopeKind === "recent" ? "active" : ""} onClick={() => setScopeKind("recent")}>
+                近期学习
+              </button>
+            </div>
+            {scopeKind === "tag" ? (
+              <div className="ai-scope-fields">
+                <label>
+                  学科
+                  <select value={scopeSubject} onChange={(event) => setScopeSubject(event.target.value)}>
+                    {scopeSubjects.length === 0 && <option value="">没有可用学科</option>}
+                    {scopeSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                  </select>
+                </label>
+                <label>
+                  标签
+                  <select value={scopeTag} onChange={(event) => setScopeTag(event.target.value)} disabled={scopeTags.length === 0}>
+                    {scopeTags.length === 0 && <option value="">该学科没有已保存标签</option>}
+                    {scopeTags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}
+                  </select>
+                </label>
+              </div>
+            ) : (
+              <div className="ai-recent-range-control" role="tablist" aria-label="近期范围">
+                {([7, 14, 30] as const).map((days) => (
+                  <button key={days} type="button" role="tab" aria-selected={recentDays === days} className={recentDays === days ? "active" : ""} onClick={() => setRecentDays(days)}>
+                    {days} 天
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="ai-scope-preview">
+              <strong>{pendingScope ? aiKnowledgeScopeTitle(pendingScope) : "请选择知识范围"}</strong>
+              <span>命中 {pendingScopeRecords.length} 条记录</span>
+              <span>可用 OCR 图片 {pendingScopeOcrCount} 张</span>
+              <span>原始内容约 {pendingScopeEstimate.toLocaleString()} token，发送时会按模型窗口检索并截取。</span>
+            </div>
+            <footer>
+              <button type="button" className="secondary-button" onClick={() => setScopePickerOpen(false)} disabled={creatingScope}>取消</button>
+              <button type="button" className="primary-button" onClick={() => void createKnowledgeSession()} disabled={!pendingScope || pendingScopeRecords.length === 0 || creatingScope}>
+                {creatingScope ? <RefreshCw size={18} className="spin" /> : <Sparkles size={18} />}
+                创建问答
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {historyOpen && (
         <div className="ai-history-backdrop" onClick={() => setHistoryOpen(false)}>
           <aside className="ai-history-drawer" onClick={(event) => event.stopPropagation()}>
@@ -578,7 +781,7 @@ export const AiChatPage = ({
                       <strong>{item.title}</strong>
                       <small>
                         <Clock3 size={13} />
-                        {item.sourceDate ?? item.updatedAt.slice(0, 10)} / {item.updatedAt.slice(11, 16)}
+                        {item.scopeTitle ?? item.attachment?.scopeTitle ?? item.sourceDate ?? item.updatedAt.slice(0, 10)} / {item.updatedAt.slice(11, 16)}
                       </small>
                     </span>
                     <Trash2

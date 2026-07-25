@@ -2,10 +2,12 @@ import type { AiProviderConfig, AiProviderProfile } from "../types";
 import { createBaseEntity } from "./entity";
 
 export const DEFAULT_AI_MEMORY_TURNS = 12;
+export const DEFAULT_AI_CONTEXT_WINDOW_TOKENS = 65_536;
 
 const baseProvider = (): Omit<AiProviderProfile, "id" | "providerName" | "baseUrl" | "model" | "builtIn"> => ({
   temperature: 0.7,
   maxTokens: 4096,
+  contextWindowTokens: DEFAULT_AI_CONTEXT_WINDOW_TOKENS,
   memoryTurns: DEFAULT_AI_MEMORY_TURNS,
 });
 
@@ -72,6 +74,7 @@ export const normalizeAiProvider = (provider: Partial<AiProviderProfile>): AiPro
     model: typeof provider.model === "string" ? provider.model.trim() : fallback.model,
     temperature: Number(provider.temperature) || fallback.temperature,
     maxTokens: Number(provider.maxTokens) || fallback.maxTokens,
+    contextWindowTokens: Number(provider.contextWindowTokens) || fallback.contextWindowTokens,
     memoryTurns: Number(provider.memoryTurns) || DEFAULT_AI_MEMORY_TURNS,
   };
 };
@@ -89,6 +92,7 @@ export const normalizeAiConfig = (
       model: legacy.model,
       temperature: legacy.temperature,
       maxTokens: legacy.maxTokens,
+      contextWindowTokens: legacy.contextWindowTokens,
       memoryTurns: legacy.memoryTurns,
       builtIn: legacy.providerName === "DeepSeek" ? "deepseek" : undefined,
     });

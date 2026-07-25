@@ -34,9 +34,9 @@ import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { UsageGuidePage } from "./pages/UsageGuidePage";
 import { PageTransition } from "./components/PageTransition";
-import type { RecordBlock, Subject } from "./types";
-import { buildDayLogAiContextAsync } from "./services/dayLogAiContextService";
-import { createAiSessionForDate } from "./services/aiSessionService";
+import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
+import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
+import { createAiSessionForScope } from "./services/aiSessionService";
 import { exportRecordTransferPackage } from "./services/recordTransferService";
 import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
@@ -613,14 +613,16 @@ export const App = () => {
     commitNavigation({ ...current, tabMemory: nextMemory }, { scrollToTop: true });
   };
 
-  const openAiForDate = async (date: string) => {
-    const attachment = await buildDayLogAiContextAsync(date, app.blocks, app.assets);
-    const session = await createAiSessionForDate(date, attachment);
+  const openAiForScope = async (scope: AiKnowledgeScope) => {
+    const attachment = await buildAiKnowledgeContextPackAsync(scope, app.blocks, app.assets);
+    const session = await createAiSessionForScope(scope, attachment);
     if (session) {
       updateNavigationState((current) => ({ ...current, activeAiSessionId: session.id }));
       openMoreSubRoute("ai");
     }
   };
+
+  const openAiForDate = async (date: string) => openAiForScope({ kind: "date", date });
 
   const renderRecordPage = (record: RecordBlock, highlightedAssetId?: string) => (
     <RecordEditorPage
@@ -1011,6 +1013,7 @@ export const App = () => {
             }}
             onOpenRecord={(record) => openRecordInTab(record, "categories")}
             onAskAi={(date) => void openAiForDate(date)}
+            onAskAiScope={(scope) => void openAiForScope(scope)}
             onAddSubject={app.addSubject}
             onRenameSubject={app.renameSubject}
             onSaveSubjects={app.saveSubjects}

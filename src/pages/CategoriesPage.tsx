@@ -1,7 +1,7 @@
-import { Archive, ArrowDown, ArrowLeft, ArrowUp, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeft, ArrowUp, Bot, Check, Edit3, Plus, RotateCcw, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import type { Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { AiKnowledgeScope, Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { formatChineseDate, nowISO } from "../lib/date";
 import {
   getRecordBlocks,
@@ -23,6 +23,7 @@ interface CategoriesPageProps {
   onManagingChange: (managing: boolean) => void;
   onOpenRecord: (record: RecordBlock) => void;
   onAskAi?: (date: string) => void;
+  onAskAiScope?: (scope: AiKnowledgeScope) => void;
   onAddSubject: (name: string) => Promise<void>;
   onRenameSubject: (oldName: Subject, newName: Subject) => Promise<void>;
   onSaveSubjects: (subjects: SubjectConfig[]) => Promise<void>;
@@ -92,6 +93,7 @@ export const CategoriesPage = ({
   onManagingChange,
   onOpenRecord,
   onAskAi,
+  onAskAiScope,
   onAddSubject,
   onRenameSubject,
   onSaveSubjects,
@@ -497,15 +499,28 @@ export const CategoriesPage = ({
                     const hiddenCount = group.records.length - visibleRecords.length;
                     return (
                       <section key={group.key} className="subject-tag-group">
-                        <button
-                          type="button"
-                          className="subject-tag-toggle"
-                          onClick={() => toggleTag(group.key)}
-                          aria-expanded={expanded}
-                        >
-                          <RecordTagChips subject={activeSubject} tags={[group.tag]} className="subject-tag-title" />
-                          <small>{group.records.length} 条</small>
-                        </button>
+                        <div className="subject-tag-toggle">
+                          <button
+                            type="button"
+                            className="subject-tag-toggle-main"
+                            onClick={() => toggleTag(group.key)}
+                            aria-expanded={expanded}
+                          >
+                            <RecordTagChips subject={activeSubject} tags={[group.tag]} className="subject-tag-title" />
+                            <small>{group.records.length} 条</small>
+                          </button>
+                          {onAskAiScope && (
+                            <button
+                              type="button"
+                              className="icon-button"
+                              onClick={() => onAskAiScope({ kind: "tag", subject: activeSubject, tag: group.tag })}
+                              aria-label={`针对标签 ${group.tag} 进行 AI 问答`}
+                              title="针对这个标签问 AI"
+                            >
+                              <Bot size={17} />
+                            </button>
+                          )}
+                        </div>
                         {expanded && (
                           <div className="subject-tag-records">
                             {visibleRecords.map((record) => (

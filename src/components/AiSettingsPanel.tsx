@@ -5,6 +5,7 @@ import type { AiProviderConfig, AiProviderProfile, AiPromptPreset, AppSettings }
 import { createBaseEntity } from "../lib/entity";
 import { createDefaultAiPresets, DEFAULT_SETTINGS } from "../db/defaults";
 import {
+  DEFAULT_AI_CONTEXT_WINDOW_TOKENS,
   createAiProviderTemplate,
   getCurrentAiProvider,
   normalizeAiConfig,
@@ -321,6 +322,17 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
                         value={provider.maxTokens}
                         onChange={(event) => updateProvider(provider.id, { maxTokens: Number(event.target.value) })}
                       />
+                    </label>
+                    <label>
+                      Context Window Tokens
+                      <input
+                        type="number"
+                        min="4096"
+                        step="1024"
+                        value={provider.contextWindowTokens ?? DEFAULT_AI_CONTEXT_WINDOW_TOKENS}
+                        onChange={(event) => updateProvider(provider.id, { contextWindowTokens: Number(event.target.value) })}
+                      />
+                      <small>模型输入与输出共享的上下文窗口，用于限制知识库检索内容。</small>
                     </label>
                     <label>
                       上下文记忆
