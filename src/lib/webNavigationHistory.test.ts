@@ -42,6 +42,25 @@ describe("web navigation history snapshots", () => {
     expect(restored?.tabMemory.journal.referenceStack?.[0]).toMatchObject({ recordId: "record-a", scrollY: 248 });
   });
 
+  it("restores card-library scope, filters and sorting while accepting legacy snapshots", () => {
+    const memory = createInitialTabMemory();
+    memory.review.library = {
+      scope: { kind: "tag", subject: "数据结构", tag: "图论" },
+      filter: "due",
+      kindFilter: "memory",
+      query: "最短路",
+      sort: "reviewed",
+    };
+
+    const snapshot = createWebNavigationSnapshot("session-1", "review", memory, null, 0);
+    const restored = restoreWebNavigationSnapshot(JSON.parse(JSON.stringify(snapshot)));
+    expect(restored?.tabMemory.review.library).toEqual(memory.review.library);
+
+    const legacySnapshot = JSON.parse(JSON.stringify(snapshot));
+    delete legacySnapshot.tabMemory.review.library;
+    expect(restoreWebNavigationSnapshot(legacySnapshot)?.tabMemory.review.library).toEqual(createInitialTabMemory().review.library);
+  });
+
   it("rejects foreign, stale or malformed history state", () => {
     const snapshot = createWebNavigationSnapshot("session-1", "today", createInitialTabMemory(), null, 0);
 

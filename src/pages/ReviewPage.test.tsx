@@ -3,6 +3,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
+import { createInitialReviewLibraryState } from "../lib/tabNavigation";
 
 const richTextEditorMock = vi.hoisted(() => ({
   props: [] as any[],
@@ -125,6 +126,7 @@ const renderReviewPage = (options: RenderOptions = {}) => {
     onModeChange: vi.fn(),
     onQueueChange: vi.fn(),
     onCurrentRecordChange: vi.fn(),
+    onLibraryStateChange: vi.fn(),
     onEnsureDay: vi.fn().mockResolvedValue(undefined),
     onRate: vi.fn().mockResolvedValue(undefined),
     onUndo: vi.fn().mockResolvedValue(undefined),
@@ -135,20 +137,36 @@ const renderReviewPage = (options: RenderOptions = {}) => {
     onRemoveReview: vi.fn(),
     onResetReview: vi.fn(),
   };
+  const {
+    libraryState: initialLibraryState = createInitialReviewLibraryState(),
+    onLibraryStateChange = handlers.onLibraryStateChange,
+    ...restOptions
+  } = options;
+  const ReviewPageHarness = () => {
+    const [libraryState, setLibraryState] = useState(initialLibraryState);
+    return (
+      <ReviewPage
+        records={records}
+        dueReviews={[review("active")]}
+        reviewStates={[review("active"), review("mastered", { status: "mastered", nextReviewDate: undefined })]}
+        stats={stats}
+        mode="manage"
+        queueIds={["active"]}
+        currentRecordId="active"
+        {...handlers}
+        {...restOptions}
+        libraryState={libraryState}
+        onLibraryStateChange={(state) => {
+          onLibraryStateChange(state);
+          setLibraryState(state);
+        }}
+      />
+    );
+  };
   render(
-    <ReviewPage
-      records={records}
-      dueReviews={[review("active")]}
-      reviewStates={[review("active"), review("mastered", { status: "mastered", nextReviewDate: undefined })]}
-      stats={stats}
-      mode="manage"
-      queueIds={["active"]}
-      currentRecordId="active"
-      {...handlers}
-      {...options}
-    />,
+    <ReviewPageHarness />,
   );
-  return { handlers: { ...handlers, ...options }, records };
+  return { handlers: { ...handlers, ...restOptions, onLibraryStateChange }, records };
 };
 
 const clickRating = (name: string | RegExp) => {
@@ -211,7 +229,7 @@ describe("ReviewPage", () => {
     scrollTo.mockRestore();
   });
 
-  it("manages all record cards with deck, due date and review actions", () => {
+  it("uses a compact card menu for preview, editing and review actions", () => {
     const { handlers } = renderReviewPage();
 
     expect(screen.getByText("BFS 队列")).toBeInTheDocument();
@@ -223,10 +241,14 @@ describe("ReviewPage", () => {
     expect(within(activeCard as HTMLElement).getByText("数据结构")).toBeInTheDocument();
     expect(within(activeCard as HTMLElement).getByText(/到期 2026-07-02/)).toBeInTheDocument();
 
-    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /预览/ }));
-    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /编辑/ }));
-    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /忘记重排/ }));
-    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /搁置/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /打开 BFS 队列 的操作菜单/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("menuitem", { name: /预览/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /打开 BFS 队列 的操作菜单/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("menuitem", { name: /编辑/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /打开 BFS 队列 的操作菜单/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("menuitem", { name: /忘记重排/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("button", { name: /打开 BFS 队列 的操作菜单/ }));
+    fireEvent.click(within(activeCard as HTMLElement).getByRole("menuitem", { name: /搁置/ }));
 
     expect(handlers.onOpenRecord).toHaveBeenCalledWith(records[0]);
     expect(handlers.onEditRecord).toHaveBeenCalledWith(records[0]);
@@ -235,8 +257,9 @@ describe("ReviewPage", () => {
 
     const newCard = screen.getByText("概率笔记").closest("article");
     expect(newCard).not.toBeNull();
-    expect(within(newCard as HTMLElement).getByText("新卡")).toBeInTheDocument();
-    fireEvent.click(within(newCard as HTMLElement).getByRole("button", { name: /加入复习/ }));
+    expect(within(newCard as HTMLElement).getByText("未加入")).toBeInTheDocument();
+    fireEvent.click(within(newCard as HTMLElement).getByRole("button", { name: /打开 概率笔记 的操作菜单/ }));
+    fireEvent.click(within(newCard as HTMLElement).getByRole("menuitem", { name: /加入复习/ }));
 
     expect(handlers.onAddToReview).toHaveBeenCalledWith("new");
   });
@@ -283,15 +306,76 @@ describe("ReviewPage", () => {
     expect(onCurrentRecordChange).toHaveBeenCalledWith("due-1");
   });
 
-  it("filters card manager by deck and state", () => {
-    renderReviewPage();
+  it("filters the card library by subject, tag and explicit status", () => {
+    renderReviewPage({
+      records: records.map((item) => item.id === "active" ? { ...item, tags: ["队列", "重点"] } : item),
+    });
 
-    fireEvent.change(screen.getByLabelText("所属牌组"), { target: { value: "数学" } });
-    expect(screen.getByText("概率笔记")).toBeInTheDocument();
-    expect(screen.queryByText("BFS 队列")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^数据结构/ }));
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+    expect(screen.queryByText("概率笔记")).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("卡片状态"), { target: { value: "mastered" } });
+    fireEvent.click(screen.getByRole("button", { name: /^队列/ }));
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+    expect(screen.queryByText("页表缓存")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "已掌握" }));
     expect(screen.getByText("没有匹配的卡片")).toBeInTheDocument();
+  });
+
+  it("searches titles, subjects and tags without scanning record content", () => {
+    renderReviewPage({
+      records: records.map((item) => {
+        if (item.id === "active") return { ...item, tags: ["图论"], contentHtml: "<p>仅正文命中</p>" };
+        if (item.id === "second") return { ...item, tags: ["图论"] };
+        return item;
+      }),
+    });
+
+    fireEvent.change(screen.getByLabelText("搜索标题、学科、标签"), { target: { value: "图论" } });
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+    expect(screen.getByText("页表缓存")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("搜索标题、学科、标签"), { target: { value: "仅正文命中" } });
+    expect(screen.getByText("没有匹配的卡片")).toBeInTheDocument();
+  });
+
+  it("isolates identical tag names by subject while a record remains in each of its tag views", () => {
+    renderReviewPage({
+      records: records.map((item) => {
+        if (item.id === "active") return { ...item, tags: ["专项", "队列"] };
+        if (item.id === "second") return { ...item, tags: ["专项"] };
+        return item;
+      }),
+      libraryState: {
+        ...createInitialReviewLibraryState(),
+        scope: { kind: "tag", subject: "数据结构", tag: "专项" },
+      },
+    });
+
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+    expect(screen.queryByText("页表缓存")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^队列/ }));
+    expect(screen.getByText("BFS 队列")).toBeInTheDocument();
+  });
+
+  it("keeps suspended cards out of the new-card filter and count", () => {
+    renderReviewPage({
+      reviewStates: [
+        review("active"),
+        review("new", { totalReviews: 0, nextReviewDate: "2026-07-03" }),
+        review("second", { status: "removed", nextReviewDate: undefined }),
+      ],
+    });
+
+    expect(screen.getByRole("button", { name: /^新卡 1$/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新卡" }));
+    expect(screen.getByText("概率笔记")).toBeInTheDocument();
+    expect(screen.queryByText("页表缓存")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "已搁置" }));
+    expect(screen.getByText("页表缓存")).toBeInTheDocument();
+    expect(screen.queryByText("概率笔记")).not.toBeInTheDocument();
   });
 
   it("removes an overdue card immediately after a good rating and prevents stale due props from requeueing it", async () => {
@@ -307,9 +391,11 @@ describe("ReviewPage", () => {
         mode="queue"
         queueIds={["active"]}
         currentRecordId="active"
+        libraryState={createInitialReviewLibraryState()}
         onModeChange={vi.fn()}
         onQueueChange={onQueueChange}
         onCurrentRecordChange={onCurrentRecordChange}
+        onLibraryStateChange={vi.fn()}
         onEnsureDay={vi.fn().mockResolvedValue(undefined)}
         onRate={onRate}
         onUndo={vi.fn().mockResolvedValue(undefined)}
@@ -338,9 +424,11 @@ describe("ReviewPage", () => {
         mode="queue"
         queueIds={["active"]}
         currentRecordId="active"
+        libraryState={createInitialReviewLibraryState()}
         onModeChange={vi.fn()}
         onQueueChange={onQueueChange}
         onCurrentRecordChange={onCurrentRecordChange}
+        onLibraryStateChange={vi.fn()}
         onEnsureDay={vi.fn().mockResolvedValue(undefined)}
         onRate={onRate}
         onUndo={vi.fn().mockResolvedValue(undefined)}
@@ -509,6 +597,7 @@ describe("ReviewPage", () => {
       const [dueReviews, setDueReviews] = useState(initialDueReviews);
       const [queueIds, setQueueIds] = useState(["active", "second"]);
       const [currentRecordId, setCurrentRecordId] = useState<string | undefined>("active");
+      const [libraryState, setLibraryState] = useState(createInitialReviewLibraryState());
 
       return (
         <>
@@ -521,9 +610,11 @@ describe("ReviewPage", () => {
             mode="queue"
             queueIds={queueIds}
             currentRecordId={currentRecordId}
+            libraryState={libraryState}
             onModeChange={vi.fn()}
             onQueueChange={setQueueIds}
             onCurrentRecordChange={setCurrentRecordId}
+            onLibraryStateChange={setLibraryState}
             onEnsureDay={vi.fn().mockResolvedValue(undefined)}
             onRate={async (recordId) => {
               setDueReviews((current) => current.filter((review) => review.recordId !== recordId));

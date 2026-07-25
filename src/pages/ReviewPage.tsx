@@ -4,6 +4,7 @@
   Edit3,
   Eye,
   MessageSquare,
+  MoreHorizontal,
   PauseCircle,
   PlusCircle,
   RefreshCw,
@@ -16,12 +17,13 @@
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewKind, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
+import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { RecordTagChips } from "../components/RecordTagChips";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
 import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
+import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
 import {
   ACTIVE_REVIEW_RATINGS,
   REVIEW_DAILY_SUGGESTED_LIMIT,
@@ -30,7 +32,7 @@ import {
   ratingLabel,
   reviewKindLabel,
 } from "../lib/reviewScheduler";
-import type { ReviewMode } from "../lib/tabNavigation";
+import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode } from "../lib/tabNavigation";
 
 interface ReviewPageProps {
   records: RecordBlock[];
@@ -41,9 +43,11 @@ interface ReviewPageProps {
   mode: ReviewMode;
   queueIds: string[];
   currentRecordId?: string;
+  libraryState: ReviewLibraryState;
   onModeChange: (mode: ReviewMode) => void;
   onQueueChange: (ids: string[]) => void;
   onCurrentRecordChange: (id?: string) => void;
+  onLibraryStateChange: (state: ReviewLibraryState) => void;
   onEnsureDay: (date: string, dueCountAtFirstOpen: number) => Promise<unknown>;
   onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<RecordReviewUndoToken | undefined>;
   onUndo: (token: RecordReviewUndoToken) => Promise<void>;
@@ -59,8 +63,20 @@ interface ReviewPageProps {
   onResetReview: (recordId: string) => Promise<void> | void;
 }
 
-type ReviewCardFilter = "all" | "due" | "new" | "active" | "suspended" | "mastered";
-type ReviewKindFilter = "all" | RecordReviewKind;
+type ReviewCardStatus = Exclude<ReviewCardFilter, "all">;
+
+interface ReviewDeckSummary {
+  total: number;
+  due: number;
+  newCards: number;
+  learning: number;
+}
+
+interface ReviewDeckGroup {
+  subject: string;
+  records: RecordBlock[];
+  tags: Array<{ tag: string; key: string; records: RecordBlock[] }>;
+}
 
 interface ReviewUndoEntry {
   token: RecordReviewUndoToken;
@@ -80,16 +96,35 @@ const ratingConfig: Array<{ rating: RecordReviewRating; label: string; icon: typ
 
 const isDueReview = (review: RecordReviewState | undefined, today: string) => isReviewDueOn(review, today);
 
+const reviewCardStatus = (review: RecordReviewState | undefined, today: string): ReviewCardStatus => {
+  if (!review) return "unadded";
+  if (review.status === "removed") return "suspended";
+  if (review.status === "mastered") return "mastered";
+  if (review.totalReviews === 0) return "new";
+  if (isDueReview(review, today)) return "due";
+  return "learning";
+};
+
 const reviewStatusLabel = (review: RecordReviewState | undefined, today: string) => {
-  if (!review) return "新卡";
-  if (review.status === "removed") return "已搁置";
-  if (review.status === "mastered") return "已掌握";
-  if (isDueReview(review, today)) return review.nextReviewDate && review.nextReviewDate < today ? "已过期" : "今日到期";
-  return "复习中";
+  switch (reviewCardStatus(review, today)) {
+    case "unadded":
+      return "未加入";
+    case "new":
+      return "新卡";
+    case "due":
+      return review?.nextReviewDate && review.nextReviewDate < today ? "已过期" : "今日到期";
+    case "learning":
+      return "复习中";
+    case "suspended":
+      return "已搁置";
+    case "mastered":
+      return "已掌握";
+  }
 };
 
 const reviewDueLabel = (review: RecordReviewState | undefined) => {
-  if (!review || review.status === "removed") return "新卡";
+  if (!review) return "未加入复习";
+  if (review.status === "removed") return "已搁置";
   if (review.status === "mastered") return "无到期日";
   return review.nextReviewDate ? `到期 ${review.nextReviewDate}` : "待排期";
 };
@@ -142,28 +177,43 @@ const suggestedDailyLimitIds = (reviews: RecordReviewState[], today: string) =>
     .map((review) => review.recordId);
 
 const matchesFilter = (review: RecordReviewState | undefined, filter: ReviewCardFilter, today: string) => {
-  switch (filter) {
-    case "all":
-      return true;
-    case "due":
-      return isDueReview(review, today);
-    case "new":
-      return !review || review.status === "removed";
-    case "active":
-      return review?.status === "active";
-    case "suspended":
-      return review?.status === "removed";
-    case "mastered":
-      return review?.status === "mastered";
-  }
+  if (filter === "all") return true;
+  if (filter === "due") return isDueReview(review, today);
+  return reviewCardStatus(review, today) === filter;
 };
 
 const reviewSortScore = (review: RecordReviewState | undefined, today: string) => {
   if (isDueReview(review, today)) return 0;
-  if (!review || review.status === "removed") return 1;
-  if (review.status === "active") return 2;
-  return 3;
+  if (review?.status === "active" && review.totalReviews === 0) return 1;
+  if (!review) return 2;
+  if (review.status === "active") return 3;
+  if (review.status === "removed") return 4;
+  return 5;
 };
+
+const matchesScope = (record: RecordBlock, scope: ReviewDeckScope) => {
+  if (scope.kind === "all") return true;
+  if (record.subject !== scope.subject) return false;
+  if (scope.kind === "subject") return true;
+  const scopeTagKey = recordTagKey(scope.tag);
+  return normalizeRecordTags(record.tags).some((tag) => recordTagKey(tag) === scopeTagKey);
+};
+
+const reviewScopeLabel = (scope: ReviewDeckScope) =>
+  scope.kind === "all" ? "全部卡片" : scope.kind === "subject" ? scope.subject : `${scope.subject} / ${scope.tag}`;
+
+const reviewDeckSummary = (records: readonly RecordBlock[], reviewMap: ReadonlyMap<string, RecordReviewState>, today: string): ReviewDeckSummary => ({
+  total: records.length,
+  due: records.filter((record) => isDueReview(reviewMap.get(record.id), today)).length,
+  newCards: records.filter((record) => {
+    const review = reviewMap.get(record.id);
+    return review?.status === "active" && review.totalReviews === 0;
+  }).length,
+  learning: records.filter((record) => {
+    const review = reviewMap.get(record.id);
+    return review?.status === "active" && review.totalReviews > 0 && !isDueReview(review, today);
+  }).length,
+});
 
 export const ReviewPage = ({
   records,
@@ -174,9 +224,11 @@ export const ReviewPage = ({
   mode,
   queueIds,
   currentRecordId,
+  libraryState,
   onModeChange,
   onQueueChange,
   onCurrentRecordChange,
+  onLibraryStateChange,
   onEnsureDay,
   onRate,
   onUndo,
@@ -193,10 +245,7 @@ export const ReviewPage = ({
 }: ReviewPageProps) => {
   const touchStartYRef = useRef<number | null>(null);
   const [pullReady, setPullReady] = useState(false);
-  const [filter, setFilter] = useState<ReviewCardFilter>("all");
-  const [kindFilter, setKindFilter] = useState<ReviewKindFilter>("all");
-  const [subjectFilter, setSubjectFilter] = useState("all");
-  const [query, setQuery] = useState("");
+  const [openActionRecordId, setOpenActionRecordId] = useState<string>();
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [undoHistory, setUndoHistory] = useState<ReviewUndoEntry[]>([]);
@@ -249,29 +298,91 @@ export const ReviewPage = ({
     () => currentReview ? new Map(previewReviewRatings(currentReview, today).map((preview) => [preview.rating, preview])) : new Map(),
     [currentReview, today],
   );
-  const subjects = useMemo(() => Array.from(new Set(records.map((record) => record.subject))).sort(), [records]);
-  const newCount = records.filter((record) => {
-    const review = reviewMap.get(record.id);
-    return !review || review.status === "removed";
-  }).length;
+  const deckGroups = useMemo<ReviewDeckGroup[]>(() => {
+    const groups = new Map<string, { subject: string; records: RecordBlock[]; tags: Map<string, { tag: string; key: string; records: RecordBlock[] }> }>();
+    for (const record of records) {
+      const group = groups.get(record.subject) ?? {
+        subject: record.subject,
+        records: [] as RecordBlock[],
+        tags: new Map<string, { tag: string; key: string; records: RecordBlock[] }>(),
+      };
+      group.records.push(record);
+      for (const tag of normalizeRecordTags(record.tags)) {
+        const key = recordTagKey(tag);
+        const tagGroup = group.tags.get(key) ?? { tag, key, records: [] };
+        tagGroup.records.push(record);
+        group.tags.set(key, tagGroup);
+      }
+      groups.set(record.subject, group);
+    }
+    return Array.from(groups.values())
+      .sort((left, right) => left.subject.localeCompare(right.subject))
+      .map((group) => ({
+        subject: group.subject,
+        records: group.records,
+        tags: Array.from(group.tags.values()).sort((left, right) => left.tag.localeCompare(right.tag)),
+      }));
+  }, [records]);
+  const selectedScopeRecords = useMemo(
+    () => records.filter((record) => matchesScope(record, libraryState.scope)),
+    [libraryState.scope, records],
+  );
+  const selectedScopeSummary = useMemo(
+    () => reviewDeckSummary(selectedScopeRecords, reviewMap, today),
+    [reviewMap, selectedScopeRecords, today],
+  );
+  const newCount = records.filter((record) => reviewCardStatus(reviewMap.get(record.id), today) === "new").length;
 
   const managedRecords = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    return records
-      .filter((record) => subjectFilter === "all" || record.subject === subjectFilter)
-      .filter((record) => matchesFilter(reviewMap.get(record.id), filter, today))
-      .filter((record) => kindFilter === "all" || (reviewMap.get(record.id)?.reviewKind ?? "overview") === kindFilter)
+    const normalizedQuery = libraryState.query.trim().toLocaleLowerCase();
+    const filtered = selectedScopeRecords
+      .filter((record) => matchesFilter(reviewMap.get(record.id), libraryState.filter, today))
+      .filter((record) => libraryState.kindFilter === "all" || (reviewMap.get(record.id)?.reviewKind ?? "overview") === libraryState.kindFilter)
       .filter((record) =>
         !normalizedQuery ||
         record.title.toLocaleLowerCase().includes(normalizedQuery) ||
         record.subject.toLocaleLowerCase().includes(normalizedQuery) ||
-        record.date.includes(normalizedQuery),
-      )
-      .sort((a, b) => {
-        const score = reviewSortScore(reviewMap.get(a.id), today) - reviewSortScore(reviewMap.get(b.id), today);
-        return score || (reviewMap.get(a.id)?.nextReviewDate ?? "9999").localeCompare(reviewMap.get(b.id)?.nextReviewDate ?? "9999") || b.date.localeCompare(a.date);
-      });
-  }, [filter, kindFilter, query, records, reviewMap, subjectFilter, today]);
+        normalizeRecordTags(record.tags).some((tag) => tag.toLocaleLowerCase().includes(normalizedQuery)),
+      );
+    return filtered.sort((a, b) => {
+      const leftReview = reviewMap.get(a.id);
+      const rightReview = reviewMap.get(b.id);
+      switch (libraryState.sort) {
+        case "created":
+          return b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt);
+        case "reviewed":
+          return (rightReview?.lastReviewedAt ?? "").localeCompare(leftReview?.lastReviewedAt ?? "") || b.date.localeCompare(a.date);
+        case "title":
+          return a.title.localeCompare(b.title, "zh-Hans-CN") || b.date.localeCompare(a.date);
+        case "due":
+          return reviewSortScore(leftReview, today) - reviewSortScore(rightReview, today) ||
+            (leftReview?.nextReviewDate ?? "9999").localeCompare(rightReview?.nextReviewDate ?? "9999") ||
+            b.date.localeCompare(a.date);
+      }
+    });
+  }, [libraryState.filter, libraryState.kindFilter, libraryState.query, libraryState.sort, reviewMap, selectedScopeRecords, today]);
+
+  const updateLibraryState = useCallback((patch: Partial<ReviewLibraryState>) => {
+    onLibraryStateChange({ ...libraryState, ...patch });
+  }, [libraryState, onLibraryStateChange]);
+
+  useEffect(() => {
+    const scope = libraryState.scope;
+    if (scope.kind === "all") {
+      return;
+    }
+    const subjectGroup = deckGroups.find((group) => group.subject === scope.subject);
+    if (!subjectGroup) {
+      updateLibraryState({ scope: { kind: "all" } });
+      return;
+    }
+    if (scope.kind === "tag") {
+      const tagKey = recordTagKey(scope.tag);
+      if (!subjectGroup.tags.some((tag) => tag.key === tagKey)) {
+        updateLibraryState({ scope: { kind: "subject", subject: subjectGroup.subject } });
+      }
+    }
+  }, [deckGroups, libraryState.scope, updateLibraryState]);
 
   useEffect(() => {
     void onEnsureDay(today, dueReviews.length);
@@ -556,24 +667,56 @@ export const ReviewPage = ({
           今日复习
         </button>
         <button type="button" className={mode === "manage" ? "active" : ""} onClick={() => onModeChange("manage")}>
-          卡片管理
+          卡片库
         </button>
       </div>
 
-      <section className="review-summary-grid">
-        <SurfaceCard variant="raised">
-          <span>复习中</span>
-          <strong>{stats?.activeCount ?? 0}</strong>
-        </SurfaceCard>
-        <SurfaceCard variant="raised">
-          <span>新卡</span>
-          <strong>{newCount}</strong>
-        </SurfaceCard>
-        <SurfaceCard variant="raised">
-          <span>已掌握</span>
-          <strong>{stats?.masteredCount ?? 0}</strong>
-        </SurfaceCard>
-      </section>
+      {mode === "manage" ? (
+        <section className="review-summary-grid review-library-summary" aria-label="当前牌组摘要">
+          <button
+            type="button"
+            className={libraryState.filter === "due" ? "active" : ""}
+            onClick={() => updateLibraryState({ filter: libraryState.filter === "due" ? "all" : "due" })}
+            aria-pressed={libraryState.filter === "due"}
+          >
+            <span>到期</span>
+            <strong>{selectedScopeSummary.due}</strong>
+          </button>
+          <button
+            type="button"
+            className={libraryState.filter === "new" ? "active" : ""}
+            onClick={() => updateLibraryState({ filter: libraryState.filter === "new" ? "all" : "new" })}
+            aria-pressed={libraryState.filter === "new"}
+          >
+            <span>新卡</span>
+            <strong>{selectedScopeSummary.newCards}</strong>
+          </button>
+          <button
+            type="button"
+            className={libraryState.filter === "learning" ? "active" : ""}
+            onClick={() => updateLibraryState({ filter: libraryState.filter === "learning" ? "all" : "learning" })}
+            aria-pressed={libraryState.filter === "learning"}
+          >
+            <span>复习中</span>
+            <strong>{selectedScopeSummary.learning}</strong>
+          </button>
+        </section>
+      ) : (
+        <section className="review-summary-grid">
+          <SurfaceCard variant="raised">
+            <span>复习中</span>
+            <strong>{stats?.activeCount ?? 0}</strong>
+          </SurfaceCard>
+          <SurfaceCard variant="raised">
+            <span>新卡</span>
+            <strong>{newCount}</strong>
+          </SurfaceCard>
+          <SurfaceCard variant="raised">
+            <span>已掌握</span>
+            <strong>{stats?.masteredCount ?? 0}</strong>
+          </SurfaceCard>
+        </section>
+      )}
 
       {mode === "queue" ? (
         !currentRecord ? (
@@ -582,7 +725,7 @@ export const ReviewPage = ({
             <p>
               {hiddenDueCount > 0
                 ? `还有 ${hiddenDueCount} 条到期记录，已经超出今日建议量。`
-                : "你可以从日志卡片或卡片管理里把重要笔记加入复习队列。"}
+                : "你可以从日志卡片或卡片库里把重要笔记加入复习队列。"}
             </p>
             <small>累计复习 {stats?.totalReviews ?? 0} 次</small>
             {hiddenDueCount > 0 && (
@@ -689,95 +832,225 @@ export const ReviewPage = ({
           </>
         )
       ) : (
-        <section className="review-manager">
-          <div className="review-manager-toolbar">
-            <label className="review-search-box">
-              <Search size={16} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、日期、牌组" />
-            </label>
-            <select value={filter} onChange={(event) => setFilter(event.target.value as ReviewCardFilter)} aria-label="卡片状态">
-              <option value="all">全部卡片</option>
-              <option value="due">到期</option>
-              <option value="new">新卡</option>
-              <option value="active">复习中</option>
-              <option value="suspended">已搁置</option>
-              <option value="mastered">已掌握</option>
-            </select>
-            <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as ReviewKindFilter)} aria-label="复习类型">
-              <option value="all">全部类型</option>
-              <option value="overview">轻回看</option>
-              <option value="memory">记忆卡</option>
-            </select>
-            <select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)} aria-label="所属牌组">
-              <option value="all">全部牌组</option>
-              {subjects.map((subject) => (
-                <option key={subject} value={subject}>{subject}</option>
-              ))}
-            </select>
-          </div>
-          <div className="review-manager-list">
-            {managedRecords.length === 0 ? (
-              <div className="empty-state">
-                <h2>没有匹配的卡片</h2>
-                <p>换一个筛选条件，或者先从日志里加入复习。</p>
+        <section className="review-library">
+          <aside className="review-deck-sidebar">
+            <details className="review-deck-panel">
+              <summary>
+                <span>牌组范围</span>
+                <strong>{reviewScopeLabel(libraryState.scope)}</strong>
+                <ChevronDown size={17} />
+              </summary>
+              <div className="review-deck-list">
+                <button
+                  type="button"
+                  className={libraryState.scope.kind === "all" ? "active" : ""}
+                  onClick={() => updateLibraryState({ scope: { kind: "all" } })}
+                  aria-current={libraryState.scope.kind === "all" ? "true" : undefined}
+                >
+                  <span>全部卡片</span>
+                  <small>{records.length}</small>
+                </button>
+                {deckGroups.map((group) => {
+                  const groupSummary = reviewDeckSummary(group.records, reviewMap, today);
+                  const subjectActive = libraryState.scope.kind !== "all" && libraryState.scope.subject === group.subject;
+                  return (
+                    <section key={group.subject} className="review-deck-group">
+                      <button
+                        type="button"
+                        className={libraryState.scope.kind === "subject" && subjectActive ? "active" : ""}
+                        onClick={() => updateLibraryState({ scope: { kind: "subject", subject: group.subject } })}
+                        aria-current={libraryState.scope.kind === "subject" && subjectActive ? "true" : undefined}
+                      >
+                        <span>{group.subject}</span>
+                        <small>{groupSummary.total}</small>
+                      </button>
+                      {group.tags.length > 0 && (
+                        <div className="review-deck-tags">
+                          {group.tags.map((tag) => {
+                            const selected = libraryState.scope.kind === "tag" && subjectActive && recordTagKey(libraryState.scope.tag) === tag.key;
+                            return (
+                              <button
+                                key={tag.key}
+                                type="button"
+                                className={selected ? "active" : ""}
+                                onClick={() => updateLibraryState({ scope: { kind: "tag", subject: group.subject, tag: tag.tag } })}
+                                aria-current={selected ? "true" : undefined}
+                              >
+                                <span>{tag.tag}</span>
+                                <small>{tag.records.length}</small>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
               </div>
-            ) : managedRecords.map((record) => {
-              const review = reviewMap.get(record.id);
-              const hasEvaluation = (reviewLogsByRecord[record.id] ?? EMPTY_REVIEW_LOGS).some(hasEvaluationText);
-              const status = reviewStatusLabel(review, today);
-              const dueLabel = reviewDueLabel(review);
-              const active = review?.status === "active";
-              return (
-                <article key={record.id} className="review-manager-card">
-                  <div className="review-manager-main">
-                    <span className="record-subject-chip">{record.subject}</span>
-                    <div>
-                      <strong>{record.title}</strong>
-                      <RecordTagChips subject={record.subject} tags={record.tags} />
-                      <small>
-                        {record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次
-                        {hasEvaluation && (
-                          <span className="review-evaluation-inline-indicator" title="有复习评价" aria-label="有复习评价">
-                            <MessageSquare size={14} />
-                          </span>
-                        )}
-                      </small>
+            </details>
+          </aside>
+
+          <div className="review-library-content">
+            <div className="review-library-toolbar">
+              <label className="review-search-box">
+                <Search size={16} />
+                <input
+                  value={libraryState.query}
+                  onChange={(event) => updateLibraryState({ query: event.target.value })}
+                  placeholder="搜索标题、学科、标签"
+                  aria-label="搜索标题、学科、标签"
+                />
+              </label>
+              <select
+                value={libraryState.kindFilter}
+                onChange={(event) => updateLibraryState({ kindFilter: event.target.value as ReviewLibraryState["kindFilter"] })}
+                aria-label="复习类型"
+              >
+                <option value="all">全部类型</option>
+                <option value="overview">轻回看</option>
+                <option value="memory">记忆卡</option>
+              </select>
+              <select
+                value={libraryState.sort}
+                onChange={(event) => updateLibraryState({ sort: event.target.value as ReviewCardSort })}
+                aria-label="排序方式"
+              >
+                <option value="due">到期优先</option>
+                <option value="created">最近创建</option>
+                <option value="reviewed">最近复习</option>
+                <option value="title">标题</option>
+              </select>
+            </div>
+            <div className="review-library-filter-row">
+              <div className="review-filter-chips" role="group" aria-label="卡片状态筛选">
+                {([
+                  ["all", "全部"],
+                  ["unadded", "未加入"],
+                  ["new", "新卡"],
+                  ["due", "到期"],
+                  ["learning", "复习中"],
+                  ["suspended", "已搁置"],
+                  ["mastered", "已掌握"],
+                ] as const).map(([filter, label]) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={libraryState.filter === filter ? "active" : ""}
+                    onClick={() => updateLibraryState({ filter })}
+                    aria-pressed={libraryState.filter === filter}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {(libraryState.filter !== "all" || libraryState.kindFilter !== "all" || libraryState.query || libraryState.sort !== "due") && (
+                <button
+                  type="button"
+                  className="review-clear-filters"
+                  onClick={() => updateLibraryState({ filter: "all", kindFilter: "all", query: "", sort: "due" })}
+                >
+                  清除筛选
+                </button>
+              )}
+            </div>
+            <div className="review-library-result-meta">
+              <strong>{reviewScopeLabel(libraryState.scope)}</strong>
+              <span>{managedRecords.length} / {selectedScopeSummary.total} 张卡片</span>
+            </div>
+            <div className="review-library-list">
+              {managedRecords.length === 0 ? (
+                <div className="empty-state">
+                  <h2>没有匹配的卡片</h2>
+                  <p>调整牌组范围或筛选条件，或者先从日志加入复习。</p>
+                </div>
+              ) : managedRecords.map((record) => {
+                const review = reviewMap.get(record.id);
+                const hasEvaluation = (reviewLogsByRecord[record.id] ?? EMPTY_REVIEW_LOGS).some(hasEvaluationText);
+                const statusKind = reviewCardStatus(review, today);
+                const status = reviewStatusLabel(review, today);
+                const dueLabel = reviewDueLabel(review);
+                const active = review?.status === "active";
+                const actionsOpen = openActionRecordId === record.id;
+                return (
+                  <article key={record.id} className="review-library-card">
+                    <div
+                      className="review-library-card-main"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onOpenRecord(record)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onOpenRecord(record);
+                        }
+                      }}
+                      aria-label={`预览 ${record.title}`}
+                    >
+                      <span className="record-subject-chip">{record.subject}</span>
+                      <div>
+                        <strong>{record.title}</strong>
+                        <RecordTagChips subject={record.subject} tags={record.tags} />
+                        <small>
+                          {record.date} · {reviewKindLabel(review?.reviewKind)} · {dueLabel} · 累计 {review?.totalReviews ?? 0} 次
+                          {hasEvaluation && (
+                            <span className="review-evaluation-inline-indicator" title="有复习评价" aria-label="有复习评价">
+                              <MessageSquare size={14} />
+                            </span>
+                          )}
+                        </small>
+                      </div>
                     </div>
-                  </div>
-                  <span className={`review-status-pill ${status === "新卡" || status === "已搁置" ? "new" : active ? "active" : "done"}`}>
-                    {status}
-                  </span>
-                  <div className="review-manager-actions">
-                    <button type="button" className="secondary-button" onClick={() => onOpenRecord(record)}>
-                      <Eye size={16} />
-                      预览
-                    </button>
-                    <button type="button" className="secondary-button" onClick={() => onEditRecord(record)}>
-                      <Edit3 size={16} />
-                      编辑
-                    </button>
-                    {!active && (
-                      <button type="button" className="secondary-button" onClick={() => void onAddToReview(record.id)}>
-                        <PlusCircle size={16} />
-                        加入复习
-                      </button>
-                    )}
-                    {review && (
-                      <button type="button" className="secondary-button" onClick={() => void onResetReview(record.id)}>
-                        <RotateCcw size={16} />
-                        忘记重排
-                      </button>
-                    )}
-                    {active && (
-                      <button type="button" className="secondary-button danger" onClick={() => void onRemoveReview(record.id)}>
-                        <PauseCircle size={16} />
-                        搁置
-                      </button>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+                    <div className="review-library-card-trailing">
+                      <span className={`review-status-pill ${statusKind}`}>
+                        {status}
+                      </span>
+                      <div className="review-card-action-menu">
+                        <button
+                          type="button"
+                          className="review-card-action-trigger"
+                          onClick={() => setOpenActionRecordId(actionsOpen ? undefined : record.id)}
+                          aria-expanded={actionsOpen}
+                          aria-label={`打开 ${record.title} 的操作菜单`}
+                          title="卡片操作"
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+                        {actionsOpen && (
+                          <div className="review-card-action-popover" role="menu" aria-label={`${record.title} 的操作`}>
+                            <button type="button" role="menuitem" onClick={() => { setOpenActionRecordId(undefined); onOpenRecord(record); }}>
+                              <Eye size={16} />
+                              <span>预览</span>
+                            </button>
+                            <button type="button" role="menuitem" onClick={() => { setOpenActionRecordId(undefined); onEditRecord(record); }}>
+                              <Edit3 size={16} />
+                              <span>编辑</span>
+                            </button>
+                            {!active && (
+                              <button type="button" role="menuitem" onClick={() => { setOpenActionRecordId(undefined); void onAddToReview(record.id); }}>
+                                <PlusCircle size={16} />
+                                <span>加入复习</span>
+                              </button>
+                            )}
+                            {review && (
+                              <button type="button" role="menuitem" onClick={() => { setOpenActionRecordId(undefined); void onResetReview(record.id); }}>
+                                <RotateCcw size={16} />
+                                <span>忘记重排</span>
+                              </button>
+                            )}
+                            {active && (
+                              <button type="button" role="menuitem" className="danger" onClick={() => { setOpenActionRecordId(undefined); void onRemoveReview(record.id); }}>
+                                <PauseCircle size={16} />
+                                <span>搁置</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         </section>
       )}

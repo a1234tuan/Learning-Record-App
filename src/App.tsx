@@ -1036,6 +1036,7 @@ export const App = () => {
             mode={tabMemory.review.mode}
             queueIds={tabMemory.review.queueIds}
             currentRecordId={tabMemory.review.currentRecordId}
+            libraryState={tabMemory.review.library}
             onModeChange={(mode) =>
               updateNavigationState((current) =>
                 current.tabMemory.review.mode === mode
@@ -1065,6 +1066,12 @@ export const App = () => {
                     tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, currentRecordId } },
                   },
               )
+            }
+            onLibraryStateChange={(library) =>
+              updateNavigationState((current) => ({
+                ...current,
+                tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, library } },
+              }))
             }
             onEnsureDay={app.ensureRecordReviewDay}
             referenceRecords={referenceRecords}

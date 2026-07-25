@@ -1,4 +1,4 @@
-import type { EntityId, Subject } from "../types";
+import type { EntityId, RecordReviewKind, Subject } from "../types";
 
 export type TabKey = "today" | "journal" | "categories" | "review" | "more";
 export type MoreSubRoute =
@@ -14,6 +14,30 @@ export type MoreSubRoute =
   | "guide"
   | null;
 export type ReviewMode = "queue" | "manage";
+
+export type ReviewDeckScope =
+  | { kind: "all" }
+  | { kind: "subject"; subject: Subject }
+  | { kind: "tag"; subject: Subject; tag: string };
+
+export type ReviewCardFilter = "all" | "unadded" | "new" | "due" | "learning" | "suspended" | "mastered";
+export type ReviewCardSort = "due" | "created" | "reviewed" | "title";
+
+export type ReviewLibraryState = {
+  scope: ReviewDeckScope;
+  filter: ReviewCardFilter;
+  kindFilter: "all" | RecordReviewKind;
+  query: string;
+  sort: ReviewCardSort;
+};
+
+export const createInitialReviewLibraryState = (): ReviewLibraryState => ({
+  scope: { kind: "all" },
+  filter: "all",
+  kindFilter: "all",
+  query: "",
+  sort: "due",
+});
 
 export const MAX_RECORD_REFERENCE_DEPTH = 8;
 
@@ -56,6 +80,7 @@ export type TabMemory = {
     mode: ReviewMode;
     queueIds: EntityId[];
     currentRecordId?: EntityId;
+    library: ReviewLibraryState;
   };
   more: RecordTabState & {
     subRoute: MoreSubRoute;
@@ -82,6 +107,7 @@ export const createInitialTabMemory = (): TabMemory => ({
   review: {
     mode: "queue",
     queueIds: [],
+    library: createInitialReviewLibraryState(),
   },
   more: {
     subRoute: null,

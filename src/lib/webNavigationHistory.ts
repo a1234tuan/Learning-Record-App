@@ -1,4 +1,15 @@
-import { createInitialTabMemory, type MoreSubRoute, type RecordReferenceNavigationEntry, type TabKey, type TabMemory } from "./tabNavigation";
+import {
+  createInitialReviewLibraryState,
+  createInitialTabMemory,
+  type MoreSubRoute,
+  type RecordReferenceNavigationEntry,
+  type ReviewCardFilter,
+  type ReviewCardSort,
+  type ReviewDeckScope,
+  type ReviewLibraryState,
+  type TabKey,
+  type TabMemory,
+} from "./tabNavigation";
 
 const HISTORY_KIND = "study-journal-web-navigation";
 const HISTORY_VERSION = 1;
@@ -35,6 +46,9 @@ const MORE_SUB_ROUTES: readonly MoreSubRoute[] = [
   "guide",
   null,
 ];
+const REVIEW_CARD_FILTERS: readonly ReviewCardFilter[] = ["all", "unadded", "new", "due", "learning", "suspended", "mastered"];
+const REVIEW_CARD_SORTS: readonly ReviewCardSort[] = ["due", "created", "reviewed", "title"];
+const REVIEW_KINDS = ["all", "overview", "memory"] as const;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -47,6 +61,43 @@ const optionalBoolean = (value: unknown): boolean | undefined =>
 
 const optionalScrollY = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+const restoreReviewDeckScope = (value: unknown, fallback: ReviewDeckScope): ReviewDeckScope => {
+  if (!isObject(value)) {
+    return fallback;
+  }
+  if (value.kind === "all") {
+    return { kind: "all" };
+  }
+  if (value.kind === "subject" && typeof value.subject === "string") {
+    return { kind: "subject", subject: value.subject };
+  }
+  if (value.kind === "tag" && typeof value.subject === "string" && typeof value.tag === "string" && value.tag.trim()) {
+    return { kind: "tag", subject: value.subject, tag: value.tag };
+  }
+  return fallback;
+};
+
+const restoreReviewLibraryState = (value: unknown): ReviewLibraryState => {
+  const fallback = createInitialReviewLibraryState();
+  if (!isObject(value)) {
+    return fallback;
+  }
+  const kindFilter = REVIEW_KINDS.includes(value.kindFilter as typeof REVIEW_KINDS[number])
+    ? value.kindFilter as ReviewLibraryState["kindFilter"]
+    : fallback.kindFilter;
+  return {
+    scope: restoreReviewDeckScope(value.scope, fallback.scope),
+    filter: REVIEW_CARD_FILTERS.includes(value.filter as ReviewCardFilter)
+      ? value.filter as ReviewCardFilter
+      : fallback.filter,
+    kindFilter,
+    query: optionalString(value.query) ?? fallback.query,
+    sort: REVIEW_CARD_SORTS.includes(value.sort as ReviewCardSort)
+      ? value.sort as ReviewCardSort
+      : fallback.sort,
+  };
+};
 
 const cloneReferenceStack = (value: unknown): RecordReferenceNavigationEntry[] | undefined => {
   if (value === undefined) {
@@ -159,6 +210,7 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
       mode: reviewMode,
       queueIds,
       currentRecordId: optionalString(value.review.currentRecordId),
+      library: restoreReviewLibraryState(value.review.library),
     },
     more: {
       ...moreBase,
