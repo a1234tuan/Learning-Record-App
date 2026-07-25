@@ -962,22 +962,22 @@ export const AiChatPage = ({
           </div>
         </header>
 
-        {attachment && hasContextWarning && (
-          <button type="button" className="ai-context-warning" onClick={() => setContextDetailsOpen(true)}>
-            <CircleAlert size={16} />
-            <span>{contextWarning}</span>
-            <ChevronDown size={15} />
-          </button>
-        )}
-
-        <section
-          ref={threadRef}
-          className={`ai-thread ${!session ? "is-start-state" : emptyConversation ? "is-empty-conversation" : ""}`}
-          role="log"
-          aria-label="聊天消息"
-          aria-live="polite"
-          onScroll={handleThreadScroll}
-        >
+        <section className="ai-conversation-area">
+          <section
+            ref={threadRef}
+            className={`ai-thread ${!session ? "is-start-state" : emptyConversation ? "is-empty-conversation" : ""}`}
+            role="log"
+            aria-label="聊天消息"
+            aria-live="polite"
+            onScroll={handleThreadScroll}
+          >
+            {attachment && hasContextWarning && (
+              <button type="button" className="ai-context-warning" onClick={() => setContextDetailsOpen(true)}>
+                <CircleAlert size={16} />
+                <span>{contextWarning}</span>
+                <ChevronDown size={15} />
+              </button>
+            )}
           {!session ? (
             <div className="ai-no-session">
               <div>
@@ -1062,16 +1062,17 @@ export const AiChatPage = ({
               </div>
             </article>
           )}
-        </section>
+          </section>
 
-        {hasUnreadLatest && session && (
-          <div className="ai-scroll-to-latest">
-            <button type="button" onClick={() => scrollThreadToBottom()}>
-              <ArrowDown size={16} />
-              回到最新消息
-            </button>
-          </div>
-        )}
+          {hasUnreadLatest && session && (
+            <div className="ai-scroll-to-latest">
+              <button type="button" onClick={() => scrollThreadToBottom()}>
+                <ArrowDown size={16} />
+                回到最新消息
+              </button>
+            </div>
+          )}
+        </section>
 
         {session && (
           <footer className="ai-composer">

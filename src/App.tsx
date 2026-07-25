@@ -1157,12 +1157,13 @@ export const App = () => {
   };
 
   const pageKey = buildTabPageKey(activeTab, tabMemory, activeAiSessionId);
+  const aiWorkspaceActive = activeTab === "more" && tabMemory.more.subRoute === "ai";
 
   const shellClassName = [
     "app-shell",
     isDesktopPlatform() ? "desktop-app" : "",
     keyboardVisible ? "keyboard-open" : "",
-    activeTab === "more" && tabMemory.more.subRoute === "ai" ? "ai-chat-active" : "",
+    aiWorkspaceActive ? "ai-chat-active" : "",
   ].filter(Boolean).join(" ");
   const showWebNavigationBack = !Capacitor.isNativePlatform()
     && getTabDepth(activeTab, tabMemory) > 0
@@ -1170,7 +1171,7 @@ export const App = () => {
     && !(activeTab === "journal" && tabMemory.journal.searchOpen)
     && !(activeTab === "journal" && tabMemory.journal.selectedSubject)
     && !(activeTab === "categories" && (tabMemory.categories.activeSubject || tabMemory.categories.managing))
-    && !(activeTab === "more" && tabMemory.more.subRoute === "recordings");
+    && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai"));
 
   return (
     <div className={shellClassName}>
@@ -1219,7 +1220,7 @@ export const App = () => {
             </button>
           </div>
         )}
-        <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>
+        {aiWorkspaceActive ? renderCurrentTab() : <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>}
       </div>
       {backToast && (
         <div className="app-toast" role="status" aria-live="polite">

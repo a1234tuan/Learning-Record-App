@@ -107,14 +107,15 @@ button:disabled {
 }
 
 .app-shell.ai-chat-active {
-  height: 100dvh;
+  height: 100vh;
+  height: 100lvh;
   min-height: 0;
   overflow: hidden;
 }
 
 .app-shell.ai-chat-active.keyboard-open:has(.ai-chat-page textarea:focus),
 .app-shell.ai-chat-active.keyboard-open:has(.ai-scope-page input:focus) {
-  height: var(--ai-chat-viewport-height, 100dvh);
+  height: var(--ai-chat-viewport-height, 100lvh);
 }
 
 .app-shell.ai-chat-active .content-area,
@@ -3335,8 +3336,8 @@ button:disabled {
   min-width: 0;
   height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3408,7 +3409,6 @@ button:disabled {
 }
 
 .ai-context-warning {
-  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
   display: flex;
@@ -3449,6 +3449,20 @@ button:disabled {
   align-items: stretch;
   gap: 14px;
   padding: 18px 16px 22px;
+}
+
+.ai-conversation-area {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-conversation-area .ai-thread {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ai-thread.is-start-state {
@@ -3680,7 +3694,6 @@ button:disabled {
 }
 
 .ai-composer {
-  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
   display: grid;
@@ -3691,11 +3704,18 @@ button:disabled {
 }
 
 .ai-scroll-to-latest {
-  flex: 0 0 auto;
+  position: absolute;
+  inset-inline: 0;
+  bottom: 10px;
+  z-index: 1;
   display: flex;
   justify-content: center;
-  padding: 5px 12px 0;
-  background: color-mix(in srgb, var(--surface) 97%, transparent);
+  padding: 0 12px;
+  pointer-events: none;
+}
+
+.ai-scroll-to-latest button {
+  pointer-events: auto;
 }
 
 .ai-scroll-to-latest button {
@@ -4002,12 +4022,16 @@ button:disabled {
 
 .ai-scope-page-shell .ai-scope-record-picker {
   min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .ai-scope-page-shell .ai-scope-record-list {
-  max-height: none;
-  overflow: visible;
-  overscroll-behavior: auto;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ai-scope-mode-control {
@@ -4070,8 +4094,10 @@ button:disabled {
 
 .ai-scope-record-picker {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
+  min-height: 0;
 }
 
 .ai-scope-record-search {
@@ -4093,9 +4119,13 @@ button:disabled {
 
 .ai-scope-record-list {
   display: grid;
+  align-content: start;
   min-height: 0;
-  max-height: none;
-  overflow: visible;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
   border-radius: 8px;
 }

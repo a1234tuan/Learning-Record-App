@@ -153,6 +153,20 @@ describe("AiChatPage", () => {
     expect(scrollIntoViewMock).not.toHaveBeenCalled();
   });
 
+  it("uses a fixed three-zone chat workspace with the message thread as the scroll area", async () => {
+    renderAiChatPage();
+
+    const thread = await screen.findByRole("log", { name: "聊天消息" });
+    const conversationArea = thread.closest(".ai-conversation-area");
+    const shell = conversationArea?.parentElement;
+
+    expect(conversationArea).not.toBeNull();
+    expect(shell).toHaveClass("ai-chat-shell");
+    expect(shell?.querySelector(":scope > .ai-topbar")).not.toBeNull();
+    expect(shell?.querySelector(":scope > .ai-conversation-area")).toBe(conversationArea);
+    expect(shell?.querySelector(":scope > .ai-composer")).not.toBeNull();
+  });
+
   it("offers a recent knowledge-range picker when no session is selected", async () => {
     vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
     render(<AiScopePageHarness />);
