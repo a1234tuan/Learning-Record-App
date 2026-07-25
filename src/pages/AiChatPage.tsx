@@ -1,5 +1,6 @@
 import {
   ArrowDown,
+  ArrowLeft,
   BookOpen,
   Camera,
   Bot,
@@ -20,7 +21,7 @@ import {
   User,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AiMarkdown } from "../components/AiMarkdown";
 import type { AiChatAttachment, AiChatMessage, AiChatSession, AiKnowledgeScope, AppSettings, Asset, Block, RecordBlock } from "../types";
@@ -28,6 +29,7 @@ import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { searchRecordTitlesAsync } from "../lib/search";
+import { resolveViewportHeight } from "../lib/viewport";
 import { storage } from "../services/storageAdapter";
 import { buildSessionMemorySummary, calculateAiRequestBudget, sendChatCompletion } from "../services/aiClientService";
 import {
@@ -46,12 +48,15 @@ import { getSubjectRecordTags } from "../lib/recordTags";
 
 interface AiChatPageProps {
   sessionId: string | null;
+  scopeScreenOpen: boolean;
   settings: AppSettings;
   blocks: Block[];
   assets: Asset[];
   onOpenSession: (sessionId: string) => void;
   onDeletedSession: () => void;
   onOpenSettings: () => void;
+  onOpenScopeScreen: () => void;
+  onBackFromScopeScreen: () => void;
 }
 
 const sortedPresets = (settings: AppSettings) =>
@@ -136,12 +141,15 @@ const AiChatImageThumb = ({
 
 export const AiChatPage = ({
   sessionId,
+  scopeScreenOpen,
   settings,
   blocks,
   assets,
   onOpenSession,
   onDeletedSession,
   onOpenSettings,
+  onOpenScopeScreen,
+  onBackFromScopeScreen,
 }: AiChatPageProps) => {
   const [sessions, setSessions] = useState<AiChatSession[]>([]);
   const [session, setSession] = useState<AiChatSession | null>(null);
@@ -156,7 +164,6 @@ export const AiChatPage = ({
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const [learningActionsOpen, setLearningActionsOpen] = useState(false);
   const [imageActionsOpen, setImageActionsOpen] = useState(false);
-  const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const [scopeKind, setScopeKind] = useState<AiKnowledgeScope["kind"]>("tag");
   const [scopeSubject, setScopeSubject] = useState("");
   const [scopeTag, setScopeTag] = useState("");
@@ -240,17 +247,17 @@ export const AiChatPage = ({
   }, [desktop, recordTitleQuery]);
 
   useEffect(() => {
-    if (!scopePickerOpen || scopeKind !== "records" || !recordTitleQuery.trim()) {
+    if (!scopeScreenOpen || scopeKind !== "records" || !recordTitleQuery.trim()) {
       setDeferredRecordTitleQuery("");
       return undefined;
     }
     const timer = window.setTimeout(() => setDeferredRecordTitleQuery(recordTitleQuery), SCOPE_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [recordTitleQuery, scopeKind, scopePickerOpen]);
+  }, [recordTitleQuery, scopeKind, scopeScreenOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
-    if (!scopePickerOpen || scopeKind !== "records" || !deferredRecordTitleQuery.trim()) {
+    if (!scopeScreenOpen || scopeKind !== "records" || !deferredRecordTitleQuery.trim()) {
       setRawRecordTitleResults([]);
       setSearchingRecordTitles(false);
       return () => controller.abort();
@@ -280,7 +287,7 @@ export const AiChatPage = ({
         }
       });
     return () => controller.abort();
-  }, [deferredRecordTitleQuery, savedRecords, scopeKind, scopePickerOpen]);
+  }, [deferredRecordTitleQuery, savedRecords, scopeKind, scopeScreenOpen]);
 
   const pendingScope = useMemo<AiKnowledgeScope | undefined>(() => {
     if (scopeKind === "recent") return { kind: "recent", days: recentDays };
@@ -373,21 +380,57 @@ export const AiChatPage = ({
     forceThreadBottomRef.current = false;
   }, [messages.length, sessionId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
+    const visualViewport = window.visualViewport;
+    let settleTimer: number | null = null;
     const updateViewportHeight = () => {
-      const height = Math.round(window.visualViewport?.height ?? window.innerHeight);
-      root.style.setProperty("--ai-chat-viewport-height", `${height}px`);
+      const height = resolveViewportHeight({
+        native,
+        innerHeight: window.innerHeight,
+        visualViewportHeight: visualViewport?.height,
+      });
+      if (height > 0) {
+        root.style.setProperty("--ai-chat-viewport-height", `${height}px`);
+      }
     };
+
+    const remeasureAfterKeyboardTransition = () => {
+      updateViewportHeight();
+      if (settleTimer) {
+        window.clearTimeout(settleTimer);
+      }
+      settleTimer = window.setTimeout(updateViewportHeight, 180);
+    };
+
     updateViewportHeight();
-    window.visualViewport?.addEventListener("resize", updateViewportHeight);
-    window.addEventListener("resize", updateViewportHeight);
+    settleTimer = window.setTimeout(updateViewportHeight, 180);
+    visualViewport?.addEventListener("resize", remeasureAfterKeyboardTransition);
+    visualViewport?.addEventListener("scroll", remeasureAfterKeyboardTransition);
+    window.addEventListener("resize", remeasureAfterKeyboardTransition);
+    window.addEventListener("focus", remeasureAfterKeyboardTransition);
+    window.addEventListener("focusin", remeasureAfterKeyboardTransition);
+    window.addEventListener("focusout", remeasureAfterKeyboardTransition);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        remeasureAfterKeyboardTransition();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
-      window.removeEventListener("resize", updateViewportHeight);
+      if (settleTimer) {
+        window.clearTimeout(settleTimer);
+      }
+      visualViewport?.removeEventListener("resize", remeasureAfterKeyboardTransition);
+      visualViewport?.removeEventListener("scroll", remeasureAfterKeyboardTransition);
+      window.removeEventListener("resize", remeasureAfterKeyboardTransition);
+      window.removeEventListener("focus", remeasureAfterKeyboardTransition);
+      window.removeEventListener("focusin", remeasureAfterKeyboardTransition);
+      window.removeEventListener("focusout", remeasureAfterKeyboardTransition);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       root.style.removeProperty("--ai-chat-viewport-height");
     };
-  }, []);
+  }, [native]);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -420,7 +463,6 @@ export const AiChatPage = ({
   };
 
   const resetScopePicker = () => {
-    setScopePickerOpen(false);
     setSelectedRecordIds([]);
     setRecordTitleQuery("");
     setRecordSearchInput("");
@@ -432,7 +474,14 @@ export const AiChatPage = ({
 
   const closeScopePicker = () => {
     if (!creatingScope) {
+      onBackFromScopeScreen();
+    }
+  };
+
+  const cancelScopePicker = () => {
+    if (!creatingScope) {
       resetScopePicker();
+      onBackFromScopeScreen();
     }
   };
 
@@ -740,6 +789,149 @@ export const AiChatPage = ({
     );
   };
 
+  const scopePage = (
+    <main className="page ai-scope-page immersive" aria-label="新建知识库问答">
+      <section className={`ai-scope-page-shell${scopeKind === "records" ? " ai-scope-page-records" : ""}`}>
+        <header className="ai-scope-page-header">
+          <button type="button" className="icon-button" onClick={closeScopePicker} disabled={creatingScope} aria-label="返回 AI 问答" title="返回 AI 问答">
+            <ArrowLeft size={18} />
+          </button>
+          <div>
+            <p className="eyebrow">Knowledge Base</p>
+            <h1>新建知识库问答</h1>
+          </div>
+        </header>
+        <div className="ai-scope-mode-control" role="tablist" aria-label="知识范围">
+          <button type="button" role="tab" aria-selected={scopeKind === "tag"} className={scopeKind === "tag" ? "active" : ""} onClick={() => setScopeKind("tag")}>
+            学科标签
+          </button>
+          <button type="button" role="tab" aria-selected={scopeKind === "recent"} className={scopeKind === "recent" ? "active" : ""} onClick={() => setScopeKind("recent")}>
+            近期学习
+          </button>
+          <button type="button" role="tab" aria-selected={scopeKind === "records"} className={scopeKind === "records" ? "active" : ""} onClick={() => setScopeKind("records")}>
+            选择日志
+          </button>
+        </div>
+        <div className="ai-scope-page-content">
+          {scopeKind === "tag" ? (
+            <div className="ai-scope-fields">
+              <label>
+                学科
+                <select value={scopeSubject} onChange={(event) => setScopeSubject(event.target.value)}>
+                  {scopeSubjects.length === 0 && <option value="">没有可用学科</option>}
+                  {scopeSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                </select>
+              </label>
+              <label>
+                标签
+                <select value={scopeTag} onChange={(event) => setScopeTag(event.target.value)} disabled={scopeTags.length === 0}>
+                  {scopeTags.length === 0 && <option value="">该学科没有已保存标签</option>}
+                  {scopeTags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}
+                </select>
+              </label>
+            </div>
+          ) : scopeKind === "recent" ? (
+            <div className="ai-recent-range-control" role="tablist" aria-label="近期范围">
+              {([7, 14, 30] as const).map((days) => (
+                <button key={days} type="button" role="tab" aria-selected={recentDays === days} className={recentDays === days ? "active" : ""} onClick={() => setRecentDays(days)}>
+                  {days} 天
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="ai-scope-record-picker">
+              <label className="search-box ai-scope-record-search">
+                <Search size={18} />
+                <input
+                  value={desktop ? recordSearchInput : recordTitleQuery}
+                  onCompositionStart={() => {
+                    if (desktop) {
+                      recordSearchComposingRef.current = true;
+                    }
+                  }}
+                  onCompositionEnd={(event) => {
+                    if (!desktop) {
+                      return;
+                    }
+                    recordSearchComposingRef.current = false;
+                    const nextValue = event.currentTarget.value;
+                    setRecordSearchInput(nextValue);
+                    setRecordTitleQuery(nextValue);
+                  }}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (!desktop) {
+                      setRecordTitleQuery(nextValue);
+                      return;
+                    }
+                    setRecordSearchInput(nextValue);
+                    if (!(event.nativeEvent as InputEvent).isComposing && !recordSearchComposingRef.current) {
+                      setRecordTitleQuery(nextValue);
+                    }
+                  }}
+                  placeholder="按日志标题搜索"
+                  aria-label="按日志标题搜索"
+                />
+              </label>
+              <div className="ai-scope-selection-status" role="status">
+                <strong>已选 {selectedRecordCount}/{MAX_SELECTED_SCOPE_RECORDS} 条日志</strong>
+                <span>{selectedRecordCount < MIN_SELECTED_SCOPE_RECORDS ? `还需选择 ${MIN_SELECTED_SCOPE_RECORDS - selectedRecordCount} 条才可创建问答` : "可跨学科选择，最多 10 条"}</span>
+              </div>
+              <div className="ai-scope-record-list" aria-label="可选日志">
+                {searchingRecordTitles && <p className="status-message">正在搜索标题…</p>}
+                {hasMoreRecordTitleResults && <p className="status-message">结果较多，仅显示前 {RECORD_SEARCH_RESULT_LIMIT} 条，请缩小关键词。</p>}
+                {recordTitleQuery.trim() ? (
+                  scopeRecordGroups.map((group) => (
+                    <section key={group.subject} className="ai-scope-record-search-group">
+                      <h3>{group.subject} <small>{group.records.length} 条</small></h3>
+                      <div>{group.records.map(renderScopeRecordOption)}</div>
+                    </section>
+                  ))
+                ) : (
+                  scopeRecordGroups.map((group) => {
+                    const expanded = expandedRecordSubjects.has(group.subject);
+                    return (
+                      <section key={group.subject} className="ai-scope-record-subject">
+                        <button type="button" className="ai-scope-record-subject-trigger" onClick={() => toggleRecordSubject(group.subject)} aria-expanded={expanded}>
+                          <span><strong>{group.subject}</strong><small>{group.records.length} 条日志</small></span>
+                          <ChevronDown size={18} className={expanded ? "expanded" : ""} />
+                        </button>
+                        {expanded && <div className="ai-scope-record-options">{group.records.map(renderScopeRecordOption)}</div>}
+                      </section>
+                    );
+                  })
+                )}
+                {!searchingRecordTitles && recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
+                  <p className="helper-text">没有匹配的日志标题。</p>
+                )}
+                {!recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
+                  <p className="helper-text">还没有可用于 AI 问答的日志。</p>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="ai-scope-preview">
+            <strong>{pendingScope ? aiKnowledgeScopeTitle(pendingScope) : "请选择知识范围"}</strong>
+            <span>命中 {pendingScopeRecords.length} 条记录</span>
+            <span>可用 OCR 图片 {pendingScopeOcrCount} 张</span>
+            <span>原始内容约 {pendingScopeEstimate.toLocaleString()} token，发送时会按模型窗口检索并截取。</span>
+          </div>
+        </div>
+        <footer className="ai-scope-page-actions">
+          <button type="button" className="secondary-button" onClick={cancelScopePicker} disabled={creatingScope}>取消本次选择</button>
+          <button type="button" className="primary-button" onClick={() => void createKnowledgeSession()} disabled={!canCreateKnowledgeSession || creatingScope}>
+            {creatingScope ? <RefreshCw size={18} className="spin" /> : <Sparkles size={18} />}
+            创建问答
+          </button>
+        </footer>
+      </section>
+    </main>
+  );
+
+  if (scopeScreenOpen) {
+    return scopePage;
+  }
+
   return (
     <main className="page ai-chat-page immersive">
       <section className="ai-chat-shell">
@@ -792,7 +984,7 @@ export const AiChatPage = ({
                 <h2>从一个学习范围开始</h2>
                 <p>选择学科标签，或最近 7、14、30 天的学习记录。</p>
               </div>
-              <button type="button" className="primary-button" onClick={() => setScopePickerOpen(true)}>
+              <button type="button" className="primary-button" onClick={onOpenScopeScreen}>
                 <Sparkles size={18} />
                 新建知识库问答
               </button>
@@ -1016,7 +1208,7 @@ export const AiChatPage = ({
             <div className="ai-action-list">
               <button type="button" onClick={() => {
                 setMoreActionsOpen(false);
-                setScopePickerOpen(true);
+                onOpenScopeScreen();
               }}>
                 <Sparkles size={18} />
                 <span><strong>新建知识库问答</strong><small>选择新的学习范围</small></span>
@@ -1096,143 +1288,6 @@ export const AiChatPage = ({
                 <span><strong>从相册选择</strong><small>选择一张图片加入对话</small></span>
               </button>
             </div>
-          </section>
-        </div>
-      )}
-
-      {scopePickerOpen && (
-        <div className="ai-history-backdrop" onClick={closeScopePicker}>
-          <section className="ai-scope-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="新建知识库问答">
-            <header>
-              <div>
-                <p className="eyebrow">Knowledge Base</p>
-                <h2>新建知识库问答</h2>
-              </div>
-              <button type="button" className="icon-button" onClick={closeScopePicker} disabled={creatingScope} aria-label="关闭">
-                <X size={18} />
-              </button>
-            </header>
-            <div className="ai-scope-mode-control" role="tablist" aria-label="知识范围">
-              <button type="button" role="tab" aria-selected={scopeKind === "tag"} className={scopeKind === "tag" ? "active" : ""} onClick={() => setScopeKind("tag")}>
-                学科标签
-              </button>
-              <button type="button" role="tab" aria-selected={scopeKind === "recent"} className={scopeKind === "recent" ? "active" : ""} onClick={() => setScopeKind("recent")}>
-                近期学习
-              </button>
-              <button type="button" role="tab" aria-selected={scopeKind === "records"} className={scopeKind === "records" ? "active" : ""} onClick={() => setScopeKind("records")}>
-                选择日志
-              </button>
-            </div>
-            {scopeKind === "tag" ? (
-              <div className="ai-scope-fields">
-                <label>
-                  学科
-                  <select value={scopeSubject} onChange={(event) => setScopeSubject(event.target.value)}>
-                    {scopeSubjects.length === 0 && <option value="">没有可用学科</option>}
-                    {scopeSubjects.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                  </select>
-                </label>
-                <label>
-                  标签
-                  <select value={scopeTag} onChange={(event) => setScopeTag(event.target.value)} disabled={scopeTags.length === 0}>
-                    {scopeTags.length === 0 && <option value="">该学科没有已保存标签</option>}
-                    {scopeTags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}
-                  </select>
-                </label>
-              </div>
-            ) : scopeKind === "recent" ? (
-              <div className="ai-recent-range-control" role="tablist" aria-label="近期范围">
-                {([7, 14, 30] as const).map((days) => (
-                  <button key={days} type="button" role="tab" aria-selected={recentDays === days} className={recentDays === days ? "active" : ""} onClick={() => setRecentDays(days)}>
-                    {days} 天
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="ai-scope-record-picker">
-                <label className="search-box ai-scope-record-search">
-                  <Search size={18} />
-                  <input
-                    value={desktop ? recordSearchInput : recordTitleQuery}
-                    onCompositionStart={() => {
-                      if (desktop) {
-                        recordSearchComposingRef.current = true;
-                      }
-                    }}
-                    onCompositionEnd={(event) => {
-                      if (!desktop) {
-                        return;
-                      }
-                      recordSearchComposingRef.current = false;
-                      const nextValue = event.currentTarget.value;
-                      setRecordSearchInput(nextValue);
-                      setRecordTitleQuery(nextValue);
-                    }}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      if (!desktop) {
-                        setRecordTitleQuery(nextValue);
-                        return;
-                      }
-                      setRecordSearchInput(nextValue);
-                      if (!(event.nativeEvent as InputEvent).isComposing && !recordSearchComposingRef.current) {
-                        setRecordTitleQuery(nextValue);
-                      }
-                    }}
-                    placeholder="按日志标题搜索"
-                    aria-label="按日志标题搜索"
-                  />
-                </label>
-                <div className="ai-scope-selection-status" role="status">
-                  <strong>已选 {selectedRecordCount}/{MAX_SELECTED_SCOPE_RECORDS} 条日志</strong>
-                  <span>{selectedRecordCount < MIN_SELECTED_SCOPE_RECORDS ? `还需选择 ${MIN_SELECTED_SCOPE_RECORDS - selectedRecordCount} 条才可创建问答` : "可跨学科选择，最多 10 条"}</span>
-                </div>
-                <div className="ai-scope-record-list" aria-label="可选日志">
-                  {searchingRecordTitles && <p className="status-message">正在搜索标题…</p>}
-                  {hasMoreRecordTitleResults && <p className="status-message">结果较多，仅显示前 {RECORD_SEARCH_RESULT_LIMIT} 条，请缩小关键词。</p>}
-                  {recordTitleQuery.trim() ? (
-                    scopeRecordGroups.map((group) => (
-                      <section key={group.subject} className="ai-scope-record-search-group">
-                        <h3>{group.subject} <small>{group.records.length} 条</small></h3>
-                        <div>{group.records.map(renderScopeRecordOption)}</div>
-                      </section>
-                    ))
-                  ) : (
-                    scopeRecordGroups.map((group) => {
-                      const expanded = expandedRecordSubjects.has(group.subject);
-                      return (
-                        <section key={group.subject} className="ai-scope-record-subject">
-                          <button type="button" className="ai-scope-record-subject-trigger" onClick={() => toggleRecordSubject(group.subject)} aria-expanded={expanded}>
-                            <span><strong>{group.subject}</strong><small>{group.records.length} 条日志</small></span>
-                            <ChevronDown size={18} className={expanded ? "expanded" : ""} />
-                          </button>
-                          {expanded && <div className="ai-scope-record-options">{group.records.map(renderScopeRecordOption)}</div>}
-                        </section>
-                      );
-                    })
-                  )}
-                  {!searchingRecordTitles && recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
-                    <p className="helper-text">没有匹配的日志标题。</p>
-                  )}
-                  {!recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
-                    <p className="helper-text">还没有可用于 AI 问答的日志。</p>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="ai-scope-preview">
-              <strong>{pendingScope ? aiKnowledgeScopeTitle(pendingScope) : "请选择知识范围"}</strong>
-              <span>命中 {pendingScopeRecords.length} 条记录</span>
-              <span>可用 OCR 图片 {pendingScopeOcrCount} 张</span>
-              <span>原始内容约 {pendingScopeEstimate.toLocaleString()} token，发送时会按模型窗口检索并截取。</span>
-            </div>
-            <footer>
-              <button type="button" className="secondary-button" onClick={closeScopePicker} disabled={creatingScope}>取消</button>
-              <button type="button" className="primary-button" onClick={() => void createKnowledgeSession()} disabled={!canCreateKnowledgeSession || creatingScope}>
-                {creatingScope ? <RefreshCw size={18} className="spin" /> : <Sparkles size={18} />}
-                创建问答
-              </button>
-            </footer>
           </section>
         </div>
       )}

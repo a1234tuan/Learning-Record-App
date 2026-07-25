@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_SETTINGS } from "../db/defaults";
@@ -73,13 +74,34 @@ const renderAiChatPage = () => {
   return render(
     <AiChatPage
       sessionId={session.id}
+      scopeScreenOpen={false}
       settings={DEFAULT_SETTINGS}
       blocks={[]}
       assets={[]}
       onOpenSession={vi.fn()}
       onDeletedSession={vi.fn()}
       onOpenSettings={vi.fn()}
+      onOpenScopeScreen={vi.fn()}
+      onBackFromScopeScreen={vi.fn()}
     />,
+  );
+};
+
+const AiScopePageHarness = ({ blocks = [] }: { blocks?: RecordBlock[] }) => {
+  const [scopeScreenOpen, setScopeScreenOpen] = useState(false);
+  return (
+    <AiChatPage
+      sessionId={null}
+      scopeScreenOpen={scopeScreenOpen}
+      settings={DEFAULT_SETTINGS}
+      blocks={blocks}
+      assets={[]}
+      onOpenSession={vi.fn()}
+      onDeletedSession={vi.fn()}
+      onOpenSettings={vi.fn()}
+      onOpenScopeScreen={() => setScopeScreenOpen(true)}
+      onBackFromScopeScreen={() => setScopeScreenOpen(false)}
+    />
   );
 };
 
@@ -133,20 +155,11 @@ describe("AiChatPage", () => {
 
   it("offers a recent knowledge-range picker when no session is selected", async () => {
     vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
-    render(
-      <AiChatPage
-        sessionId={null}
-        settings={DEFAULT_SETTINGS}
-        blocks={[]}
-        assets={[]}
-        onOpenSession={vi.fn()}
-        onDeletedSession={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    render(<AiScopePageHarness />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
-    expect(await screen.findByRole("dialog", { name: "新建知识库问答" })).toBeInTheDocument();
+    expect(await screen.findByRole("main", { name: "新建知识库问答" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "新建知识库问答" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "近期学习" }));
     fireEvent.click(screen.getByRole("tab", { name: "14 天" }));
@@ -156,23 +169,14 @@ describe("AiChatPage", () => {
 
   it("selects at least two records across subjects and keeps selections after a title search", async () => {
     vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
-    render(
-      <AiChatPage
-        sessionId={null}
-        settings={DEFAULT_SETTINGS}
-        blocks={[
-          scopeRecord("math", "数学", "极限专题"),
-          scopeRecord("physics", "物理", "力学专题"),
-        ]}
-        assets={[]}
-        onOpenSession={vi.fn()}
-        onDeletedSession={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    render(<AiScopePageHarness blocks={[
+      scopeRecord("math", "数学", "极限专题"),
+      scopeRecord("physics", "物理", "力学专题"),
+    ]} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
     fireEvent.click(await screen.findByRole("tab", { name: "选择日志" }));
+    expect(screen.getByRole("main", { name: "新建知识库问答" })).toHaveClass("ai-scope-page");
     const createButton = screen.getByRole("button", { name: "创建问答" });
     expect(createButton).toBeDisabled();
 
@@ -187,22 +191,22 @@ describe("AiChatPage", () => {
 
     fireEvent.change(searchInput, { target: { value: "" } });
     expect(screen.getByRole("checkbox", { name: "选择日志 极限专题" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回 AI 问答" }));
+    expect(screen.getAllByRole("button", { name: "新建知识库问答" })[0]).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
+    expect(screen.getByRole("checkbox", { name: "选择日志 极限专题" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "取消本次选择" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /数学/ }));
+    expect(screen.getByRole("checkbox", { name: "选择日志 极限专题" })).not.toBeChecked();
   });
 
   it("prevents selecting more than ten records and allows selection after deselecting one", async () => {
     vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
     const records = Array.from({ length: 11 }, (_, index) => scopeRecord(`record-${index + 1}`, "数学", `日志 ${index + 1}`, index));
-    render(
-      <AiChatPage
-        sessionId={null}
-        settings={DEFAULT_SETTINGS}
-        blocks={records}
-        assets={[]}
-        onOpenSession={vi.fn()}
-        onDeletedSession={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    render(<AiScopePageHarness blocks={records} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
     fireEvent.click(await screen.findByRole("tab", { name: "选择日志" }));
@@ -229,12 +233,15 @@ describe("AiChatPage", () => {
     render(
       <AiChatPage
         sessionId={scopedSession.id}
+        scopeScreenOpen={false}
         settings={DEFAULT_SETTINGS}
         blocks={[]}
         assets={[]}
         onOpenSession={vi.fn()}
         onDeletedSession={vi.fn()}
         onOpenSettings={vi.fn()}
+        onOpenScopeScreen={vi.fn()}
+        onBackFromScopeScreen={vi.fn()}
       />,
     );
 
@@ -253,12 +260,15 @@ describe("AiChatPage", () => {
     render(
       <AiChatPage
         sessionId={scopedSession.id}
+        scopeScreenOpen={false}
         settings={DEFAULT_SETTINGS}
         blocks={[]}
         assets={[]}
         onOpenSession={vi.fn()}
         onDeletedSession={vi.fn()}
         onOpenSettings={vi.fn()}
+        onOpenScopeScreen={vi.fn()}
+        onBackFromScopeScreen={vi.fn()}
       />,
     );
 
@@ -277,12 +287,15 @@ describe("AiChatPage", () => {
     render(
       <AiChatPage
         sessionId={scopedSession.id}
+        scopeScreenOpen={false}
         settings={DEFAULT_SETTINGS}
         blocks={[]}
         assets={[]}
         onOpenSession={vi.fn()}
         onDeletedSession={vi.fn()}
         onOpenSettings={vi.fn()}
+        onOpenScopeScreen={vi.fn()}
+        onBackFromScopeScreen={vi.fn()}
       />,
     );
 

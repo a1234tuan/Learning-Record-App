@@ -42,6 +42,7 @@ import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
 import { isDesktopPlatform } from "./lib/platform";
+import { isKeyboardViewportVisible, nextKeyboardBaselineHeight, resolveViewportHeight } from "./lib/viewport";
 import { onAppBackgroundAutoBackup } from "./services/autoBackupService";
 import { flushDesktopPendingChanges } from "./services/desktopLifecycleService";
 import {
@@ -53,6 +54,7 @@ import {
   popTabDepth,
   recordReferenceOpenError,
   reviewQueueReferenceOpenError,
+  type AiWorkspaceScreen,
   type MoreSubRoute,
   type TabKey,
   type TabMemory,
@@ -81,17 +83,21 @@ const useKeyboardVisible = () => {
 
   useEffect(() => {
     const visualViewport = window.visualViewport;
-    const initialHeight = visualViewport?.height ?? window.innerHeight;
+    const native = Capacitor.isNativePlatform();
+    const readViewportHeight = () => resolveViewportHeight({
+      native,
+      innerHeight: window.innerHeight,
+      visualViewportHeight: visualViewport?.height,
+    });
+    let restingHeight = readViewportHeight();
     let focusTimer: number | null = null;
 
     const update = () => {
       const activeEditable = isEditableElement(document.activeElement);
-      const currentHeight = visualViewport?.height ?? window.innerHeight;
-      const heightDelta = initialHeight - currentHeight;
+      const currentHeight = readViewportHeight();
+      restingHeight = nextKeyboardBaselineHeight(restingHeight, currentHeight, activeEditable);
       const mobileViewport = window.matchMedia("(max-width: 920px)").matches;
-      const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
-      const mobileInputFallback = mobileViewport && (coarsePointer || Capacitor.isNativePlatform());
-      setKeyboardVisible(activeEditable && (heightDelta > 120 || mobileInputFallback));
+      setKeyboardVisible(mobileViewport && isKeyboardViewportVisible(activeEditable, restingHeight, currentHeight));
     };
 
     const updateAfterFocus = () => {
@@ -108,11 +114,19 @@ const useKeyboardVisible = () => {
       focusTimer = window.setTimeout(update, 120);
     };
 
+    const handleOrientationChange = () => {
+      restingHeight = 0;
+      setKeyboardVisible(false);
+      updateAfterFocus();
+    };
+
+    update();
     window.addEventListener("focusin", updateAfterFocus);
     window.addEventListener("focusout", handleFocusOut);
     visualViewport?.addEventListener("resize", update);
     visualViewport?.addEventListener("scroll", update);
     window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", handleOrientationChange);
 
     return () => {
       if (focusTimer) {
@@ -123,6 +137,7 @@ const useKeyboardVisible = () => {
       visualViewport?.removeEventListener("resize", update);
       visualViewport?.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", handleOrientationChange);
     };
   }, []);
 
@@ -253,6 +268,7 @@ export const App = () => {
         more: {
           ...current.tabMemory.more,
           subRoute,
+          aiScreen: subRoute === "ai" ? "chat" : current.tabMemory.more.aiScreen,
           recordId: undefined,
           highlightAssetId: undefined,
           recordEditing: undefined,
@@ -263,6 +279,23 @@ export const App = () => {
       commitNavigation({ ...current, activeTab: "more", tabMemory: nextMemory });
     },
     [clearBackHint, commitNavigation],
+  );
+
+  const setAiWorkspaceScreen = useCallback(
+    (aiScreen: AiWorkspaceScreen) => {
+      const current = navigationStateRef.current;
+      if (current.activeTab !== "more" || current.tabMemory.more.subRoute !== "ai" || current.tabMemory.more.aiScreen === aiScreen) {
+        return;
+      }
+      commitNavigation({
+        ...current,
+        tabMemory: {
+          ...current.tabMemory,
+          more: { ...current.tabMemory.more, aiScreen },
+        },
+      });
+    },
+    [commitNavigation],
   );
 
   const dismissDesktopMigration = useCallback(() => {
@@ -826,18 +859,33 @@ export const App = () => {
         return (
           <AiChatPage
             sessionId={activeAiSessionId}
+            scopeScreenOpen={tabMemory.more.aiScreen === "scope"}
             settings={settings}
             blocks={app.blocks}
             assets={app.assets}
             onOpenSession={(sessionId) => {
-              updateNavigationState((current) => ({ ...current, activeAiSessionId: sessionId }));
-              openMoreSubRoute("ai");
+              updateNavigationState((current) => ({
+                ...current,
+                activeAiSessionId: sessionId,
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: { ...current.tabMemory.more, subRoute: "ai", aiScreen: "chat" },
+                },
+              }));
             }}
             onDeletedSession={() => {
-              updateNavigationState((current) => ({ ...current, activeAiSessionId: null }));
-              openMoreSubRoute("ai");
+              updateNavigationState((current) => ({
+                ...current,
+                activeAiSessionId: null,
+                tabMemory: {
+                  ...current.tabMemory,
+                  more: { ...current.tabMemory.more, subRoute: "ai", aiScreen: "chat" },
+                },
+              }));
             }}
             onOpenSettings={() => openMoreSubRoute("aiTools")}
+            onOpenScopeScreen={() => setAiWorkspaceScreen("scope")}
+            onBackFromScopeScreen={popCurrentTabDepth}
           />
         );
       case null:

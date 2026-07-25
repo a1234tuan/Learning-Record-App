@@ -215,6 +215,7 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
     more: {
       ...moreBase,
       subRoute,
+      aiScreen: value.more.aiScreen === "scope" ? "scope" : "chat",
       recordingsState: {
         selectedSubject: optionalString(recordings.selectedSubject),
         playerAssetId: optionalString(recordings.playerAssetId),

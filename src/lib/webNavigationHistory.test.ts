@@ -18,6 +18,7 @@ describe("web navigation history snapshots", () => {
     memory.journal.recordId = "record-b";
     memory.journal.referenceStack = [{ kind: "record", recordId: "record-a", recordEditing: true, scrollY: 248 }];
     memory.more.subRoute = "recordings";
+    memory.more.aiScreen = "scope";
     memory.more.recordingsState = {
       selectedSubject: "英语",
       playerAssetId: "audio-1",

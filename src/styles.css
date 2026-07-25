@@ -3909,30 +3909,100 @@ button:disabled {
   background: rgba(15, 23, 42, 0.28);
 }
 
-.ai-scope-dialog {
-  width: min(520px, calc(100vw - 28px));
-  align-self: center;
-  margin: auto;
-  display: grid;
-  gap: 16px;
+.ai-scope-page.immersive {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
   padding: 18px;
+  overflow: hidden;
+}
+
+.ai-scope-page-shell {
+  width: 100%;
+  max-width: 1120px;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+  background: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
 }
 
-.ai-scope-dialog header,
-.ai-scope-dialog footer {
+.ai-scope-page-header,
+.ai-scope-page-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--surface) 96%, var(--bg));
 }
 
-.ai-scope-dialog h2,
-.ai-scope-dialog p {
+.ai-scope-page-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-scope-page-header > div {
+  min-width: 0;
+}
+
+.ai-scope-page-header p,
+.ai-scope-page-header h1 {
   margin: 0;
+}
+
+.ai-scope-page-header p {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.ai-scope-page-header h1 {
+  font-size: 1rem;
+}
+
+.ai-scope-page-shell > .ai-scope-mode-control {
+  width: auto;
+  margin: 14px 16px 0;
+}
+
+.ai-scope-page-content {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.ai-scope-page-actions {
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+.ai-scope-page-actions .primary-button,
+.ai-scope-page-actions .secondary-button {
+  min-height: 42px;
+}
+
+.ai-scope-page-shell .ai-scope-record-picker {
+  min-height: 0;
+}
+
+.ai-scope-page-shell .ai-scope-record-list {
+  max-height: none;
+  overflow: visible;
+  overscroll-behavior: auto;
 }
 
 .ai-scope-mode-control {
@@ -4018,8 +4088,12 @@ button:disabled {
 
 .ai-scope-record-list {
   display: grid;
+  min-height: 0;
   max-height: min(34dvh, 310px);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -4310,6 +4384,15 @@ button:disabled {
     overflow-x: hidden;
   }
 
+  .ai-scope-page.immersive {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    min-height: 0;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    overflow: hidden;
+  }
+
   .ai-chat-shell {
     width: 100%;
     max-width: 100%;
@@ -4319,6 +4402,41 @@ button:disabled {
     border: 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .ai-scope-page-shell {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .ai-scope-page-header,
+  .ai-scope-page-actions {
+    padding-inline: 12px;
+  }
+
+  .ai-scope-page-shell > .ai-scope-mode-control {
+    margin: 10px 12px 0;
+  }
+
+  .ai-scope-page-content {
+    padding: 12px;
+  }
+
+  .ai-scope-page-actions {
+    gap: 8px;
+  }
+
+  .ai-scope-page-actions .primary-button,
+  .ai-scope-page-actions .secondary-button {
+    min-width: 0;
+    flex: 1 1 0;
+    padding-inline: 10px;
   }
 
   .ai-thread {
@@ -4423,18 +4541,6 @@ button:disabled {
 
   .ai-history-backdrop {
     align-items: flex-end;
-  }
-
-  .ai-scope-dialog {
-    width: 100%;
-    max-height: min(82dvh, 720px);
-    align-self: flex-end;
-    margin: 0;
-    overflow: auto;
-    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 8px 8px 0 0;
   }
 
   .heatmap {

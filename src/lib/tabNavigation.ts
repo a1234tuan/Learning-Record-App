@@ -13,6 +13,7 @@ export type MoreSubRoute =
   | "recordings"
   | "guide"
   | null;
+export type AiWorkspaceScreen = "chat" | "scope";
 export type ReviewMode = "queue" | "manage";
 
 export type ReviewDeckScope =
@@ -84,6 +85,7 @@ export type TabMemory = {
   };
   more: RecordTabState & {
     subRoute: MoreSubRoute;
+    aiScreen: AiWorkspaceScreen;
     recordingsState: {
       selectedSubject?: Subject;
       playerAssetId?: EntityId;
@@ -111,6 +113,7 @@ export const createInitialTabMemory = (): TabMemory => ({
   },
   more: {
     subRoute: null,
+    aiScreen: "chat",
     recordingsState: {
       query: "",
       searchOpen: false,
@@ -194,6 +197,9 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
       if (memory.more.recordId) {
         return 2 + referenceDepth(memory.more);
       }
+      if (memory.more.subRoute === "ai" && memory.more.aiScreen === "scope") {
+        return 2;
+      }
       if (memory.more.subRoute !== "recordings") {
         return memory.more.subRoute ? 1 : 0;
       }
@@ -235,7 +241,8 @@ export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionI
     return `${tab}-${depth}-${recordPart}-${memory.review.mode}`;
   }
   if (tab === "more") {
-    return `${tab}-${depth}-${recordPart}-${memory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
+    const pageDepth = memory.more.subRoute === "ai" ? 1 : depth;
+    return `${tab}-${pageDepth}-${recordPart}-${memory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
   }
   return `${tab}-${depth}-${recordPart}`;
 };
@@ -317,6 +324,12 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
           more: { ...memory.more, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
         };
       }
+      if (memory.more.subRoute === "ai" && memory.more.aiScreen === "scope") {
+        return {
+          ...memory,
+          more: { ...memory.more, aiScreen: "chat" },
+        };
+      }
       if (memory.more.subRoute === "recordings") {
         if (memory.more.recordingsState.playerAssetId) {
           return {
@@ -348,7 +361,7 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
       }
       return {
         ...memory,
-        more: { ...memory.more, subRoute: null },
+        more: { ...memory.more, subRoute: null, aiScreen: "chat" },
       };
   }
 };

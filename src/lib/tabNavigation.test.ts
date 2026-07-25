@@ -345,4 +345,27 @@ describe("tabNavigation", () => {
     expect(popTabDepth(ocrSettingsMemory, "more").more.subRoute).toBeNull();
     expect(popTabDepth(guideMemory, "more").more.subRoute).toBeNull();
   });
+
+  it("returns from the AI scope page to chat before leaving the AI workspace", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      more: {
+        ...createInitialTabMemory().more,
+        subRoute: "ai" as const,
+        aiScreen: "scope" as const,
+      },
+    };
+
+    expect(getTabDepth("more", memory)).toBe(2);
+    expect(buildTabPageKey("more", memory)).toBe(buildTabPageKey("more", {
+      ...memory,
+      more: { ...memory.more, aiScreen: "chat" as const },
+    }));
+
+    const chat = popTabDepth(memory, "more");
+    expect(chat.more.subRoute).toBe("ai");
+    expect(chat.more.aiScreen).toBe("chat");
+    expect(getTabDepth("more", chat)).toBe(1);
+    expect(popTabDepth(chat, "more").more.subRoute).toBeNull();
+  });
 });
