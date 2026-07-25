@@ -109,6 +109,7 @@ button:disabled {
 .app-shell.ai-chat-active {
   height: 100vh;
   height: 100lvh;
+  height: var(--ai-chat-viewport-height, 100lvh);
   min-height: 0;
   overflow: hidden;
 }
@@ -118,12 +119,25 @@ button:disabled {
   height: var(--ai-chat-viewport-height, 100lvh);
 }
 
-.app-shell.ai-chat-active .content-area,
+.app-shell.ai-chat-active .content-area {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .app-shell.ai-chat-active .page-transition-frame,
 .app-shell.ai-chat-active .page-transition-layer {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.app-shell.ai-chat-active .content-area > .ai-chat-page.immersive,
+.app-shell.ai-chat-active .content-area > .ai-scope-page.immersive {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .app-shell.ai-chat-active .sidebar {
@@ -3336,8 +3350,8 @@ button:disabled {
   min-width: 0;
   height: 100%;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3436,11 +3450,11 @@ button:disabled {
 }
 
 .ai-thread {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
   max-width: 100%;
-  overflow: auto;
+  overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -3453,6 +3467,7 @@ button:disabled {
 
 .ai-conversation-area {
   position: relative;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -3461,7 +3476,7 @@ button:disabled {
 }
 
 .ai-conversation-area .ai-thread {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
 }
 
@@ -3694,6 +3709,7 @@ button:disabled {
 }
 
 .ai-composer {
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
   display: grid;
@@ -4560,7 +4576,7 @@ button:disabled {
 
   .ai-history-drawer {
     width: 100%;
-    height: auto;
+    height: min(78dvh, 680px);
     max-height: min(78dvh, 680px);
     align-self: flex-end;
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
