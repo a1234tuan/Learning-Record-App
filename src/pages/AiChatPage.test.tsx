@@ -45,6 +45,9 @@ const contextAttachment: AiContextPack = {
   missingOcrAssetIds: [],
 };
 
+const scrollIntoViewMock = vi.fn();
+const scrollToMock = vi.fn();
+
 const renderAiChatPage = () => {
   vi.spyOn(storage, "listAiSessions").mockResolvedValue([session]);
   vi.spyOn(storage, "getAiSession").mockResolvedValue(session);
@@ -68,8 +71,14 @@ describe("AiChatPage", () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
-      value: vi.fn(),
+      value: scrollIntoViewMock,
     });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollToMock,
+    });
+    scrollIntoViewMock.mockReset();
+    scrollToMock.mockReset();
   });
 
   afterEach(() => {
@@ -96,6 +105,14 @@ describe("AiChatPage", () => {
     fireEvent.click(copyButton);
 
     expect(await screen.findByText("复制失败，请长按选择文本后手动复制。")).toBeInTheDocument();
+  });
+
+  it("keeps automatic scrolling inside the chat thread", async () => {
+    renderAiChatPage();
+
+    expect(await screen.findByRole("log", { name: "聊天消息" })).toBeInTheDocument();
+    await waitFor(() => expect(scrollToMock).toHaveBeenCalled());
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
   });
 
   it("offers a recent knowledge-range picker when no session is selected", async () => {

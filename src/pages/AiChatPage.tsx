@@ -1,4 +1,5 @@
 import {
+  ArrowDown,
   BookOpen,
   Camera,
   Bot,
@@ -155,7 +156,12 @@ export const AiChatPage = ({
   const [scopeTag, setScopeTag] = useState("");
   const [recentDays, setRecentDays] = useState<7 | 14 | 30>(7);
   const [creatingScope, setCreatingScope] = useState(false);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const [hasUnreadLatest, setHasUnreadLatest] = useState(false);
+  const threadRef = useRef<HTMLElement | null>(null);
+  const nearThreadBottomRef = useRef(true);
+  const forceThreadBottomRef = useRef(false);
+  const lastThreadSessionIdRef = useRef<string | null>(null);
+  const lastThreadMessageCountRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const presets = useMemo(() => sortedPresets(settings), [settings]);
@@ -231,9 +237,57 @@ export const AiChatPage = ({
     void refresh();
   }, [sessionId]);
 
+  const isNearThreadBottom = (thread: HTMLElement): boolean =>
+    thread.scrollHeight - thread.scrollTop - thread.clientHeight <= 72;
+
+  const scrollThreadToBottom = (behavior: ScrollBehavior = "smooth") => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    thread.scrollTo({ top: thread.scrollHeight, behavior });
+    nearThreadBottomRef.current = true;
+    setHasUnreadLatest(false);
+  };
+
+  const handleThreadScroll = () => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    const nearBottom = isNearThreadBottom(thread);
+    nearThreadBottomRef.current = nearBottom;
+    if (nearBottom) {
+      setHasUnreadLatest(false);
+    }
+  };
+
   useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, busy, sessionId]);
+    const sessionChanged = lastThreadSessionIdRef.current !== sessionId;
+    const messageCountIncreased = messages.length > lastThreadMessageCountRef.current;
+    lastThreadSessionIdRef.current = sessionId;
+    lastThreadMessageCountRef.current = messages.length;
+
+    if (!sessionChanged && !messageCountIncreased) return;
+    if (sessionChanged || forceThreadBottomRef.current || nearThreadBottomRef.current) {
+      scrollThreadToBottom(sessionChanged ? "auto" : "smooth");
+    } else if (messageCountIncreased) {
+      setHasUnreadLatest(true);
+    }
+    forceThreadBottomRef.current = false;
+  }, [messages.length, sessionId]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const updateViewportHeight = () => {
+      const height = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      root.style.setProperty("--ai-chat-viewport-height", `${height}px`);
+    };
+    updateViewportHeight();
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("resize", updateViewportHeight);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("resize", updateViewportHeight);
+      root.style.removeProperty("--ai-chat-viewport-height");
+    };
+  }, []);
 
   useEffect(() => {
     const textarea = inputRef.current;
@@ -367,6 +421,8 @@ export const AiChatPage = ({
     if ((!prompt && imagesToSend.length === 0) || !session || busy) {
       return;
     }
+    forceThreadBottomRef.current = true;
+    setHasUnreadLatest(false);
     setBusy(true);
     setStatus("");
     setInput("");
@@ -562,7 +618,14 @@ export const AiChatPage = ({
           </button>
         )}
 
-        <section className={`ai-thread ${!session ? "is-start-state" : emptyConversation ? "is-empty-conversation" : ""}`}>
+        <section
+          ref={threadRef}
+          className={`ai-thread ${!session ? "is-start-state" : emptyConversation ? "is-empty-conversation" : ""}`}
+          role="log"
+          aria-label="聊天消息"
+          aria-live="polite"
+          onScroll={handleThreadScroll}
+        >
           {!session ? (
             <div className="ai-no-session">
               <div>
@@ -647,8 +710,16 @@ export const AiChatPage = ({
               </div>
             </article>
           )}
-          <div ref={messageEndRef} />
         </section>
+
+        {hasUnreadLatest && session && (
+          <div className="ai-scroll-to-latest">
+            <button type="button" onClick={() => scrollThreadToBottom()}>
+              <ArrowDown size={16} />
+              回到最新消息
+            </button>
+          </div>
+        )}
 
         {session && (
           <footer className="ai-composer">
