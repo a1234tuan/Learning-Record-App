@@ -12,6 +12,7 @@ import {
   ImagePlus,
   MessageSquarePlus,
   RefreshCw,
+  Search,
   Send,
   Settings,
   Sparkles,
@@ -25,7 +26,8 @@ import { AiMarkdown } from "../components/AiMarkdown";
 import type { AiChatAttachment, AiChatMessage, AiChatSession, AiKnowledgeScope, AppSettings, Asset, Block, RecordBlock } from "../types";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
-import { isNativePlatform } from "../lib/platform";
+import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
+import { searchRecordTitlesAsync } from "../lib/search";
 import { storage } from "../services/storageAdapter";
 import { buildSessionMemorySummary, calculateAiRequestBudget, sendChatCompletion } from "../services/aiClientService";
 import {
@@ -85,6 +87,10 @@ const modeLabel = (mode?: string): string => {
 };
 
 const RANGE_QUIZ_PROMPT = "请抽测此范围：跨不同记录挑选核心知识点，每次只出 1 题，不要先给答案，等我作答后再批改。";
+const SCOPE_SEARCH_DEBOUNCE_MS = 300;
+const RECORD_SEARCH_RESULT_LIMIT = 200;
+const MIN_SELECTED_SCOPE_RECORDS = 2;
+const MAX_SELECTED_SCOPE_RECORDS = 10;
 
 const AiChatImageThumb = ({
   image,
@@ -155,6 +161,13 @@ export const AiChatPage = ({
   const [scopeSubject, setScopeSubject] = useState("");
   const [scopeTag, setScopeTag] = useState("");
   const [recentDays, setRecentDays] = useState<7 | 14 | 30>(7);
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [recordTitleQuery, setRecordTitleQuery] = useState("");
+  const [recordSearchInput, setRecordSearchInput] = useState("");
+  const [deferredRecordTitleQuery, setDeferredRecordTitleQuery] = useState("");
+  const [rawRecordTitleResults, setRawRecordTitleResults] = useState<RecordBlock[]>([]);
+  const [searchingRecordTitles, setSearchingRecordTitles] = useState(false);
+  const [expandedRecordSubjects, setExpandedRecordSubjects] = useState<Set<string>>(() => new Set());
   const [creatingScope, setCreatingScope] = useState(false);
   const [hasUnreadLatest, setHasUnreadLatest] = useState(false);
   const threadRef = useRef<HTMLElement | null>(null);
@@ -164,10 +177,12 @@ export const AiChatPage = ({
   const lastThreadMessageCountRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const recordSearchComposingRef = useRef(false);
   const presets = useMemo(() => sortedPresets(settings), [settings]);
   const recommendedPresets = useMemo(() => presets.slice(0, 2), [presets]);
   const imageInputMode = settings.ai?.imageInputMode ?? "local-ocr";
   const native = isNativePlatform();
+  const desktop = isDesktopPlatform();
   const provider = useMemo(() => getCurrentAiProvider(settings.ai), [settings.ai]);
   const savedRecords = useMemo(
     () => blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt),
@@ -177,6 +192,29 @@ export const AiChatPage = ({
     () => Array.from(new Set(savedRecords.map((record) => record.subject))).sort((left, right) => left.localeCompare(right, "zh-CN")),
     [savedRecords],
   );
+  const savedRecordIds = useMemo(() => new Set(savedRecords.map((record) => record.id)), [savedRecords]);
+  const selectedRecordIdSet = useMemo(() => new Set(selectedRecordIds), [selectedRecordIds]);
+  const visibleRecordTitleResults = rawRecordTitleResults.slice(0, RECORD_SEARCH_RESULT_LIMIT);
+  const hasMoreRecordTitleResults = rawRecordTitleResults.length > RECORD_SEARCH_RESULT_LIMIT;
+  const scopeRecordSource = recordTitleQuery.trim() ? visibleRecordTitleResults : savedRecords;
+  const scopeRecordGroups = useMemo(() => {
+    const grouped = new Map<string, RecordBlock[]>();
+    for (const record of scopeRecordSource) {
+      const subjectRecords = grouped.get(record.subject);
+      if (subjectRecords) {
+        subjectRecords.push(record);
+      } else {
+        grouped.set(record.subject, [record]);
+      }
+    }
+    return [...grouped.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, "zh-CN"))
+      .map(([subject, records]) => ({
+        subject,
+        records: [...records].sort((left, right) =>
+          right.date.localeCompare(left.date) || right.order - left.order || right.createdAt.localeCompare(left.createdAt)),
+      }));
+  }, [scopeRecordSource]);
 
   useEffect(() => {
     if (!scopeSubject && scopeSubjects[0]) setScopeSubject(scopeSubjects[0]);
@@ -187,11 +225,69 @@ export const AiChatPage = ({
     if (!scopeTags.some((tag) => tag === scopeTag)) setScopeTag(scopeTags[0] ?? "");
   }, [scopeTag, scopeTags]);
 
+  useEffect(() => {
+    setSelectedRecordIds((current) => {
+      const next = current.filter((id) => savedRecordIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [savedRecordIds]);
+
+  useEffect(() => {
+    if (!desktop || recordSearchComposingRef.current) {
+      return;
+    }
+    setRecordSearchInput(recordTitleQuery);
+  }, [desktop, recordTitleQuery]);
+
+  useEffect(() => {
+    if (!scopePickerOpen || scopeKind !== "records" || !recordTitleQuery.trim()) {
+      setDeferredRecordTitleQuery("");
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setDeferredRecordTitleQuery(recordTitleQuery), SCOPE_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [recordTitleQuery, scopeKind, scopePickerOpen]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!scopePickerOpen || scopeKind !== "records" || !deferredRecordTitleQuery.trim()) {
+      setRawRecordTitleResults([]);
+      setSearchingRecordTitles(false);
+      return () => controller.abort();
+    }
+
+    setSearchingRecordTitles(true);
+    void searchRecordTitlesAsync(
+      deferredRecordTitleQuery,
+      savedRecords,
+      RECORD_SEARCH_RESULT_LIMIT + 1,
+      controller.signal,
+    )
+      .then((results) => {
+        if (!controller.signal.aborted) {
+          setRawRecordTitleResults(results);
+        }
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setSearchingRecordTitles(false);
+        }
+      });
+    return () => controller.abort();
+  }, [deferredRecordTitleQuery, savedRecords, scopeKind, scopePickerOpen]);
+
   const pendingScope = useMemo<AiKnowledgeScope | undefined>(() => {
     if (scopeKind === "recent") return { kind: "recent", days: recentDays };
+    if (scopeKind === "records") return { kind: "records", recordIds: selectedRecordIds };
     if (scopeKind === "tag" && scopeSubject && scopeTag) return { kind: "tag", subject: scopeSubject, tag: scopeTag };
     return undefined;
-  }, [recentDays, scopeKind, scopeSubject, scopeTag]);
+  }, [recentDays, scopeKind, scopeSubject, scopeTag, selectedRecordIds]);
   const pendingScopeRecords = useMemo(
     () => pendingScope ? getAiKnowledgeScopeRecords(pendingScope, blocks) : [],
     [blocks, pendingScope],
@@ -204,6 +300,10 @@ export const AiChatPage = ({
     () => estimateAiTokens(pendingScopeRecords.map((record) => `${record.title}\n${record.contentHtml}`).join("\n")),
     [pendingScopeRecords],
   );
+  const selectedRecordCount = selectedRecordIds.length;
+  const canCreateKnowledgeSession = Boolean(pendingScope)
+    && pendingScopeRecords.length > 0
+    && (scopeKind !== "records" || selectedRecordCount >= MIN_SELECTED_SCOPE_RECORDS);
 
   const refresh = async () => {
     const nextSessions = await storage.listAiSessions?.() ?? [];
@@ -319,15 +419,56 @@ export const AiChatPage = ({
     }
   };
 
+  const resetScopePicker = () => {
+    setScopePickerOpen(false);
+    setSelectedRecordIds([]);
+    setRecordTitleQuery("");
+    setRecordSearchInput("");
+    setDeferredRecordTitleQuery("");
+    setRawRecordTitleResults([]);
+    setExpandedRecordSubjects(new Set());
+    recordSearchComposingRef.current = false;
+  };
+
+  const closeScopePicker = () => {
+    if (!creatingScope) {
+      resetScopePicker();
+    }
+  };
+
+  const toggleScopeRecord = (recordId: string) => {
+    setSelectedRecordIds((current) => {
+      if (current.includes(recordId)) {
+        return current.filter((id) => id !== recordId);
+      }
+      if (current.length >= MAX_SELECTED_SCOPE_RECORDS) {
+        return current;
+      }
+      return [...current, recordId];
+    });
+  };
+
+  const toggleRecordSubject = (subject: string) => {
+    setExpandedRecordSubjects((current) => {
+      const next = new Set(current);
+      if (next.has(subject)) {
+        next.delete(subject);
+      } else {
+        next.add(subject);
+      }
+      return next;
+    });
+  };
+
   const createKnowledgeSession = async () => {
-    if (!pendingScope || creatingScope) return;
+    if (!pendingScope || !canCreateKnowledgeSession || creatingScope) return;
     setCreatingScope(true);
     setStatus("");
     try {
       const attachment = await buildAiKnowledgeContextPackAsync(pendingScope, blocks, assets);
       const nextSession = await createAiSessionForScope(pendingScope, attachment);
       if (nextSession) {
-        setScopePickerOpen(false);
+        resetScopePicker();
         onOpenSession(nextSession.id);
       }
     } catch (error) {
@@ -579,6 +720,25 @@ export const AiChatPage = ({
     ?? (skippedImages > 0 ? `${skippedImages} 张图片没有可用 OCR 文本` : skippedAssetCount > 0 ? `${skippedAssetCount} 个资源未参与问答` : "");
   const hasContextWarning = Boolean(contextWarning);
   const emptyConversation = Boolean(session && messages.length === 0);
+  const renderScopeRecordOption = (record: RecordBlock) => {
+    const selected = selectedRecordIdSet.has(record.id);
+    const selectionLimitReached = !selected && selectedRecordCount >= MAX_SELECTED_SCOPE_RECORDS;
+    return (
+      <label key={record.id} className={`ai-scope-record-option${selected ? " selected" : ""}${selectionLimitReached ? " disabled" : ""}`}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => toggleScopeRecord(record.id)}
+          disabled={selectionLimitReached}
+          aria-label={`选择日志 ${record.title || "未命名日志"}`}
+        />
+        <span>
+          <strong>{record.title || "未命名日志"}</strong>
+          <small>{record.date} · {record.subject}</small>
+        </span>
+      </label>
+    );
+  };
 
   return (
     <main className="page ai-chat-page immersive">
@@ -941,14 +1101,14 @@ export const AiChatPage = ({
       )}
 
       {scopePickerOpen && (
-        <div className="ai-history-backdrop" onClick={() => !creatingScope && setScopePickerOpen(false)}>
+        <div className="ai-history-backdrop" onClick={closeScopePicker}>
           <section className="ai-scope-dialog" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="新建知识库问答">
             <header>
               <div>
                 <p className="eyebrow">Knowledge Base</p>
                 <h2>新建知识库问答</h2>
               </div>
-              <button type="button" className="icon-button" onClick={() => setScopePickerOpen(false)} disabled={creatingScope} aria-label="关闭">
+              <button type="button" className="icon-button" onClick={closeScopePicker} disabled={creatingScope} aria-label="关闭">
                 <X size={18} />
               </button>
             </header>
@@ -958,6 +1118,9 @@ export const AiChatPage = ({
               </button>
               <button type="button" role="tab" aria-selected={scopeKind === "recent"} className={scopeKind === "recent" ? "active" : ""} onClick={() => setScopeKind("recent")}>
                 近期学习
+              </button>
+              <button type="button" role="tab" aria-selected={scopeKind === "records"} className={scopeKind === "records" ? "active" : ""} onClick={() => setScopeKind("records")}>
+                选择日志
               </button>
             </div>
             {scopeKind === "tag" ? (
@@ -977,13 +1140,84 @@ export const AiChatPage = ({
                   </select>
                 </label>
               </div>
-            ) : (
+            ) : scopeKind === "recent" ? (
               <div className="ai-recent-range-control" role="tablist" aria-label="近期范围">
                 {([7, 14, 30] as const).map((days) => (
                   <button key={days} type="button" role="tab" aria-selected={recentDays === days} className={recentDays === days ? "active" : ""} onClick={() => setRecentDays(days)}>
                     {days} 天
                   </button>
                 ))}
+              </div>
+            ) : (
+              <div className="ai-scope-record-picker">
+                <label className="search-box ai-scope-record-search">
+                  <Search size={18} />
+                  <input
+                    value={desktop ? recordSearchInput : recordTitleQuery}
+                    onCompositionStart={() => {
+                      if (desktop) {
+                        recordSearchComposingRef.current = true;
+                      }
+                    }}
+                    onCompositionEnd={(event) => {
+                      if (!desktop) {
+                        return;
+                      }
+                      recordSearchComposingRef.current = false;
+                      const nextValue = event.currentTarget.value;
+                      setRecordSearchInput(nextValue);
+                      setRecordTitleQuery(nextValue);
+                    }}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      if (!desktop) {
+                        setRecordTitleQuery(nextValue);
+                        return;
+                      }
+                      setRecordSearchInput(nextValue);
+                      if (!(event.nativeEvent as InputEvent).isComposing && !recordSearchComposingRef.current) {
+                        setRecordTitleQuery(nextValue);
+                      }
+                    }}
+                    placeholder="按日志标题搜索"
+                    aria-label="按日志标题搜索"
+                  />
+                </label>
+                <div className="ai-scope-selection-status" role="status">
+                  <strong>已选 {selectedRecordCount}/{MAX_SELECTED_SCOPE_RECORDS} 条日志</strong>
+                  <span>{selectedRecordCount < MIN_SELECTED_SCOPE_RECORDS ? `还需选择 ${MIN_SELECTED_SCOPE_RECORDS - selectedRecordCount} 条才可创建问答` : "可跨学科选择，最多 10 条"}</span>
+                </div>
+                <div className="ai-scope-record-list" aria-label="可选日志">
+                  {searchingRecordTitles && <p className="status-message">正在搜索标题…</p>}
+                  {hasMoreRecordTitleResults && <p className="status-message">结果较多，仅显示前 {RECORD_SEARCH_RESULT_LIMIT} 条，请缩小关键词。</p>}
+                  {recordTitleQuery.trim() ? (
+                    scopeRecordGroups.map((group) => (
+                      <section key={group.subject} className="ai-scope-record-search-group">
+                        <h3>{group.subject} <small>{group.records.length} 条</small></h3>
+                        <div>{group.records.map(renderScopeRecordOption)}</div>
+                      </section>
+                    ))
+                  ) : (
+                    scopeRecordGroups.map((group) => {
+                      const expanded = expandedRecordSubjects.has(group.subject);
+                      return (
+                        <section key={group.subject} className="ai-scope-record-subject">
+                          <button type="button" className="ai-scope-record-subject-trigger" onClick={() => toggleRecordSubject(group.subject)} aria-expanded={expanded}>
+                            <span><strong>{group.subject}</strong><small>{group.records.length} 条日志</small></span>
+                            <ChevronDown size={18} className={expanded ? "expanded" : ""} />
+                          </button>
+                          {expanded && <div className="ai-scope-record-options">{group.records.map(renderScopeRecordOption)}</div>}
+                        </section>
+                      );
+                    })
+                  )}
+                  {!searchingRecordTitles && recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
+                    <p className="helper-text">没有匹配的日志标题。</p>
+                  )}
+                  {!recordTitleQuery.trim() && scopeRecordGroups.length === 0 && (
+                    <p className="helper-text">还没有可用于 AI 问答的日志。</p>
+                  )}
+                </div>
               </div>
             )}
             <div className="ai-scope-preview">
@@ -993,8 +1227,8 @@ export const AiChatPage = ({
               <span>原始内容约 {pendingScopeEstimate.toLocaleString()} token，发送时会按模型窗口检索并截取。</span>
             </div>
             <footer>
-              <button type="button" className="secondary-button" onClick={() => setScopePickerOpen(false)} disabled={creatingScope}>取消</button>
-              <button type="button" className="primary-button" onClick={() => void createKnowledgeSession()} disabled={!pendingScope || pendingScopeRecords.length === 0 || creatingScope}>
+              <button type="button" className="secondary-button" onClick={closeScopePicker} disabled={creatingScope}>取消</button>
+              <button type="button" className="primary-button" onClick={() => void createKnowledgeSession()} disabled={!canCreateKnowledgeSession || creatingScope}>
                 {creatingScope ? <RefreshCw size={18} className="spin" /> : <Sparkles size={18} />}
                 创建问答
               </button>

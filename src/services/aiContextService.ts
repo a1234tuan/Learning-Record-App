@@ -174,6 +174,8 @@ export const aiKnowledgeScopeTitle = (scope: AiKnowledgeScope, referenceDate = t
       const start = addDaysISO(referenceDate, 1 - scope.days);
       return `最近 ${scope.days} 天（${start} 至 ${referenceDate}）`;
     }
+    case "records":
+      return `已选 ${new Set(scope.recordIds).size} 条日志`;
   }
 };
 
@@ -185,6 +187,8 @@ export const aiKnowledgeScopeKey = (scope: AiKnowledgeScope): string => {
       return `tag:${subjectTagKey(scope.subject, scope.tag)}`;
     case "recent":
       return `recent:${scope.days}`;
+    case "records":
+      return `records:${[...new Set(scope.recordIds)].sort().join(",")}`;
   }
 };
 
@@ -198,12 +202,14 @@ export const getAiKnowledgeScopeRecords = (
   referenceDate = todayISO(),
 ): RecordBlock[] => {
   const records = blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
+  const selectedRecordIds = scope.kind === "records" ? new Set(scope.recordIds) : undefined;
   const matched = records.filter((record) => {
     if (scope.kind === "date") return record.date === scope.date;
     if (scope.kind === "tag") {
       const sameSubject = record.subject.trim().toLocaleLowerCase("zh-CN") === scope.subject.trim().toLocaleLowerCase("zh-CN");
       return sameSubject && normalizeRecordTags(record.tags).some((tag) => recordTagKey(tag) === recordTagKey(scope.tag));
     }
+    if (scope.kind === "records") return selectedRecordIds?.has(record.id) ?? false;
     const start = addDaysISO(referenceDate, 1 - scope.days);
     return record.date >= start && record.date <= referenceDate;
   });

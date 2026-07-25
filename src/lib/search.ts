@@ -253,3 +253,37 @@ export const searchAllAsync = async (
 
   return results;
 };
+
+/** Searches only active record titles for lightweight record-scope selection. */
+export const searchRecordTitlesAsync = async (
+  query: string,
+  records: RecordBlock[],
+  limit = DEFAULT_SEARCH_LIMIT,
+  signal?: AbortSignal,
+): Promise<RecordBlock[]> => {
+  const normalizedQuery = normalize(query.trim());
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const maxResults = Number.isFinite(limit) ? Math.max(0, limit) : DEFAULT_SEARCH_LIMIT;
+  const results: RecordBlock[] = [];
+  const assertActive = () => {
+    if (signal?.aborted) {
+      throw new DOMException("Search cancelled", "AbortError");
+    }
+  };
+
+  for (const [index, record] of records.entries()) {
+    assertActive();
+    if (!record.deletedAt && normalize(record.title).includes(normalizedQuery)) {
+      results.push(record);
+      if (results.length >= maxResults) {
+        return results;
+      }
+    }
+    if (index > 0 && index % SEARCH_BATCH_SIZE === 0) await yieldSearch();
+  }
+
+  return results;
+};

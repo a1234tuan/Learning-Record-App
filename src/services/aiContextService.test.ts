@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AiContextChunk, Asset, RecordBlock } from "../types";
 import {
+  aiKnowledgeScopeKey,
   buildAiContextPack,
   buildAiContextPackAsync,
   buildAiKnowledgeContextPack,
@@ -147,6 +148,24 @@ describe("aiContextService", () => {
 
     expect(pack.scopeTitle).toBe("最近 7 天（2026-07-04 至 2026-07-10）");
     expect(pack.recordIds).toEqual(["start", "today"]);
+  });
+
+  it("builds selected-record scopes from only active requested records in stable order", () => {
+    const scope = { kind: "records" as const, recordIds: ["later", "missing", "first", "later", "deleted"] };
+    const pack = buildAiKnowledgeContextPack(
+      scope,
+      [
+        record({ id: "later", date: "2026-06-23", title: "后面的记录", order: 0 }),
+        record({ id: "first", date: "2026-06-21", title: "前面的记录", order: 2 }),
+        record({ id: "deleted", date: "2026-06-20", deletedAt: stamp, title: "已删除记录" }),
+      ],
+      [],
+    );
+
+    expect(pack.scopeTitle).toBe("已选 4 条日志");
+    expect(pack.recordIds).toEqual(["first", "later"]);
+    expect(aiKnowledgeScopeKey(scope)).toBe("records:deleted,first,later,missing");
+    expect(aiKnowledgeScopeKey({ kind: "records", recordIds: ["first", "later", "missing", "deleted"] })).toBe(aiKnowledgeScopeKey(scope));
   });
 
   it("matches Chinese bigrams and preserves Markdown in selected structure chunks", () => {

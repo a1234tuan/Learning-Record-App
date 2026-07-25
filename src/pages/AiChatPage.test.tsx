@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "../db/defaults";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { storage } from "../services/storageAdapter";
-import type { AiChatMessage, AiChatSession, AiContextPack } from "../types";
+import type { AiChatMessage, AiChatSession, AiContextPack, RecordBlock } from "../types";
 import { AiChatPage } from "./AiChatPage";
 
 vi.mock("../lib/clipboard", () => ({
@@ -44,6 +44,22 @@ const contextAttachment: AiContextPack = {
   skippedAssets: [],
   missingOcrAssetIds: [],
 };
+
+const scopeRecord = (id: string, subject: string, title: string, order = 0): RecordBlock => ({
+  id,
+  createdAt: stamp,
+  updatedAt: stamp,
+  type: "record",
+  date: "2026-06-22",
+  order,
+  subject,
+  title,
+  contentHtml: "<p>日志正文</p>",
+  assets: [],
+  formulas: [],
+  mistakeRefs: [],
+  tags: [],
+});
 
 const scrollIntoViewMock = vi.fn();
 const scrollToMock = vi.fn();
@@ -136,6 +152,72 @@ describe("AiChatPage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "14 天" }));
 
     expect(screen.getByText(/最近 14 天/)).toBeInTheDocument();
+  });
+
+  it("selects at least two records across subjects and keeps selections after a title search", async () => {
+    vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
+    render(
+      <AiChatPage
+        sessionId={null}
+        settings={DEFAULT_SETTINGS}
+        blocks={[
+          scopeRecord("math", "数学", "极限专题"),
+          scopeRecord("physics", "物理", "力学专题"),
+        ]}
+        assets={[]}
+        onOpenSession={vi.fn()}
+        onDeletedSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
+    fireEvent.click(await screen.findByRole("tab", { name: "选择日志" }));
+    const createButton = screen.getByRole("button", { name: "创建问答" });
+    expect(createButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /数学/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择日志 极限专题" }));
+
+    const searchInput = screen.getByRole("textbox", { name: "按日志标题搜索" });
+    fireEvent.change(searchInput, { target: { value: "力学专题" } });
+    expect(await screen.findByRole("checkbox", { name: "选择日志 力学专题" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择日志 力学专题" }));
+    expect(createButton).toBeEnabled();
+
+    fireEvent.change(searchInput, { target: { value: "" } });
+    expect(screen.getByRole("checkbox", { name: "选择日志 极限专题" })).toBeChecked();
+  });
+
+  it("prevents selecting more than ten records and allows selection after deselecting one", async () => {
+    vi.spyOn(storage, "listAiSessions").mockResolvedValue([]);
+    const records = Array.from({ length: 11 }, (_, index) => scopeRecord(`record-${index + 1}`, "数学", `日志 ${index + 1}`, index));
+    render(
+      <AiChatPage
+        sessionId={null}
+        settings={DEFAULT_SETTINGS}
+        blocks={records}
+        assets={[]}
+        onOpenSession={vi.fn()}
+        onDeletedSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "新建知识库问答" })[0]);
+    fireEvent.click(await screen.findByRole("tab", { name: "选择日志" }));
+    fireEvent.click(screen.getByRole("button", { name: /数学/ }));
+
+    for (let index = 1; index <= 10; index += 1) {
+      fireEvent.click(screen.getByRole("checkbox", { name: `选择日志 日志 ${index}` }));
+    }
+
+    const eleventh = screen.getByRole("checkbox", { name: "选择日志 日志 11" });
+    expect(eleventh).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择日志 日志 1" }));
+    expect(eleventh).toBeEnabled();
+    fireEvent.click(eleventh);
+    expect(eleventh).toBeChecked();
   });
 
   it("keeps retrieval parameters inside the expandable scope details", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Asset, DayEntry, RecordBlock } from "../types";
-import { searchAllAsync } from "./search";
+import { searchAllAsync, searchRecordTitlesAsync } from "./search";
 
 const stamp = "2026-07-19T00:00:00.000Z";
 
@@ -41,5 +41,15 @@ describe("searchAllAsync", () => {
     controller.abort();
 
     await expect(searchAllAsync("勾股", [], [record], [], 201, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("searches only active record titles for knowledge-scope selection", async () => {
+    const results = await searchRecordTitlesAsync("专题", [
+      { ...record, id: "title-hit", title: "专题复盘", contentHtml: "<p>不相关正文</p>" },
+      { ...record, id: "content-only", title: "普通日志", contentHtml: "<p>专题只在正文中</p>" },
+      { ...record, id: "deleted", title: "专题已删除", deletedAt: stamp },
+    ]);
+
+    expect(results.map((item) => item.id)).toEqual(["title-hit"]);
   });
 });

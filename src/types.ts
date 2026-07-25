@@ -433,7 +433,8 @@ export interface Asset extends BaseEntity {
 export type AiKnowledgeScope =
   | { kind: "date"; date: ISODate }
   | { kind: "tag"; subject: Subject; tag: string }
-  | { kind: "recent"; days: 7 | 14 | 30 };
+  | { kind: "recent"; days: 7 | 14 | 30 }
+  | { kind: "records"; recordIds: EntityId[] };
 
 export interface RecordTransferManifest {
   format: "study-journal-record-transfer";

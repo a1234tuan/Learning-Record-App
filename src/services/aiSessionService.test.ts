@@ -78,4 +78,29 @@ describe("aiSessionService", () => {
     });
     expect(saved[0].attachment?.allChunks).toEqual([]);
   });
+
+  it("persists a selected-record scope without assigning a source date", async () => {
+    const saved: AiChatSession[] = [];
+    const store = {
+      saveAiSession: vi.fn(async (session: AiChatSession) => {
+        saved.push(session);
+        return session;
+      }),
+    };
+    const scope = { kind: "records" as const, recordIds: ["record-1", "record-2"] };
+    const scopedAttachment: AiContextPack = {
+      ...attachment,
+      scope,
+      scopeTitle: "已选 2 条日志",
+      recordIds: scope.recordIds,
+    };
+
+    await createAiSessionForScope(scope, scopedAttachment, store);
+
+    expect(saved[0]).toMatchObject({
+      scope,
+      scopeTitle: "已选 2 条日志",
+      sourceDate: undefined,
+    });
+  });
 });
