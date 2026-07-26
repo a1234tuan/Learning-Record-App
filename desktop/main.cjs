@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 
 const APP_SCHEME = "study-journal";
 const APP_HOST = "app";
+const UPDATE_QUIT_ARGUMENT = "--quit-for-update";
 const DIST_ROOT = path.resolve(__dirname, "..", "dist");
 const APP_ID = "com.noteproject.study408.desktop";
 const DESKTOP_ROOT = path.resolve("D:\\StudyJournal");
@@ -302,6 +303,20 @@ const requestDesktopBackupFlush = (reason) => {
   });
 };
 
+const closeMainWindowAfterBackup = () => {
+  if (closeAfterDesktopBackup) {
+    return;
+  }
+  closeAfterDesktopBackup = true;
+  void requestDesktopBackupFlush("close").finally(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.close();
+    } else {
+      app.quit();
+    }
+  });
+};
+
 ipcMain.handle("study-journal:desktop-backup-bind", bindDesktopBackupFolder);
 ipcMain.handle("study-journal:desktop-backup-status", desktopBackupStatus);
 ipcMain.handle("study-journal:desktop-backup-ensure", async () => {
@@ -406,12 +421,7 @@ const createMainWindow = () => {
       return;
     }
     event.preventDefault();
-    closeAfterDesktopBackup = true;
-    void requestDesktopBackupFlush("close").finally(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.close();
-      }
-    });
+    closeMainWindowAfterBackup();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     openExternalUrl(url);
@@ -429,7 +439,11 @@ const createMainWindow = () => {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, commandLine) => {
+    if (commandLine.includes(UPDATE_QUIT_ARGUMENT)) {
+      closeMainWindowAfterBackup();
+      return;
+    }
     if (!mainWindow) {
       return;
     }
