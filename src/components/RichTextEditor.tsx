@@ -1428,6 +1428,7 @@ export const RichTextEditor = ({
       MarkdownLinkMark,
       MarkdownTypingExtension.configure({
         shouldSkipInputTransform: () => nativeTypingTransformSuppressedRef.current || nativeTypingTransformSkipOnceRef.current,
+        shouldEnableDesktopShortcuts: isDesktopPlatform,
       }),
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,
@@ -1552,6 +1553,13 @@ export const RichTextEditor = ({
         }
 
         const clipboard = snapshotClipboardData(event.clipboardData);
+        if (isDesktopPlatform() && view.state.selection.$from.parent.type.spec.code && clipboard.plainText) {
+          event.preventDefault();
+          cancelPendingPaste(view);
+          const transaction = view.state.tr.insertText(clipboard.plainText);
+          view.dispatch(applyPasteHistoryMode(transaction, pasteHistoryMode(clipboard.plainText)).scrollIntoView());
+          return true;
+        }
         const markdownSource = selectHistoryBoundedPasteSource([clipboard.markdown, clipboard.plainText]);
         if (markdownSource) {
           event.preventDefault();

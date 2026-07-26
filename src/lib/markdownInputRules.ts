@@ -134,6 +134,7 @@ export const applyComposedMarkdownTransform = (view: EditorView) => {
 
 type MarkdownTypingOptions = {
   shouldSkipInputTransform: () => boolean;
+  shouldEnableDesktopShortcuts: () => boolean;
 };
 
 export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
@@ -142,6 +143,7 @@ export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
   addOptions() {
     return {
       shouldSkipInputTransform: () => false,
+      shouldEnableDesktopShortcuts: () => false,
     };
   },
 
@@ -150,6 +152,10 @@ export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
     const italic = this.editor.schema.marks.italic;
     const inlineMath = this.editor.schema.nodes.recordInlineMath;
     const blockMath = this.editor.schema.nodes.recordFormula;
+    const collapseBlock = this.editor.schema.nodes.recordCollapseBlock;
+    const highlightBlock = this.editor.schema.nodes.recordHighlightBlock;
+    const codeBlock = this.editor.schema.nodes.codeBlock;
+    const paragraph = this.editor.schema.nodes.paragraph;
     const rules: InputRule[] = [];
 
     if (bold) {
@@ -193,6 +199,60 @@ export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
           state.tr.setSelection(NodeSelection.create(state.tr.doc, from));
         },
       }));
+    }
+    if (this.options.shouldEnableDesktopShortcuts() && paragraph) {
+      const replaceShortcutParagraph = (
+        state: EditorState,
+        node: ReturnType<typeof paragraph.create>,
+        selection: "nested" | "textblock" | "after",
+      ) => {
+        if (isCodeContext(state)) {
+          return null;
+        }
+        const { $from } = state.selection;
+        if ($from.parent.type.name !== "paragraph") {
+          return null;
+        }
+        const from = $from.before();
+        const trailingParagraph = paragraph.create();
+        state.tr.replaceWith(from, $from.after(), Fragment.fromArray([node, trailingParagraph]));
+        const cursor = selection === "nested"
+          ? from + 2
+          : selection === "textblock"
+            ? from + 1
+            : from + node.nodeSize + 1;
+        state.tr.setSelection(TextSelection.create(state.tr.doc, cursor));
+      };
+
+      if (collapseBlock) {
+        rules.push(new InputRule({
+          find: /^\/zdk $/,
+          handler: ({ state }) => replaceShortcutParagraph(
+            state,
+            collapseBlock.create(
+              { title: "折叠块", summary: "", defaultOpen: false },
+              Fragment.from(paragraph.create()),
+            ),
+            "after",
+          ),
+        }));
+      }
+      if (highlightBlock) {
+        rules.push(new InputRule({
+          find: /^\/glk $/,
+          handler: ({ state }) => replaceShortcutParagraph(
+            state,
+            highlightBlock.create({ tone: "green" }, Fragment.from(paragraph.create())),
+            "nested",
+          ),
+        }));
+      }
+      if (codeBlock) {
+        rules.push(new InputRule({
+          find: /^\/dmk $/,
+          handler: ({ state }) => replaceShortcutParagraph(state, codeBlock.create(), "textblock"),
+        }));
+      }
     }
 
     return rules;

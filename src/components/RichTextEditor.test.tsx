@@ -553,6 +553,157 @@ describe("RichTextEditor", () => {
     }
   });
 
+  it.each([
+    ["/zdk ", 'data-title="折叠块"'],
+    ["/glk ", 'data-tone="green"'],
+    ["/dmk ", "<pre><code"],
+  ])("inserts %s as a desktop block shortcut", async (shortcut, expectedHtml) => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => {
+        editorRef?.commands.insertContent(shortcut, { applyInputRules: true });
+      });
+
+      await waitFor(() => expect(editorRef?.getHTML()).toContain(expectedHtml));
+      expect(editorRef?.getHTML()).not.toContain(shortcut.trim());
+      if (shortcut === "/dmk ") {
+        expect(editorRef?.isActive("codeBlock")).toBe(true);
+      }
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
+  });
+
+  it.each(["/zdk ", "/glk ", "/dmk "])("keeps %s as text outside Desktop", async (shortcut) => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value="<p></p>"
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef?.commands.insertContent(shortcut, { applyInputRules: true });
+    });
+
+    expect(editorRef?.getHTML()).toContain(shortcut);
+  });
+
+  it("limits desktop block shortcuts to the start of ordinary paragraphs", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<p>前文</p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => {
+        setSelectionInsideText(editorRef!, "前文");
+        editorRef?.commands.insertContent("/dmk ", { applyInputRules: true });
+      });
+      expect(editorRef?.getHTML()).toContain("/dmk ");
+      expect(editorRef?.isActive("codeBlock")).toBe(false);
+
+      act(() => {
+        editorRef?.commands.setContent("<pre><code></code></pre>");
+        editorRef?.commands.insertContent("/zdk ", { applyInputRules: true });
+      });
+      expect(editorRef?.getHTML()).toContain("/zdk ");
+      expect(editorRef?.getHTML()).not.toContain("record-collapse");
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
+  });
+
+  it("keeps a Desktop code-block paste as exact plain text", async () => {
+    const source = [
+      "def calculate_fibonacci(n):",
+      "    \"\"\"计算斐波那契数列的前 n 项\"\"\"",
+      "    if n <= 0:",
+      "        return []",
+      "    elif n == 1:",
+      "        return [0]",
+      "",
+      "    fib = [0, 1]",
+      "    while len(fib) < n:",
+      "        next_value = fib[-1] + fib[-2]",
+      "        fib.append(next_value)",
+      "",
+      "    return fib",
+      "",
+      "if __name__ == \"__main__\":",
+      "    n_terms = 10",
+      "    print(f\"斐波那契数列前 {n_terms} 项：\")",
+      "    print(calculate_fibonacci(n_terms))",
+    ].join("\n");
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => {
+        editorRef?.commands.setCodeBlock();
+      });
+      fireEvent.paste(document.querySelector(".rich-editor")!, {
+        clipboardData: {
+          getData: (type: string) => type === "text/plain" ? source : "",
+          items: [],
+        },
+      });
+
+      await waitFor(() => {
+        const codeBlocks: string[] = [];
+        editorRef?.state.doc.descendants((node) => {
+          if (node.type.name === "codeBlock") {
+            codeBlocks.push(node.textContent);
+          }
+          return true;
+        });
+        expect(codeBlocks).toEqual([source]);
+      });
+      expect(editorRef?.getHTML()).not.toContain("<p>return");
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
+  });
+
   it("inserts a compact record reference at the saved editor selection", async () => {
     const onChange = vi.fn();
     const source = referenceRecord("record-source", "来源日志");
