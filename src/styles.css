@@ -1890,6 +1890,13 @@ button:disabled {
   box-shadow: none;
 }
 
+.compact-image-card {
+  grid-template-rows: minmax(0, 9fr) minmax(20px, 1fr);
+  block-size: clamp(200px, 31vw, 280px);
+  gap: 4px;
+  padding: 6px;
+}
+
 .asset-card.highlighted {
   border-color: var(--amber);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 28%, transparent);
@@ -1962,6 +1969,22 @@ button:disabled {
   background: transparent;
 }
 
+.compact-image-card .compact-image-button {
+  display: block;
+  block-size: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.compact-image-card .image-preview {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+}
+
 .compact-image-meta {
   min-width: 0;
   display: flex;
@@ -1970,6 +1993,13 @@ button:disabled {
   gap: 8px;
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.compact-image-card .compact-image-meta {
+  min-block-size: 0;
+  gap: 4px;
+  font-size: 0.66rem;
+  line-height: 1;
 }
 
 .compact-image-meta strong {
@@ -1981,6 +2011,11 @@ button:disabled {
   color: var(--text);
 }
 
+.compact-image-card .compact-image-meta strong {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
 .ocr-badge {
   flex-shrink: 0;
   padding: 2px 7px;
@@ -1989,6 +2024,13 @@ button:disabled {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 800;
+}
+
+.compact-image-card .ocr-badge {
+  padding: 1px 4px;
+  font-size: 0.62rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .ocr-badge.success {

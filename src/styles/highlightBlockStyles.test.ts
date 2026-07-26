@@ -133,6 +133,7 @@ describe("highlight block styles", () => {
     for (const selector of [
       ".record-inline-node",
       ".asset-card-view",
+      ".compact-image-card",
       ".image-preview-button",
       ".compact-image-button",
       ".collapse-block-content",
@@ -146,6 +147,28 @@ describe("highlight block styles", () => {
     expect(cssBlockFor(stylesCss, ".asset-card-view")).toContain("inline-size: 100%");
     expect(cssBlockFor(stylesCss, ".structure-block")).toContain("display: block");
     expect(cssBlockFor(stylesCss, ".record-highlight-block")).toContain("inline-size: 100%");
+  });
+
+  it("prioritizes image space in compact read-only image cards", () => {
+    const cardBody = cssBlockFor(stylesCss, ".compact-image-card");
+    const buttonBody = cssBlockFor(stylesCss, ".compact-image-card .compact-image-button");
+    const imageBody = cssBlockFor(stylesCss, ".compact-image-card .image-preview");
+    const metaBody = cssBlockFor(stylesCss, ".compact-image-card .compact-image-meta");
+    const badgeBody = cssBlockFor(stylesCss, ".compact-image-card .ocr-badge");
+
+    expect(cardBody).toContain("grid-template-rows: minmax(0, 9fr) minmax(20px, 1fr)");
+    expect(cardBody).toContain("block-size: clamp(200px, 31vw, 280px)");
+    expect(cardBody).toContain("padding: 6px");
+    expect(buttonBody).toContain("block-size: 100%");
+    expectNoContentWidthSizing(stylesCss, ".compact-image-card .compact-image-button");
+    expect(imageBody).toContain("inline-size: 100%");
+    expect(imageBody).toContain("block-size: 100%");
+    expect(imageBody).toContain("max-width: none");
+    expect(imageBody).toContain("max-height: none");
+    expect(imageBody).toContain("object-fit: contain");
+    expect(metaBody).toContain("font-size: 0.66rem");
+    expect(badgeBody).toContain("font-size: 0.62rem");
+    expect(badgeBody).toContain("white-space: nowrap");
   });
 
   it("limits max-content sizing to inner wide-content canvases", () => {
