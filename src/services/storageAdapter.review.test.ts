@@ -102,6 +102,16 @@ const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[], review
 };
 
 describe("DexieStorageAdapter record review invariants", () => {
+  it("persists the strictly later easy interval for an overview card", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review({ intervalDays: 10 })]);
+
+    const saved = await adapter.rateRecordReview("record-1", "easy", "2026-07-03T01:30:00.000Z");
+
+    expect(saved?.review).toMatchObject({ intervalDays: 60, nextReviewDate: "2026-09-01" });
+    const [log] = await fakeDb.recordReviewLogs.toArray();
+    expect(log).toMatchObject({ previousIntervalDays: 10, nextIntervalDays: 60, nextReviewDate: "2026-09-01" });
+  });
+
   it("stores trimmed evaluation text with the review log", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
 

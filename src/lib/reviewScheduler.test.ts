@@ -66,6 +66,36 @@ describe("reviewScheduler", () => {
     expect(easy.intervals).toEqual([21, 60, 120, 365]);
   });
 
+  it("keeps overview rating previews strictly increasing at every interval boundary", () => {
+    const cases = [
+      [4, [1, 4, 10, 21]],
+      [5, [1, 7, 10, 21]],
+      [7, [1, 7, 10, 21]],
+      [8, [1, 14, 21, 60]],
+      [10, [1, 14, 21, 60]],
+      [21, [1, 14, 45, 60]],
+      [22, [1, 21, 45, 60]],
+      [45, [1, 21, 90, 120]],
+      [90, [1, 21, 180, 365]],
+      [180, [1, 21, 180, 365]],
+    ] as const;
+
+    for (const [intervalDays, expectedIntervals] of cases) {
+      const current = state({ intervalDays });
+      const previews = previewReviewRatings(current, "2026-07-05");
+      const previewIntervals = previews.map((preview) => preview.intervalDays);
+
+      expect(previewIntervals).toEqual(expectedIntervals);
+      expect(previewIntervals.every((interval, index) => index === 0 || previewIntervals[index - 1] < interval)).toBe(true);
+
+      for (const preview of previews) {
+        const scheduled = applyOverviewReview(current, preview.rating, "2026-07-05", "2026-07-05T08:00:00.000Z");
+        expect(scheduled.state.intervalDays).toBe(preview.intervalDays);
+        expect(scheduled.nextReviewDate).toBe(preview.nextReviewDate);
+      }
+    }
+  });
+
   it("compresses fuzzy overview reviews instead of expanding them to the old 15 day result", () => {
     const next = applyOverviewReview(
       state({ repetition: 2, intervalDays: 15, consecutiveRemembered: 2 }),

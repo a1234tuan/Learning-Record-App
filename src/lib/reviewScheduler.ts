@@ -86,6 +86,19 @@ const nextFromLadder = (currentIntervalDays: number, ladder: number[]): number =
 
 const latterIndex = <T,>(items: T[]): number => Math.max(0, items.length - 1);
 
+const overviewFuzzyInterval = (currentIntervalDays: number): number => {
+  if (currentIntervalDays <= 4) return 4;
+  if (currentIntervalDays <= 7) return 7;
+  if (currentIntervalDays <= 21) return 14;
+  return 21;
+};
+
+const overviewGoodInterval = (currentIntervalDays: number): number =>
+  nextFromLadder(
+    Math.max(currentIntervalDays, overviewFuzzyInterval(currentIntervalDays)),
+    [10, 21, 45, 90, 180],
+  );
+
 export const overviewIntervalForRating = (
   rating: RecordReviewRating,
   currentIntervalDays: number,
@@ -94,14 +107,11 @@ export const overviewIntervalForRating = (
     case "forgot":
       return 1;
     case "fuzzy":
-      if (currentIntervalDays <= 4) return 4;
-      if (currentIntervalDays <= 7) return 7;
-      if (currentIntervalDays <= 21) return 14;
-      return 21;
+      return overviewFuzzyInterval(currentIntervalDays);
     case "good":
-      return nextFromLadder(currentIntervalDays, [10, 21, 45, 90, 180]);
+      return overviewGoodInterval(currentIntervalDays);
     case "easy":
-      return nextFromLadder(currentIntervalDays, [21, 60, 120, 365]);
+      return nextFromLadder(overviewGoodInterval(currentIntervalDays), [21, 60, 120, 365]);
   }
 };
 

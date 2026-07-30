@@ -179,6 +179,20 @@ describe("ReviewPage", () => {
     richTextEditorMock.props = [];
   });
 
+  it("shows a strictly later easy interval for overview cards", () => {
+    const currentReview = review("active", { intervalDays: 10 });
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [currentReview],
+      reviewStates: [currentReview],
+      queueIds: ["active"],
+      currentRecordId: "active",
+    });
+
+    expect(screen.getByRole("button", { name: "良好，21天后" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "轻松，60天后" })).toBeInTheDocument();
+  });
+
   it("shows record tags on a review card", () => {
     renderReviewPage({
       mode: "queue",
