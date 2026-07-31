@@ -59,7 +59,7 @@ export const OcrSettingsPage = ({ onChanged }: OcrSettingsPageProps) => {
         <header className="inline-section-header">
           <div>
             <h2>PaddleOCR</h2>
-            <p>请填写你自己的 PaddleOCR / AI Studio Token。应用不会内置公共 Token，也不会把它打包进 APK。</p>
+            <p>请填写你自己的 PaddleOCR / AI Studio Token。应用不会内置公共 Token，也不会写入 Android 或 Windows 安装包。</p>
           </div>
         </header>
 
@@ -79,7 +79,7 @@ export const OcrSettingsPage = ({ onChanged }: OcrSettingsPageProps) => {
         </label>
 
         <p className="helper-text">
-          配置后，图片资源的 OCR 文本会进入本地全文检索；AI 图片问答选择“本地 OCR 后转文字”时也会复用这里的配置。
+          配置后，Android 和 Windows 桌面版都可识别图片，OCR 文本会进入本地全文检索；AI 图片问答选择“本地 OCR 后转文字”时也会复用这里的配置。
           未配置时，新图片 OCR 会提示先配置 Token，已识别出的历史 OCR 文本仍可继续搜索。
         </p>
 

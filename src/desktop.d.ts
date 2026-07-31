@@ -11,6 +11,14 @@ declare global {
   interface Window {
     studyJournalDesktop?: Readonly<{
       isDesktop: true;
+      ocr: Readonly<{
+        recognize: (options: {
+          data: string;
+          fileName: string;
+          mimeType: string;
+          token: string;
+        }) => Promise<{ jobId?: string; text: string }>;
+      }>;
       backup: Readonly<{
         bindFolder: () => Promise<{ folderName: string }>;
         getStatus: () => Promise<{ bound: boolean; folderName?: string }>;

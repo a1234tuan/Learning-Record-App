@@ -9,6 +9,9 @@ ipcRenderer.on("study-journal:backup-flush-request", async (_event, payload) => 
 
 contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
   isDesktop: true,
+  ocr: Object.freeze({
+    recognize: (options) => ipcRenderer.invoke("study-journal:desktop-ocr-recognize", options),
+  }),
   backup: Object.freeze({
     bindFolder: () => ipcRenderer.invoke("study-journal:desktop-backup-bind"),
     getStatus: () => ipcRenderer.invoke("study-journal:desktop-backup-status"),

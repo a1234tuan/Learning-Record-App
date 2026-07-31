@@ -1,4 +1,5 @@
 import type { Asset } from "../types";
+import { canUseDesktopOcr, runDesktopOcr } from "./desktopOcr";
 import { canUseNativeOcr, runNativeOcr } from "./nativeOcr";
 import { getPaddleOcrToken } from "./ocrSettings";
 
@@ -108,6 +109,18 @@ export const runPaddleOcr = async (
   if (canUseNativeOcr()) {
     await onProgress?.({ ocrStatus: "running" });
     const result = await runNativeOcr(asset, token);
+    if (result.jobId) {
+      await onProgress?.({ ocrJobId: result.jobId });
+    }
+    if (!result.text.trim()) {
+      throw new Error("上游返回空 OCR 文本。");
+    }
+    return result.text.trim();
+  }
+
+  if (canUseDesktopOcr()) {
+    await onProgress?.({ ocrStatus: "running" });
+    const result = await runDesktopOcr(asset, token);
     if (result.jobId) {
       await onProgress?.({ ocrJobId: result.jobId });
     }

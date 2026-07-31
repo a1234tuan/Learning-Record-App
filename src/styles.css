@@ -5034,6 +5034,8 @@ button:disabled {
 .structure-node-actions button,
 .comparison-row-card button,
 .comparison-column-editor button,
+.comparison-row-actions button,
+.comparison-column-delete,
 .sticky-note button,
 .structure-block-head button,
 .collapse-block-head button {
@@ -5441,8 +5443,82 @@ button:disabled {
   text-align: left;
 }
 
-.comparison-markdown-cell {
+.comparison-block .comparison-grid-cell[tabindex] {
+  cursor: text;
+}
+
+.comparison-grid-cell.editing {
+  padding: 6px;
+  outline: 2px solid color-mix(in srgb, var(--primary) 58%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary) 12%);
+}
+
+.comparison-grid-cell textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
+  min-height: 3.2rem;
+  padding: 7px 8px;
+  border: 1px solid var(--primary);
+  border-radius: 5px;
+  outline: 0;
+  resize: vertical;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+}
+
+.comparison-grid-head {
+  padding-right: 36px;
+}
+
+.comparison-column-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--danger);
+}
+
+.comparison-markdown-cell {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.comparison-markdown-cell > span {
+  display: block;
+  min-width: 0;
+}
+
+.comparison-markdown-cell p {
+  margin: 0.2em 0;
+}
+
+.comparison-markdown-cell p:first-child {
+  margin-top: 0;
+}
+
+.comparison-markdown-cell p:last-child {
+  margin-bottom: 0;
+}
+
+.comparison-markdown-cell .katex-display {
+  max-width: 100%;
+  margin: 0.25em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.comparison-markdown-cell .formula-render-pending {
+  max-width: 100%;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -5485,6 +5561,36 @@ button:disabled {
 .comparison-fixed-panel .comparison-grid-cell:last-child,
 .comparison-scroll-grid-row:last-child .comparison-grid-cell {
   border-bottom: 0;
+}
+
+.comparison-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.comparison-row-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.comparison-row-actions strong {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.comparison-row-actions button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
 }
 
 .comparison-scroll-grid-row .comparison-grid-cell:last-child {

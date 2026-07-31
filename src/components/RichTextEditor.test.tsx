@@ -944,11 +944,79 @@ describe("RichTextEditor", () => {
     render(<RichTextEditor value={html} onChange={vi.fn()} readOnly />);
     await waitFor(() => expect(document.querySelector(".comparison-fixed-panel")).toBeInTheDocument());
     expect(document.querySelectorAll(".comparison-table-right-scroll")).toHaveLength(1);
+    await waitFor(() => expect(document.querySelector(".comparison-markdown-cell strong")).toBeInTheDocument());
     expect(document.querySelector(".comparison-markdown-cell code")).toHaveTextContent("vector<int>");
     expect(document.querySelector(".comparison-markdown-cell strong")).toHaveTextContent("粗体");
     expect(document.querySelector(".comparison-markdown-cell em")).toHaveTextContent("斜体");
+    await waitFor(() => expect(document.querySelector('.comparison-markdown-cell a[href="https://openai.com"]')).toBeInTheDocument());
     expect(document.querySelector('.comparison-markdown-cell a[href="https://openai.com"]')).toBeInTheDocument();
     expect(document.querySelector(".comparison-table-view")).toHaveTextContent("a | b");
+  });
+
+  it("keeps a rendered table in edit mode and commits a cell only after editing finishes", async () => {
+    const onChange = vi.fn();
+    const table = {
+      title: "公式表",
+      columns: [
+        { id: "concept", label: "概念" },
+        { id: "value", label: "结果" },
+      ],
+      rows: [{ id: "row-1", cells: { concept: "旧值", value: "$x^2$" } }],
+    };
+    render(
+      <RichTextEditor
+        value={`<record-comparison-table data-json='${serializeStructureData(table)}' data-format="markdown"></record-comparison-table>`}
+        onChange={onChange}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("旧值")).toBeInTheDocument());
+    expect(document.querySelectorAll(".comparison-grid-cell textarea")).toHaveLength(0);
+
+    fireEvent.click(screen.getByLabelText("第 1 行首列，点击编辑"));
+    const input = screen.getByRole("textbox", { name: "第 1 行首列" });
+    const callsBeforeTyping = onChange.mock.calls.length;
+    fireEvent.change(input, { target: { value: "新值" } });
+    expect(onChange).toHaveBeenCalledTimes(callsBeforeTyping);
+
+    fireEvent.blur(input);
+    await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("新值"));
+    expect(document.querySelectorAll(".comparison-grid-cell textarea")).toHaveLength(0);
+
+    fireEvent.click(screen.getByLabelText("第 1 行首列，点击编辑"));
+    const cancelledInput = screen.getByRole("textbox", { name: "第 1 行首列" });
+    const callsBeforeCancel = onChange.mock.calls.length;
+    fireEvent.change(cancelledInput, { target: { value: "不会保存" } });
+    fireEvent.keyDown(cancelledInput, { key: "Escape" });
+    expect(onChange).toHaveBeenCalledTimes(callsBeforeCancel);
+  });
+
+  it("renders inline and block math in Markdown table cells", async () => {
+    const table = {
+      title: "数学表",
+      columns: [
+        { id: "concept", label: "符号" },
+        { id: "value", label: "表达式" },
+      ],
+      rows: [{
+        id: "row-1",
+        cells: {
+          concept: "$a^2+b^2$",
+          value: "$$\n\\int_0^1 x^2\\,dx\n$$",
+        },
+      }],
+    };
+    const { container } = render(
+      <RichTextEditor
+        value={`<record-comparison-table data-json='${serializeStructureData(table)}' data-format="markdown"></record-comparison-table>`}
+        onChange={vi.fn()}
+        readOnly
+      />,
+    );
+
+    await waitFor(() => expect(container.querySelectorAll(".comparison-markdown-cell .katex").length).toBeGreaterThanOrEqual(2));
+    expect(container.querySelector(".comparison-markdown-cell .katex-display")).toBeInTheDocument();
   });
 
   it("parses a complete plain-text Markdown paste with links and a horizontal rule", async () => {

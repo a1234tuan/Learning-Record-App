@@ -2,8 +2,7 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { Fragment } from "@tiptap/pm/model";
 import { ChevronDown, ChevronRight, Copy, GitBranch, Plus, Trash2, ArrowDown, ArrowUp } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import MarkdownIt from "markdown-it";
+import { type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   createBlankStructureNode,
@@ -25,6 +24,7 @@ import {
   type StructureDiagramData,
   type StructureDiagramNode,
 } from "../lib/recordStructureBlocks";
+import { DeferredMathMarkup } from "./DeferredMath";
 
 type UpdateAttributes = NodeViewProps["updateAttributes"];
 
@@ -34,19 +34,17 @@ const commitData = (updateAttributes: UpdateAttributes, data: unknown) => {
   updateAttributes({ data: serializeStructureData(data) });
 };
 
-const comparisonCellMarkdown = new MarkdownIt({ html: false, breaks: false, linkify: false, typographer: false });
-comparisonCellMarkdown.disable("image");
+type ComparisonEditingCell =
+  | { kind: "header"; columnId: string }
+  | { kind: "body"; rowId: string; columnId: string };
 
-const renderComparisonCell = (value: string | undefined, markdown: boolean) => {
-  const content = value?.trim() ?? "";
-  if (!content) {
-    return <span className="empty-cell">—</span>;
-  }
-  if (!markdown) {
-    return content;
-  }
-  return <span className="comparison-markdown-cell" dangerouslySetInnerHTML={{ __html: comparisonCellMarkdown.renderInline(content) }} />;
-};
+const sameEditingCell = (left: ComparisonEditingCell | undefined, right: ComparisonEditingCell): boolean =>
+  Boolean(
+    left
+    && left.kind === right.kind
+    && left.columnId === right.columnId
+    && (left.kind === "header" || (right.kind === "body" && left.rowId === right.rowId)),
+  );
 
 const nodeRange = ({ editor, getPos, node }: Pick<NodeViewProps, "editor" | "getPos" | "node">) => {
   if (typeof getPos !== "function") {
@@ -355,6 +353,8 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
   const fixedCellRefs = useRef<Array<HTMLDivElement | null>>([]);
   const scrollRowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const [rowHeights, setRowHeights] = useState<number[]>([]);
+  const [editingCell, setEditingCell] = useState<ComparisonEditingCell>();
+  const [editingValue, setEditingValue] = useState("");
   const update = (next: ComparisonTableData) => commitData(props.updateAttributes, next);
   const firstColumn = data.columns[0];
   const scrollColumns = data.columns.slice(1);
@@ -388,10 +388,6 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
   }, [data.rows.length]);
 
   useLayoutEffect(() => {
-    if (editable) {
-      return undefined;
-    }
-
     let frame = 0;
     const scheduleMeasure = () => {
       if (frame) {
@@ -419,7 +415,7 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
       observer?.disconnect();
       window.removeEventListener("resize", scheduleMeasure);
     };
-  }, [editable, measureRowHeights, rawData]);
+  }, [measureRowHeights, rawData]);
 
   const rowStyle = (index: number): React.CSSProperties | undefined => {
     const minHeight = rowHeights[index];
@@ -455,6 +451,41 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
     ...data,
     rows: data.rows.map((row) => row.id === rowId ? { ...row, cells: { ...row.cells, [columnId]: value } } : row),
   });
+  const startEditing = (cell: ComparisonEditingCell, value: string) => {
+    if (!editable) {
+      return;
+    }
+    setEditingCell(cell);
+    setEditingValue(value);
+  };
+  const cancelEditing = () => {
+    setEditingCell(undefined);
+    setEditingValue("");
+  };
+  const commitEditing = () => {
+    const active = editingCell;
+    if (!active) {
+      return;
+    }
+    if (active.kind === "header") {
+      updateColumn(active.columnId, editingValue);
+    } else {
+      updateCell(active.rowId, active.columnId, editingValue);
+    }
+    cancelEditing();
+  };
+  const handleEditingKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+      return;
+    }
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      commitEditing();
+    }
+  };
   const moveRow = (rowId: string, direction: -1 | 1) => {
     const index = data.rows.findIndex((row) => row.id === rowId);
     const target = index + direction;
@@ -466,125 +497,167 @@ const ComparisonTableNodeView = (props: NodeViewProps) => {
     update({ ...data, rows });
   };
 
+  const renderCellContent = (cell: ComparisonEditingCell, value: string, label: string) => {
+    const active = sameEditingCell(editingCell, cell);
+    if (active) {
+      return (
+        <textarea
+          autoFocus
+          aria-label={label}
+          value={editingValue}
+          rows={cell.kind === "header" ? 1 : 3}
+          onChange={(event) => setEditingValue(event.target.value)}
+          onBlur={commitEditing}
+          onKeyDown={handleEditingKeyDown}
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        />
+      );
+    }
+    if (!value.trim()) {
+      return <span className="empty-cell">—</span>;
+    }
+    return <DeferredMathMarkup source={value} markdown={markdownCells} className="comparison-markdown-cell" />;
+  };
+
+  const renderCell = (
+    cell: ComparisonEditingCell,
+    value: string,
+    label: string,
+    options: { header?: boolean; sticky?: boolean; rowIndex?: number; columnId: string },
+  ) => (
+    <div
+      key={`${cell.kind}-${cell.columnId}-${cell.kind === "body" ? cell.rowId : "header"}`}
+      className={`comparison-grid-cell${options.header ? " comparison-grid-head" : ""}${options.sticky ? " sticky-column" : ""}${sameEditingCell(editingCell, cell) ? " editing" : ""}`}
+      role={options.header ? "columnheader" : "cell"}
+      contentEditable={false}
+      tabIndex={editable ? 0 : undefined}
+      aria-label={editable ? `${label}，点击编辑` : label}
+      onClick={() => startEditing(cell, value)}
+      onKeyDown={(event) => {
+        if (!editable || event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        startEditing(cell, value);
+      }}
+    >
+      {renderCellContent(cell, value, label)}
+      {editable && options.header && data.columns.length > 1 && (
+        <button
+          type="button"
+          className="comparison-column-delete"
+          aria-label={`删除${value || "当前"}列`}
+          title="删除列"
+          onClick={(event) => {
+            event.stopPropagation();
+            removeColumn(options.columnId);
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <NodeViewWrapper className={`structure-block comparison-block${props.selected ? " selected" : ""}`} data-structure-kind="comparison">
       <BlockToolbar {...props} />
       {editable ? (
-        <>
-          <div className="structure-block-head" contentEditable={false}>
-            <input value={data.title} onChange={(event) => update({ ...data, title: event.target.value })} />
-            <button type="button" onClick={() => update({ ...data, rows: [...data.rows, createComparisonRow(data.columns)] })}>加行</button>
-            <button type="button" onClick={addColumn}>加列</button>
-          </div>
-          <div className="comparison-editor">
-            <div className="comparison-column-editor">
-              {data.columns.map((column) => (
-                <label key={column.id}>
-                  <input value={column.label} onChange={(event) => updateColumn(column.id, event.target.value)} />
-                  <button type="button" className="danger" onClick={() => removeColumn(column.id)}>删列</button>
-                </label>
-              ))}
-            </div>
-            {data.rows.map((row, rowIndex) => (
-              <article key={row.id} className="comparison-row-card">
-                <header>
-                  <strong>第 {rowIndex + 1} 行</strong>
-                  <span>
-                    <button type="button" onClick={() => moveRow(row.id, -1)}>上移</button>
-                    <button type="button" onClick={() => moveRow(row.id, 1)}>下移</button>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => update({ ...data, rows: data.rows.length > 1 ? data.rows.filter((item) => item.id !== row.id) : data.rows })}
-                    >
-                      删除
-                    </button>
-                  </span>
-                </header>
-                {data.columns.map((column) => (
-                  <label key={column.id}>
-                    <span>{column.label}</span>
-                    <textarea value={row.cells[column.id] ?? ""} onChange={(event) => updateCell(row.id, column.id, event.target.value)} />
-                  </label>
-                ))}
-              </article>
-            ))}
-          </div>
-        </>
-      ) : (
-        <>
-          {data.title && <h3>{data.title}</h3>}
-          <div className="comparison-table-scroll">
-            <div
-              className={`comparison-table-view comparison-panel-view${scrollColumns.length === 0 ? " single-column" : ""}`}
-              role="table"
-              style={{ "--comparison-scroll-column-count": scrollColumnCount } as React.CSSProperties}
-            >
-              <div className="comparison-fixed-panel" role="presentation">
-                <div
-                  className="comparison-grid-cell comparison-grid-head sticky-column"
-                  role="columnheader"
-                  ref={(node) => setFixedCellRef(0, node)}
-                  style={rowStyle(0)}
-                >
-                  {renderComparisonCell(firstColumn?.label ?? "概念", markdownCells)}
-                </div>
-                {data.rows.map((row, rowIndex) => {
-                  const firstValue = firstColumn ? row.cells[firstColumn.id] : "";
-                  return (
-                    <div
-                      key={row.id}
-                      className="comparison-grid-cell sticky-column"
-                      role="cell"
-                      ref={(node) => setFixedCellRef(rowIndex + 1, node)}
-                      style={rowStyle(rowIndex + 1)}
-                    >
-                      {renderComparisonCell(firstValue, markdownCells)}
-                    </div>
-                  );
-                })}
-              </div>
-              {scrollColumns.length > 0 && (
-                <div className="comparison-scroll-panel" role="presentation">
-                  <div className="comparison-table-right-scroll" role="presentation">
-                    <div className="comparison-scroll-grid">
-                      <div
-                        className="comparison-scroll-grid-row comparison-grid-head-row"
-                        role="row"
-                        ref={(node) => setScrollRowRef(0, node)}
-                        style={rowStyle(0)}
-                      >
-                        {scrollColumns.map((column) => (
-                          <div key={column.id} className="comparison-grid-cell comparison-grid-head" role="columnheader">
-                            {renderComparisonCell(column.label, markdownCells)}
-                          </div>
-                        ))}
-                      </div>
-                      {data.rows.map((row, rowIndex) => (
-                        <div
-                          key={row.id}
-                          className="comparison-scroll-grid-row"
-                          role="row"
-                          ref={(node) => setScrollRowRef(rowIndex + 1, node)}
-                          style={rowStyle(rowIndex + 1)}
-                        >
-                          {scrollColumns.map((column) => {
-                            const value = row.cells[column.id];
-                            return (
-                              <div key={column.id} className="comparison-grid-cell" role="cell">
-                                {renderComparisonCell(value, markdownCells)}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+        <div className="structure-block-head" contentEditable={false}>
+          <input value={data.title} onChange={(event) => update({ ...data, title: event.target.value })} />
+          <button type="button" onClick={() => update({ ...data, rows: [...data.rows, createComparisonRow(data.columns)] })}>加行</button>
+          <button type="button" onClick={addColumn}>加列</button>
+        </div>
+      ) : data.title && <h3>{data.title}</h3>}
+      <div className="comparison-table-scroll">
+        <div
+          className={`comparison-table-view comparison-panel-view${scrollColumns.length === 0 ? " single-column" : ""}`}
+          role="table"
+          style={{ "--comparison-scroll-column-count": scrollColumnCount } as React.CSSProperties}
+        >
+          <div className="comparison-fixed-panel" role="presentation">
+            <div ref={(node) => setFixedCellRef(0, node)} style={rowStyle(0)}>
+              {renderCell(
+                { kind: "header", columnId: firstColumn?.id ?? "" },
+                firstColumn?.label ?? "概念",
+                "表格首列表头",
+                { header: true, sticky: true, columnId: firstColumn?.id ?? "" },
               )}
             </div>
+            {data.rows.map((row, rowIndex) => {
+              const firstValue = firstColumn ? row.cells[firstColumn.id] ?? "" : "";
+              return (
+                <div key={row.id} ref={(node) => setFixedCellRef(rowIndex + 1, node)} style={rowStyle(rowIndex + 1)}>
+                  {renderCell(
+                    { kind: "body", rowId: row.id, columnId: firstColumn?.id ?? "" },
+                    firstValue,
+                    `第 ${rowIndex + 1} 行首列`,
+                    { sticky: true, rowIndex, columnId: firstColumn?.id ?? "" },
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </>
+          {scrollColumns.length > 0 && (
+            <div className="comparison-scroll-panel" role="presentation">
+              <div className="comparison-table-right-scroll" role="presentation">
+                <div className="comparison-scroll-grid">
+                  <div
+                    className="comparison-scroll-grid-row comparison-grid-head-row"
+                    role="row"
+                    ref={(node) => setScrollRowRef(0, node)}
+                    style={rowStyle(0)}
+                  >
+                    {scrollColumns.map((column) => renderCell(
+                      { kind: "header", columnId: column.id },
+                      column.label,
+                      `${column.label || "未命名"}列表头`,
+                      { header: true, columnId: column.id },
+                    ))}
+                  </div>
+                  {data.rows.map((row, rowIndex) => (
+                    <div
+                      key={row.id}
+                      className="comparison-scroll-grid-row"
+                      role="row"
+                      ref={(node) => setScrollRowRef(rowIndex + 1, node)}
+                      style={rowStyle(rowIndex + 1)}
+                    >
+                      {scrollColumns.map((column) => renderCell(
+                        { kind: "body", rowId: row.id, columnId: column.id },
+                        row.cells[column.id] ?? "",
+                        `第 ${rowIndex + 1} 行${column.label || "未命名"}列`,
+                        { rowIndex, columnId: column.id },
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      {editable && (
+        <div className="comparison-row-actions" contentEditable={false}>
+          {data.rows.map((row, rowIndex) => (
+            <span key={row.id}>
+              <strong>第 {rowIndex + 1} 行</strong>
+              <button type="button" title="上移" aria-label={`上移第 ${rowIndex + 1} 行`} onClick={() => moveRow(row.id, -1)}><ArrowUp size={14} /></button>
+              <button type="button" title="下移" aria-label={`下移第 ${rowIndex + 1} 行`} onClick={() => moveRow(row.id, 1)}><ArrowDown size={14} /></button>
+              <button
+                type="button"
+                title="删除"
+                aria-label={`删除第 ${rowIndex + 1} 行`}
+                className="danger"
+                onClick={() => update({ ...data, rows: data.rows.length > 1 ? data.rows.filter((item) => item.id !== row.id) : data.rows })}
+              >
+                <Trash2 size={14} />
+              </button>
+            </span>
+          ))}
+        </div>
       )}
     </NodeViewWrapper>
   );

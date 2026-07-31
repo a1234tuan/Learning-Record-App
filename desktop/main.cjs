@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const { randomUUID } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { recognizePaddleOcr } = require("./ocr.cjs");
 
 const APP_SCHEME = "study-journal";
 const APP_HOST = "app";
@@ -318,6 +319,12 @@ const closeMainWindowAfterBackup = () => {
 };
 
 ipcMain.handle("study-journal:desktop-backup-bind", bindDesktopBackupFolder);
+ipcMain.handle("study-journal:desktop-ocr-recognize", (event, options) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error("桌面 OCR 请求来源无效。");
+  }
+  return recognizePaddleOcr(options);
+});
 ipcMain.handle("study-journal:desktop-backup-status", desktopBackupStatus);
 ipcMain.handle("study-journal:desktop-backup-ensure", async () => {
   const { folderName } = await resolveDesktopBackupRepositoryRoot(true);
