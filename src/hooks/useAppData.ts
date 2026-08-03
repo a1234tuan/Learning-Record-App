@@ -34,7 +34,7 @@ import {
 } from "../lib/subjects";
 import { enqueueAutoOcrForRecord } from "../services/ocrJobService";
 import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupService";
-import { cancelAllKnowledgePodcastJobs, subscribeKnowledgePodcastJobs } from "../services/knowledgePodcastJobService";
+import { cancelAllKnowledgePodcastJobs, recoverKnowledgePodcastJobs, subscribeKnowledgePodcastJobs, syncNativeKnowledgePodcastTtsJobs } from "../services/knowledgePodcastJobService";
 
 export const useAppData = () => {
   const [initialized, setInitialized] = useState(false);
@@ -84,6 +84,7 @@ export const useAppData = () => {
       if (!mounted) {
         return;
       }
+      await recoverKnowledgePodcastJobs();
       await refresh();
       setInitialized(true);
       await storage.purgeExpiredDeletedBlocks(30);
@@ -561,6 +562,14 @@ export const useAppData = () => {
   useEffect(() => subscribeKnowledgePodcastJobs(() => {
     void refresh();
   }), [refresh]);
+
+  useEffect(() => {
+    const syncOnVisible = () => {
+      if (document.visibilityState === "visible") void syncNativeKnowledgePodcastTtsJobs();
+    };
+    document.addEventListener("visibilitychange", syncOnVisible);
+    return () => document.removeEventListener("visibilitychange", syncOnVisible);
+  }, []);
 
   const deleteKnowledgePodcast = useCallback(async (id: string) => {
     cancelAllKnowledgePodcastJobs(id);

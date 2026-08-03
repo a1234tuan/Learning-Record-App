@@ -57,7 +57,7 @@ describe("KnowledgePodcastPage", () => {
     expect(container.querySelector(".podcast-player-actions")?.children).toHaveLength(4);
     expect(container.querySelector(".podcast-player-options")).toBeInTheDocument();
     expect(screen.getByRole("slider")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("voice-id-that-must-wrap-on-mobile")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("尚未配置，请前往 AI 工具设置")).toBeInTheDocument();
   });
 
   it("uses the shared scope picker for podcast date, tag, recent and record scopes", () => {
@@ -67,6 +67,13 @@ describe("KnowledgePodcastPage", () => {
     expect(screen.getByRole("tab", { name: "近期学习" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "按日期" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "选择日志" })).toBeInTheDocument();
+  });
+
+  it("shows the structured planner and a compact prompt preview for existing podcasts", () => {
+    render(<KnowledgePodcastPage {...props} />);
+    expect(screen.getByRole("heading", { name: "节目策划" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("像老师一样讲清重点、联系和易错点，并帮助复习")).toBeInTheDocument();
+    expect(screen.getByText("查看本期生成指令预览")).toBeInTheDocument();
   });
 
   it("marks legacy podcast audio as requiring a full regeneration and does not render its old player", () => {

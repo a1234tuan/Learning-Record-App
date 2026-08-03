@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeZipArchivePlugin.class);
         registerPlugin(NativeAiPlugin.class);
         registerPlugin(NativeTtsPlugin.class);
+        registerPlugin(NativePodcastTtsPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

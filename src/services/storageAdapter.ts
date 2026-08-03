@@ -231,26 +231,31 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.purgeMistakeAndReviewData();
     await this.migrateRecordReviewsToMixedSystem();
     await this.resetStaleOcrJobs(10 * 60 * 1000);
-    const interruptedPodcasts = await db.knowledgePodcasts.filter((podcast) => podcast.scriptStatus === "generating" || podcast.audioStatus === "generating").toArray();
-    if (interruptedPodcasts.length > 0) {
-      await db.knowledgePodcasts.bulkPut(interruptedPodcasts.map((podcast) => ({
-        ...podcast,
-        scriptStatus: podcast.scriptStatus === "generating" ? "failed" as const : podcast.scriptStatus,
-        audioStatus: podcast.audioStatus === "generating" ? "partial" as const : podcast.audioStatus,
-        segments: podcast.segments.map((segment) => segment.audioStatus === "generating" ? { ...segment, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : segment),
-        audioUnits: podcast.audioUnits?.map((unit) => unit.audioStatus === "generating" ? { ...unit, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : unit),
-        lastError: "上次生成被中断，请继续生成或重试失败章节。",
-        generation: podcast.generation ? {
-          ...podcast.generation,
-          status: "failed" as const,
-          stage: "failed" as const,
-          message: "上次生成被中断，请重新开始。",
-          updatedAt: nowISO(),
-        } : undefined,
-        updatedAt: nowISO(),
-      })));
-    }
     await this.getOrCreateEntry(todayISO());
+  }
+
+  async recoverInterruptedKnowledgePodcastJobs(activePodcastIds: Set<string> = new Set()): Promise<void> {
+    const interruptedPodcasts = await db.knowledgePodcasts
+      .filter((podcast) => (podcast.scriptStatus === "generating" || podcast.audioStatus === "generating") && !activePodcastIds.has(podcast.id))
+      .toArray();
+    if (interruptedPodcasts.length === 0) return;
+    await db.knowledgePodcasts.bulkPut(interruptedPodcasts.map((podcast) => ({
+      ...podcast,
+      scriptStatus: podcast.scriptStatus === "generating" ? "failed" as const : podcast.scriptStatus,
+      audioStatus: podcast.audioStatus === "generating" ? "partial" as const : podcast.audioStatus,
+      segments: podcast.segments.map((segment) => segment.audioStatus === "generating" ? { ...segment, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : segment),
+      audioUnits: podcast.audioUnits?.map((unit) => unit.audioStatus === "generating" ? { ...unit, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : unit),
+      lastError: "任务可能已中断，请继续生成或重试失败章节。",
+      generation: podcast.generation ? {
+        ...podcast.generation,
+        status: "failed" as const,
+        stage: "failed" as const,
+        message: "任务可能已中断，请重新开始。",
+        updatedAt: nowISO(),
+        heartbeatAt: nowISO(),
+      } : undefined,
+      updatedAt: nowISO(),
+    })));
   }
 
   private async recordBlocks(): Promise<RecordBlock[]> {

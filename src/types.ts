@@ -414,6 +414,41 @@ export interface AiTtsConfig {
   format: "mp3";
 }
 
+/** The per-episode editorial brief used to steer a knowledge-podcast script. */
+export interface KnowledgePodcastCreativeBrief {
+  objective?: string;
+  audience?: string;
+  narratorRole?: string;
+  tone?: string;
+  organization?: string;
+  mustCover?: string;
+  avoid?: string;
+  chapterRequirements?: string;
+  openingRequirements?: string;
+  closingRequirements?: string;
+  supplementaryRequirements?: string;
+}
+
+/** A reusable, user-authored direction for knowledge-podcast scripts. */
+export interface KnowledgePodcastModeTemplate extends BaseEntity {
+  title: string;
+  /**
+   * An advanced authoring template. It may contain supported {{变量}} tokens;
+   * the system appends the source and JSON constraints separately.
+   */
+  prompt: string;
+  order: number;
+}
+
+export type KnowledgePodcastMode = "summary" | "explain" | "custom";
+
+/** A copy of a selected template so historical episodes remain reproducible. */
+export interface KnowledgePodcastCustomModeSnapshot {
+  templateId: EntityId;
+  title: string;
+  prompt: string;
+}
+
 export interface KnowledgePodcastSegment {
   id: EntityId;
   order: number;
@@ -463,6 +498,10 @@ export interface KnowledgePodcastGenerationProgress {
   message: string;
   startedAt: ISODateTime;
   updatedAt: ISODateTime;
+  /** Updated by the active runner; a stale heartbeat means the runner is gone. */
+  heartbeatAt?: ISODateTime;
+  requestStartedAt?: ISODateTime;
+  nativeJobId?: string;
   providerName?: string;
   model?: string;
   attempt?: number;
@@ -470,6 +509,18 @@ export interface KnowledgePodcastGenerationProgress {
   total?: number;
   partCurrent?: number;
   partTotal?: number;
+}
+
+export interface KnowledgePodcastTtsDiagnostic {
+  at: ISODateTime;
+  unitId?: EntityId;
+  unitTitle?: string;
+  partCurrent?: number;
+  partTotal?: number;
+  attempt?: number;
+  httpStatus?: number;
+  requestId?: string;
+  message: string;
 }
 
 export interface KnowledgePodcastScriptDiagnostic {
@@ -483,8 +534,16 @@ export interface KnowledgePodcastScriptDiagnostic {
 
 export interface KnowledgePodcast extends BaseEntity {
   title: string;
-  mode: "summary" | "explain";
+  mode: KnowledgePodcastMode;
+  customMode?: KnowledgePodcastCustomModeSnapshot;
+  /** Structured episode-specific direction, independent from the reusable mode. */
+  creativeBrief?: KnowledgePodcastCreativeBrief;
+  /** One-off direction for this episode, independent from the global mode. */
+  focusInstruction?: string;
   targetMinutes: 3 | 5 | 10;
+  speechCharacterCount?: number;
+  estimatedDurationSeconds?: number;
+  durationTargetDeviation?: number;
   scope: AiKnowledgeScope;
   sourceRecordIds: EntityId[];
   contextHash: string;
@@ -501,6 +560,7 @@ export interface KnowledgePodcast extends BaseEntity {
   lastError?: string;
   generation?: KnowledgePodcastGenerationProgress;
   scriptDiagnostic?: KnowledgePodcastScriptDiagnostic;
+  ttsDiagnostics?: KnowledgePodcastTtsDiagnostic[];
   playback?: { unitId?: EntityId; segmentId?: EntityId; positionSeconds: number };
   ttsConfig: {
     providerId: "fish-audio";
@@ -540,6 +600,8 @@ export interface Asset extends BaseEntity {
   size: number;
   kind: "image" | "attachment" | "audio";
   generatedBy?: "knowledge-podcast";
+  generatedForPodcastId?: EntityId;
+  generatedForAudioUnitId?: EntityId;
   data: Blob;
   durationSeconds?: number;
   ocrStatus?: "idle" | "queued" | "running" | "done" | "failed" | "timeout";
@@ -645,6 +707,7 @@ export interface AppSettings {
   autoBackup?: AutoBackupSettings;
   ai?: AiProviderConfig;
   tts?: AiTtsConfig;
+  knowledgePodcastModeTemplates?: KnowledgePodcastModeTemplate[];
   schemaVersion?: 1 | 2 | 3 | 4;
 }
 
@@ -848,6 +911,7 @@ export interface StorageAdapter {
   getKnowledgePodcast?(id: EntityId): Promise<KnowledgePodcast | undefined>;
   saveKnowledgePodcast?(podcast: KnowledgePodcast): Promise<KnowledgePodcast>;
   deleteKnowledgePodcast?(id: EntityId): Promise<void>;
+  recoverInterruptedKnowledgePodcastJobs?(activePodcastIds?: Set<EntityId>): Promise<void>;
   listAiSessions?(): Promise<AiChatSession[]>;
   getAiSession?(id: EntityId): Promise<AiChatSession | undefined>;
   saveAiSession?(session: AiChatSession): Promise<AiChatSession>;

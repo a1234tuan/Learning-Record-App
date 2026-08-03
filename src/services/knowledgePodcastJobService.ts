@@ -1,4 +1,5 @@
-import type { KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastGenerationProgress } from "../types";
+import type { KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastGenerationProgress, KnowledgePodcastTtsDiagnostic } from "../types";
+import { newId } from "../lib/entity";
 import { getCurrentAiProvider } from "../lib/aiProviders";
 import {
   FishAudioTtsProvider,
@@ -10,11 +11,23 @@ import {
   splitTtsText,
 } from "./knowledgePodcastService";
 import { storage } from "./storageAdapter";
+import {
+  acknowledgeNativePodcastTtsArtifact,
+  base64ToPodcastAudioBlob,
+  cancelNativePodcastTts,
+  getNativePodcastTtsState,
+  isNativePodcastTtsAvailable,
+  requestNativePodcastTtsNotificationPermission,
+  startNativePodcastTts,
+  takeNativePodcastTtsArtifact,
+  type NativePodcastTtsState,
+} from "./nativePodcastTts";
 
 type PodcastJobKind = "script" | "audio";
 
 const controllers = new Map<string, AbortController>();
 const listeners = new Set<() => void>();
+const nativePollTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 const jobKey = (podcastId: string, kind: PodcastJobKind) => `${podcastId}:${kind}`;
 const now = () => new Date().toISOString();
@@ -86,6 +99,26 @@ const cleanupReplacedAudio = async (podcast: KnowledgePodcast): Promise<Knowledg
   return { ...podcast, pendingAudioCleanupAssetIds: undefined };
 };
 
+const appendTtsDiagnostics = (
+  podcast: KnowledgePodcast,
+  diagnostics: NativePodcastTtsState["diagnostics"] | undefined,
+): KnowledgePodcast => diagnostics?.length ? {
+  ...podcast,
+  ttsDiagnostics: diagnostics.slice(-10).map((diagnostic) => ({ ...diagnostic } satisfies KnowledgePodcastTtsDiagnostic)),
+} : podcast;
+
+const stopNativeMonitor = (podcastId: string): void => {
+  const timer = nativePollTimers.get(podcastId);
+  if (timer) clearInterval(timer);
+  nativePollTimers.delete(podcastId);
+};
+
+const startNativeMonitor = (podcastId: string): void => {
+  if (nativePollTimers.has(podcastId)) return;
+  const timer = setInterval(() => { void syncNativeKnowledgePodcastTtsJobs(); }, 5_000);
+  nativePollTimers.set(podcastId, timer);
+};
+
 const progress = (
   kind: PodcastJobKind,
   stage: KnowledgePodcastGenerationProgress["stage"],
@@ -99,6 +132,7 @@ const progress = (
   message,
   startedAt,
   updatedAt: now(),
+  heartbeatAt: now(),
   ...patch,
 });
 
@@ -112,11 +146,129 @@ export const isKnowledgePodcastJobRunning = (podcastId: string, kind: PodcastJob
 
 export const cancelKnowledgePodcastJob = (podcastId: string, kind: PodcastJobKind): void => {
   controllers.get(jobKey(podcastId, kind))?.abort();
+  if (kind === "audio") void cancelNativePodcastTts(undefined, podcastId);
 };
 
 export const cancelAllKnowledgePodcastJobs = (podcastId: string): void => {
   cancelKnowledgePodcastJob(podcastId, "script");
   cancelKnowledgePodcastJob(podcastId, "audio");
+};
+
+/**
+ * Imports completed files from the Android foreground service and mirrors its
+ * durable state into Dexie. It is safe to invoke at startup, resume and while
+ * a page is mounted: imported assets are tagged by podcast/unit and reused.
+ */
+export const syncNativeKnowledgePodcastTtsJobs = async (): Promise<Set<string>> => {
+  const activePodcastIds = new Set<string>();
+  if (!isNativePodcastTtsAvailable()) return activePodcastIds;
+  const state = await getNativePodcastTtsState().catch(() => undefined);
+  if (!state?.podcastId || !state.jobId) return activePodcastIds;
+  const key = jobKey(state.podcastId, "audio");
+  const nativeRunning = state.status === "running" && state.runnerActive !== false;
+  if (nativeRunning) {
+    activePodcastIds.add(state.podcastId);
+    if (!controllers.has(key)) controllers.set(key, new AbortController());
+    startNativeMonitor(state.podcastId);
+  }
+  let podcast = await storage.getKnowledgePodcast?.(state.podcastId);
+  if (!podcast) return activePodcastIds;
+
+  // Artifacts stay in the native private directory until this acknowledgement,
+  // making imports idempotent across an activity recreation or a crash.
+  for (;;) {
+    const artifact = await takeNativePodcastTtsArtifact().catch(() => undefined);
+    if (!artifact || artifact.podcastId !== podcast.id) break;
+    const unit = podcast.audioUnits?.find((item) => item.id === artifact.unitId);
+    if (!unit) {
+      await acknowledgeNativePodcastTtsArtifact(artifact.jobId, artifact.unitId);
+      continue;
+    }
+    const assets = await storage.listAssets();
+    let asset = assets.find((item) => item.generatedForPodcastId === podcast!.id && item.generatedForAudioUnitId === unit.id);
+    if (!asset) {
+      const blob = base64ToPodcastAudioBlob(artifact.data, artifact.mimeType);
+      const file = new File([blob], `${podcast.title}-${String(unit.order + 1).padStart(2, "0")}-${unit.title}.mp3`, { type: artifact.mimeType || "audio/mpeg" });
+      asset = await storage.saveAsset(file, "audio", unit.title);
+      await storage.patchAsset?.(asset.id, {
+        generatedBy: "knowledge-podcast",
+        generatedForPodcastId: podcast.id,
+        generatedForAudioUnitId: unit.id,
+      });
+    }
+    const textHash = await hashText(unitText(podcast, unit));
+    podcast = await savePodcast(updateUnit(podcast, unit.id, {
+      textHash,
+      audioAssetId: asset.id,
+      audioStatus: "ready",
+      error: undefined,
+    }));
+    await acknowledgeNativePodcastTtsArtifact(artifact.jobId, artifact.unitId);
+  }
+
+  const nativeUnits = new Map(state.units.map((unit) => [unit.unitId, unit]));
+  for (const unit of podcast.audioUnits ?? []) {
+    const nativeUnit = nativeUnits.get(unit.id);
+    if (!nativeUnit || nativeUnit.status === "ready") continue;
+    if (nativeUnit.status === "failed") {
+      podcast = updateUnit(podcast, unit.id, { audioStatus: "failed", error: nativeUnit.error || "Fish Audio 生成失败。" });
+    } else if (nativeRunning) {
+      podcast = updateUnit(podcast, unit.id, { audioStatus: nativeUnit.status === "generating" ? "generating" : "pending", error: undefined });
+    }
+  }
+  podcast = appendTtsDiagnostics(podcast, state.diagnostics);
+  const startedAt = podcast.generation?.startedAt || state.startedAt || now();
+  if (nativeRunning) {
+    podcast = await savePodcast({
+      ...podcast,
+      audioStatus: "generating",
+      generation: progress("audio", "generating-segment", state.message, startedAt, {
+        providerName: "Fish Audio",
+        model: podcast.ttsConfig.model,
+        current: state.current,
+        total: state.total,
+        partCurrent: state.partCurrent,
+        partTotal: state.partTotal,
+        nativeJobId: state.jobId,
+        heartbeatAt: state.heartbeatAt || state.updatedAt,
+        requestStartedAt: state.requestStartedAt,
+      }),
+    });
+    return activePodcastIds;
+  }
+
+  const allReady = (podcast.audioUnits?.length ?? 0) > 0 && podcast.audioUnits!.every((unit) => unit.audioStatus === "ready" && unit.audioAssetId);
+  if (allReady) podcast = await cleanupReplacedAudio(podcast);
+  const cancelled = state.status === "cancelled";
+  const failed = state.status === "failed" || state.status === "running";
+  const terminalMessage = state.status === "running" ? "后台音频任务没有活动服务，任务可能已中断，请继续生成。" : state.message;
+  await savePodcast({
+    ...podcast,
+    audioStatus: allReady ? "ready" : audioStatusForUnits(podcast.audioUnits ?? []),
+    lastError: failed ? terminalMessage : undefined,
+    generation: {
+      ...progress("audio", cancelled ? "cancelled" : failed ? "failed" : "completed", terminalMessage, startedAt, {
+        providerName: "Fish Audio",
+        model: podcast.ttsConfig.model,
+        current: state.current,
+        total: state.total,
+        nativeJobId: state.jobId,
+        heartbeatAt: state.heartbeatAt || state.updatedAt,
+      }),
+      status: cancelled ? "cancelled" : failed ? "failed" : "completed",
+    },
+  });
+  controllers.delete(key);
+  stopNativeMonitor(state.podcastId);
+  emit();
+  return activePodcastIds;
+};
+
+export const recoverKnowledgePodcastJobs = async (): Promise<void> => {
+  const active = await syncNativeKnowledgePodcastTtsJobs();
+  await storage.recoverInterruptedKnowledgePodcastJobs?.(active);
+  await syncNativeKnowledgePodcastTtsJobs();
+  emit();
 };
 
 export const startKnowledgePodcastScriptJob = async (podcastId: string): Promise<void> => {
@@ -179,6 +331,7 @@ export const startKnowledgePodcastScriptJob = async (podcastId: string): Promise
       current = await savePodcast({
         ...current,
         ...result.script,
+        ...result.estimate,
         audioLayoutVersion: 2,
         audioUnits,
         pendingAudioCleanupAssetIds: Array.from(new Set(previousAudioIds)),
@@ -222,7 +375,9 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
   if (!podcast?.segments.length || !podcast.audioUnits?.length) throw new Error("请先生成脚本。");
   const settings = await storage.getSettings();
   const apiKey = (await storage.getAiSecret?.("fish-audio"))?.apiKey;
-  const voiceId = podcast.ttsConfig.voiceId.trim() || settings.tts?.voiceId?.trim();
+  // The AI-tools setting is the source of truth for all future generation.
+  // Legacy per-episode values are only kept as a compatibility fallback.
+  const voiceId = settings.tts?.voiceId?.trim() || podcast.ttsConfig.voiceId.trim();
   if (!apiKey) throw new Error("请先在 AI 工具设置中填写 Fish Audio API Key。");
   if (!voiceId) throw new Error("请先在 AI 工具设置中填写 Voice ID。");
 
@@ -241,6 +396,62 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
       total: podcast.audioUnits.length,
     }),
   });
+
+  if (isNativePodcastTtsAvailable()) {
+    const queue = [] as Array<{ unitId: string; title: string; order: number; parts: string[] }>;
+    for (const unit of current.audioUnits ?? []) {
+      if (onlyUnitId && unit.id !== onlyUnitId) continue;
+      const existing = unit.audioAssetId ? await storage.getAsset(unit.audioAssetId) : undefined;
+      if (unit.audioStatus === "ready" && existing) continue;
+      const text = unitText(current, unit);
+      if (text) queue.push({ unitId: unit.id, title: unit.title, order: unit.order, parts: splitTtsText(text) });
+    }
+    if (queue.length === 0) {
+      controllers.delete(key);
+      current = await savePodcast({
+        ...current,
+        audioStatus: audioStatusForUnits(current.audioUnits ?? []),
+        generation: { ...progress("audio", "completed", "没有需要生成的音频单元。", startedAt), status: "completed" },
+      });
+      return;
+    }
+    const nativeJobId = newId();
+    current = await savePodcast({
+      ...current,
+      generation: progress("audio", "preparing-audio", "正在启动 Android 后台音频服务…", startedAt, {
+        providerName: "Fish Audio",
+        model: current.ttsConfig.model,
+        current: 0,
+        total: queue.length,
+        nativeJobId,
+      }),
+    });
+    try {
+      await requestNativePodcastTtsNotificationPermission();
+      await startNativePodcastTts({
+        jobId: nativeJobId,
+        podcastId: current.id,
+        podcastTitle: current.title,
+        apiKey,
+        model: current.ttsConfig.model,
+        voiceId,
+        units: queue,
+      });
+      startNativeMonitor(current.id);
+      void syncNativeKnowledgePodcastTtsJobs();
+      return;
+    } catch (error) {
+      controllers.delete(key);
+      const message = error instanceof Error ? error.message : "无法启动 Android 后台音频服务。";
+      await savePodcast({
+        ...current,
+        audioStatus: "partial",
+        lastError: message,
+        generation: { ...progress("audio", "failed", message, startedAt), status: "failed" },
+      });
+      throw error;
+    }
+  }
 
   void (async () => {
     const provider = new FishAudioTtsProvider(apiKey);
@@ -295,7 +506,11 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
           const blob = new Blob(blobs, { type: "audio/mpeg" });
           const file = new File([blob], `${current.title}-${String(unit.order + 1).padStart(2, "0")}-${unit.title}.mp3`, { type: "audio/mpeg" });
           const asset = await storage.saveAsset(file, "audio", unit.title);
-          await storage.patchAsset?.(asset.id, { generatedBy: "knowledge-podcast" });
+          await storage.patchAsset?.(asset.id, {
+            generatedBy: "knowledge-podcast",
+            generatedForPodcastId: current.id,
+            generatedForAudioUnitId: unit.id,
+          });
           if (unit.audioAssetId && unit.audioAssetId !== asset.id) {
             const previous = await storage.getAsset(unit.audioAssetId);
             if (previous?.generatedBy === "knowledge-podcast") await storage.deleteAsset?.(unit.audioAssetId);

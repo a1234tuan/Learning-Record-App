@@ -13,8 +13,17 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AiKnowledgeScopePicker } from "../components/AiKnowledgeScopePicker";
-import type { Asset, Block, KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastSegment, RecordBlock } from "../types";
-import { createEmptyPodcast, invalidatePodcastAudioUnits } from "../services/knowledgePodcastService";
+import type { AppSettings, Asset, Block, KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastCreativeBrief, KnowledgePodcastSegment, RecordBlock } from "../types";
+import {
+  applyPodcastCreativeBriefMode,
+  buildPodcastPromptPreview,
+  createEmptyPodcast,
+  estimatePodcastScriptDuration,
+  getPodcastCreativeBriefDefaults,
+  getPodcastCreativeBriefWithDefaults,
+  invalidatePodcastAudioUnits,
+  PODCAST_DURATION_TOLERANCE,
+} from "../services/knowledgePodcastService";
 import { storage } from "../services/storageAdapter";
 import { aiKnowledgeScopeTitle, buildAiKnowledgeContextPack, getAiKnowledgeScopeRecords } from "../services/aiContextService";
 import { PageHeader } from "../components/ui";
@@ -26,6 +35,7 @@ import {
 } from "../services/knowledgePodcastJobService";
 
 interface KnowledgePodcastPageProps {
+  settings?: AppSettings;
   podcasts: KnowledgePodcast[];
   blocks: Block[];
   assets: Asset[];
@@ -41,7 +51,8 @@ interface KnowledgePodcastPageProps {
 
 const recordsOf = (blocks: Block[]) => blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
 
-const modeLabel = (mode: KnowledgePodcast["mode"]) => mode === "summary" ? "精炼回顾" : "复习讲解";
+const modeLabel = (podcast: Pick<KnowledgePodcast, "mode" | "customMode">) =>
+  podcast.mode === "summary" ? "精炼回顾" : podcast.mode === "explain" ? "复习讲解" : podcast.customMode?.title || "自定义模式";
 
 const formatTime = (seconds: number) => {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -56,9 +67,46 @@ const formatElapsed = (startedAt: string | undefined, currentTime: number): stri
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 };
 
+const formatAgo = (timestamp: string | undefined, currentTime: number): string => {
+  if (!timestamp) return "";
+  const seconds = Math.max(0, Math.floor((currentTime - new Date(timestamp).getTime()) / 1000));
+  return seconds < 60 ? `${seconds} 秒前` : `${Math.floor(seconds / 60)} 分钟前`;
+};
+
+const formatDuration = (seconds: number) => {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`;
+};
+
 const getAudioUrl = (asset: Asset | undefined) => asset ? URL.createObjectURL(asset.data) : undefined;
 
+const PLANNER_SUGGESTIONS = {
+  objective: ["精炼回顾", "复习讲解", "错题抽测", "系统讲解", "知识串联"],
+  audience: ["未来的自己", "入门学习者", "考前复习者", "专业同行"],
+  narratorRole: ["清晰的知识整理者", "耐心的复习老师", "提问式复习教练", "自然的播客主持人"],
+  tone: ["简洁、自然、重点明确", "自然口语化、清晰严谨", "严格考试导向", "鼓励式、循序渐进"],
+  organization: ["按主题组织", "按难度递进", "按时间线组织", "问题解答式"],
+} as const;
+
+const PlannerInput = ({
+  label,
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+}: {
+  label: string;
+  value?: string;
+  onChange: (value: string) => void;
+  suggestions: readonly string[];
+  placeholder: string;
+}) => {
+  const listId = `podcast-planner-${label}`;
+  return <label className="podcast-planner-field">{label}<input list={listId} value={value ?? ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><datalist id={listId}>{suggestions.map((item) => <option key={item} value={item} />)}</datalist></label>;
+};
+
 export const KnowledgePodcastPage = ({
+  settings,
   podcasts,
   blocks,
   assets,
@@ -75,7 +123,7 @@ export const KnowledgePodcastPage = ({
   const selected = podcasts.find((item) => item.id === podcastId);
   if (!selected) {
     return (
-      <PodcastList
+        <PodcastList
         podcasts={podcasts}
         onBack={onBack}
         onOpenPodcast={onOpenPodcast}
@@ -105,7 +153,6 @@ export const KnowledgePodcastPage = ({
             scope,
             sourceRecordIds: sourceRecords.map((record) => record.id),
             scriptStatus: JSON.stringify(selected.scope) === JSON.stringify(scope) ? selected.scriptStatus : "idle",
-            audioStatus: "idle",
             updatedAt: new Date().toISOString(),
           });
           onBack();
@@ -116,6 +163,7 @@ export const KnowledgePodcastPage = ({
   return (
     <PodcastEditor
       podcast={selected}
+      settings={settings}
       records={records}
       assets={assets}
       onBack={onBack}
@@ -154,7 +202,7 @@ const PodcastList = ({
       {podcasts.length === 0 ? <div className="empty-state"><h2>还没有知识播客</h2><p>从最近记录开始生成你的第一期知识回顾。</p></div> : podcasts.map((podcast) => (
         <button type="button" className="podcast-list-row" key={podcast.id} onClick={() => onOpenPodcast(podcast.id)}>
           <span className="podcast-list-icon"><Headphones size={20} /></span>
-          <span><strong>{podcast.title}</strong><small>{modeLabel(podcast.mode)} · {podcast.segments.length} 个章节 · {podcast.scope ? aiKnowledgeScopeTitle(podcast.scope) : "未设置范围"}</small></span>
+          <span><strong>{podcast.title}</strong><small>{modeLabel(podcast)} · {podcast.segments.length} 个章节 · {podcast.scope ? aiKnowledgeScopeTitle(podcast.scope) : "未设置范围"}</small></span>
           <span className={`podcast-status ${podcast.audioStatus}`}>{podcast.audioStatus === "ready" ? "可播放" : podcast.scriptStatus === "ready" ? "脚本已就绪" : "草稿"}</span>
         </button>
       ))}
@@ -164,6 +212,7 @@ const PodcastList = ({
 
 const PodcastEditor = ({
   podcast: initialPodcast,
+  settings,
   records,
   assets,
   onBack,
@@ -173,6 +222,7 @@ const PodcastEditor = ({
   onOpenRecord,
 }: {
   podcast: KnowledgePodcast;
+  settings?: AppSettings;
   records: RecordBlock[];
   assets: Asset[];
   onBack: () => void;
@@ -183,6 +233,7 @@ const PodcastEditor = ({
 }) => {
   const [podcast, setPodcast] = useState(initialPodcast);
   const [message, setMessage] = useState("");
+  const [voiceChangeChoiceOpen, setVoiceChangeChoiceOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [playingUnitId, setPlayingUnitId] = useState<string>();
   const [playing, setPlaying] = useState(false);
@@ -205,6 +256,32 @@ const PodcastEditor = ({
   const closingUnit = audioUnits.find((unit) => unit.kind === "closing");
   const unitForSegment = (segmentId: string) => audioUnits.find((unit) => unit.kind === "segment" && unit.segmentId === segmentId);
   const unitStatusLabel = (unit: KnowledgePodcastAudioUnit | undefined) => unit?.audioStatus === "ready" ? "已生成" : unit?.audioStatus === "failed" ? "失败" : "待生成";
+  const modeTemplates = useMemo(() => [...(settings?.knowledgePodcastModeTemplates ?? [])].sort((a, b) => a.order - b.order), [settings?.knowledgePodcastModeTemplates]);
+  const scriptEstimate = useMemo(() => estimatePodcastScriptDuration(podcast, podcast.targetMinutes), [podcast]);
+  const durationOutsideTarget = Boolean(scriptEstimate.speechCharacterCount) && Math.abs(scriptEstimate.durationTargetDeviation ?? 0) > PODCAST_DURATION_TOLERANCE;
+  const globalVoiceId = settings?.tts?.voiceId?.trim();
+  const voiceHasChanged = Boolean(globalVoiceId && podcast.ttsConfig.voiceId && globalVoiceId !== podcast.ttsConfig.voiceId && audioUnits.some((unit) => unit.audioStatus === "ready"));
+  const creativeBrief = useMemo(
+    () => getPodcastCreativeBriefWithDefaults(podcast.creativeBrief, podcast.mode, podcast.focusInstruction),
+    [podcast.creativeBrief, podcast.focusInstruction, podcast.mode],
+  );
+  const scriptNeedsRegeneration = podcast.scriptStatus === "idle" && Boolean(podcast.opening?.trim() || podcast.closing?.trim() || podcast.segments.length);
+  const promptPreview = useMemo(() => {
+    try {
+      return {
+        value: buildPodcastPromptPreview({
+          mode: podcast.mode,
+          customMode: podcast.customMode,
+          creativeBrief,
+          focusInstruction: podcast.focusInstruction,
+          targetMinutes: podcast.targetMinutes,
+          scopeTitle: aiKnowledgeScopeTitle(podcast.scope),
+        }),
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "无法预览当前播客指令。" };
+    }
+  }, [creativeBrief, podcast.customMode, podcast.focusInstruction, podcast.mode, podcast.scope, podcast.targetMinutes]);
 
   useEffect(() => {
     setPodcast(initialPodcast);
@@ -219,18 +296,25 @@ const PodcastEditor = ({
     return () => window.clearInterval(timer);
   }, [podcast.generation?.status]);
   const updatePodcast = (patch: Partial<KnowledgePodcast>) => setPodcast((current) => ({ ...current, ...patch, updatedAt: new Date().toISOString() }));
+  const updateCreativeBrief = (patch: Partial<KnowledgePodcastCreativeBrief>) => setPodcast((current) => ({
+    ...current,
+    creativeBrief: { ...getPodcastCreativeBriefWithDefaults(current.creativeBrief, current.mode, current.focusInstruction), ...patch },
+    scriptStatus: "idle",
+    updatedAt: new Date().toISOString(),
+  }));
 
   const saveDraft = async () => {
-    const saved = await onSavePodcast(podcast);
+    const saved = await onSavePodcast({ ...podcast, creativeBrief, ...scriptEstimate });
     setPodcast(saved);
     setMessage("播客草稿已保存。");
   };
 
   const generateScript = async () => {
+    if (promptPreview.error) { setMessage(promptPreview.error); return; }
     const scope = podcast.scope;
     const sourceRecords = getAiKnowledgeScopeRecords(scope, records, new Date().toISOString().slice(0, 10));
     if (sourceRecords.length === 0) { setMessage("当前范围没有可用于播客的记录。"); return; }
-    const draft = { ...podcast, scope, audioStatus: "idle" as const, sourceRecordIds: sourceRecords.map((record) => record.id), lastError: undefined };
+    const draft = { ...podcast, creativeBrief, scope, audioStatus: "idle" as const, sourceRecordIds: sourceRecords.map((record) => record.id), lastError: undefined };
     try {
       const saved = await onSavePodcast(draft);
       setPodcast(saved);
@@ -241,15 +325,23 @@ const PodcastEditor = ({
     }
   };
 
-  const generateAudio = async (onlyUnitId?: string) => {
+  const startAudioGeneration = async (draft: KnowledgePodcast, onlyUnitId?: string) => {
     try {
-      const saved = await onSavePodcast(podcast);
+      const saved = await onSavePodcast({ ...draft, ...estimatePodcastScriptDuration(draft, draft.targetMinutes) });
       setPodcast(saved);
       await startKnowledgePodcastAudioJob(saved.id, onlyUnitId);
       setMessage("音频已转入后台生成，可以切换到其他页面。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法启动音频生成。 ");
     }
+  };
+
+  const generateAudio = async (onlyUnitId?: string) => {
+    if (!onlyUnitId && voiceHasChanged) {
+      setVoiceChangeChoiceOpen(true);
+      return;
+    }
+    await startAudioGeneration(podcast, onlyUnitId);
   };
 
   const playUnit = async (unit: KnowledgePodcastAudioUnit, startAt = 0) => {
@@ -327,15 +419,83 @@ const PodcastEditor = ({
     });
   };
 
+  const changeMode = (value: string) => {
+    if (value === "summary" || value === "explain") {
+      updatePodcast({
+        mode: value,
+        customMode: undefined,
+        creativeBrief: applyPodcastCreativeBriefMode(podcast.creativeBrief, podcast.mode, value, podcast.focusInstruction),
+        scriptStatus: "idle",
+      });
+      return;
+    }
+    const template = modeTemplates.find((item) => item.id === value.replace(/^custom:/, ""));
+    if (!template) return;
+    updatePodcast({
+      mode: "custom",
+      customMode: { templateId: template.id, title: template.title, prompt: template.prompt },
+      creativeBrief: applyPodcastCreativeBriefMode(podcast.creativeBrief, podcast.mode, "custom", podcast.focusInstruction),
+      scriptStatus: "idle",
+    });
+  };
+
+  const restoreModeRecommendations = () => {
+    const defaults = getPodcastCreativeBriefDefaults(podcast.mode);
+    updatePodcast({
+      creativeBrief: {
+        ...defaults,
+        ...(creativeBrief.supplementaryRequirements ? { supplementaryRequirements: creativeBrief.supplementaryRequirements } : {}),
+      },
+      scriptStatus: "idle",
+    });
+  };
+
   return (
     <main className="page knowledge-podcast-page podcast-editor-page">
       <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回列表</button>} />
       <section className="podcast-editor-toolbar">
         <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
-        <label>模式<select value={podcast.mode} onChange={(event) => updatePodcast({ mode: event.target.value as KnowledgePodcast["mode"], scriptStatus: "idle", audioStatus: "idle" })}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option></select></label>
-        <label>目标时长<select value={podcast.targetMinutes} onChange={(event) => updatePodcast({ targetMinutes: Number(event.target.value) as KnowledgePodcast["targetMinutes"], scriptStatus: "idle", audioStatus: "idle" })}><option value={3}>3 分钟</option><option value={5}>5 分钟</option><option value={10}>10 分钟</option></select></label>
+        <label>模式<select value={podcast.mode === "custom" ? `custom:${podcast.customMode?.templateId ?? ""}` : podcast.mode} onChange={(event) => changeMode(event.target.value)}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option>{podcast.mode === "custom" && podcast.customMode && !modeTemplates.some((template) => template.id === podcast.customMode!.templateId) && <option value={`custom:${podcast.customMode.templateId}`}>{podcast.customMode.title}（已保存快照）</option>}{modeTemplates.map((template) => <option key={template.id} value={`custom:${template.id}`}>{template.title}</option>)}</select></label>
+        <label>目标时长<select value={podcast.targetMinutes} onChange={(event) => updatePodcast({ targetMinutes: Number(event.target.value) as KnowledgePodcast["targetMinutes"], scriptStatus: "idle" })}><option value={3}>3 分钟</option><option value={5}>5 分钟</option><option value={10}>10 分钟</option></select></label>
         <label>Fish 模型<input value={podcast.ttsConfig.model} onChange={(event) => setPodcast((current) => invalidatePodcastAudioUnits({ ...current, ttsConfig: { ...current.ttsConfig, model: event.target.value } }))} /></label>
-        <label>Voice ID<input value={podcast.ttsConfig.voiceId} onChange={(event) => setPodcast((current) => invalidatePodcastAudioUnits({ ...current, ttsConfig: { ...current.ttsConfig, voiceId: event.target.value } }))} placeholder="Fish Audio reference_id" /></label>
+        <label>全局 Voice ID<input value={settings?.tts?.voiceId ? "已在 AI 工具中配置" : "尚未配置，请前往 AI 工具设置"} readOnly /></label>
+      </section>
+      <section className="podcast-scope-card podcast-planner-card">
+        <header className="podcast-planner-header">
+          <div><p className="eyebrow">Podcast Planner</p><h2>节目策划</h2><p>从建议中选择，或直接输入自己的要求。它们会与所选模式一起生成播客脚本。</p></div>
+          {(podcast.mode === "summary" || podcast.mode === "explain") && <button type="button" className="secondary-button" onClick={restoreModeRecommendations}>恢复模式推荐设置</button>}
+        </header>
+        <details className="podcast-planner-group" open>
+          <summary>节目定位</summary>
+          <div className="podcast-planner-grid">
+            <PlannerInput label="节目目标" value={creativeBrief.objective} onChange={(value) => updateCreativeBrief({ objective: value })} suggestions={PLANNER_SUGGESTIONS.objective} placeholder="例如：错题抽测" />
+            <PlannerInput label="目标听众" value={creativeBrief.audience} onChange={(value) => updateCreativeBrief({ audience: value })} suggestions={PLANNER_SUGGESTIONS.audience} placeholder="例如：未来的自己" />
+            <PlannerInput label="讲述角色" value={creativeBrief.narratorRole} onChange={(value) => updateCreativeBrief({ narratorRole: value })} suggestions={PLANNER_SUGGESTIONS.narratorRole} placeholder="例如：耐心的复习老师" />
+            <PlannerInput label="讲述风格" value={creativeBrief.tone} onChange={(value) => updateCreativeBrief({ tone: value })} suggestions={PLANNER_SUGGESTIONS.tone} placeholder="例如：自然口语化、清晰严谨" />
+          </div>
+        </details>
+        <details className="podcast-planner-group" open>
+          <summary>内容组织</summary>
+          <div className="podcast-planner-grid">
+            <PlannerInput label="组织结构" value={creativeBrief.organization} onChange={(value) => updateCreativeBrief({ organization: value })} suggestions={PLANNER_SUGGESTIONS.organization} placeholder="例如：按难度递进" />
+            <label className="podcast-planner-field">必须覆盖<textarea value={creativeBrief.mustCover ?? ""} onChange={(event) => updateCreativeBrief({ mustCover: event.target.value })} rows={3} placeholder="例如：并查集的适用条件、路径压缩和复杂度" /></label>
+            <label className="podcast-planner-field">避免内容<textarea value={creativeBrief.avoid ?? ""} onChange={(event) => updateCreativeBrief({ avoid: event.target.value })} rows={3} placeholder="例如：不要逐条复述日志；不要延伸到范围外的算法" /></label>
+          </div>
+        </details>
+        <details className="podcast-planner-group">
+          <summary>脚本结构与本期补充</summary>
+          <div className="podcast-planner-grid">
+            <label className="podcast-planner-field">每章固定要素<textarea value={creativeBrief.chapterRequirements ?? ""} onChange={(event) => updateCreativeBrief({ chapterRequirements: event.target.value })} rows={3} placeholder="例如：每章包含概念、例子、易错点和一个自测问题" /></label>
+            <label className="podcast-planner-field">开场要求<textarea value={creativeBrief.openingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ openingRequirements: event.target.value })} rows={3} placeholder="例如：直接提出本期要解决的问题，不要寒暄" /></label>
+            <label className="podcast-planner-field">结尾要求<textarea value={creativeBrief.closingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ closingRequirements: event.target.value })} rows={3} placeholder="例如：用三个复习问题收尾" /></label>
+            <label className="podcast-planner-field podcast-planner-field-full">本期补充要求<textarea value={creativeBrief.supplementaryRequirements ?? ""} onChange={(event) => updateCreativeBrief({ supplementaryRequirements: event.target.value })} rows={3} placeholder="例如：只讲并查集的易错点和适用条件；不需要逐条复述所有日志。" /></label>
+          </div>
+        </details>
+        {podcast.mode === "custom" && <p className="helper-text">当前高级模板：{podcast.customMode?.title || "自定义模式"}。模板 Prompt 已为本期保存快照，之后修改全局模板不会改写它。</p>}
+        <details className="podcast-prompt-preview">
+          <summary>查看本期生成指令预览</summary>
+          {promptPreview.error ? <p className="error-text">{promptPreview.error}</p> : <><p>预览不包含完整本地日志正文；生成时会将当前范围的 RAG 上下文作为独立附件发送。</p><pre>{promptPreview.value}</pre></>}
+        </details>
       </section>
       <section className="podcast-scope-card">
         <header><div><p className="eyebrow">Knowledge Scope</p><h2>知识范围</h2><p>{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {getAiKnowledgeScopeRecords(podcast.scope, records, new Date().toISOString().slice(0, 10)).length} 条日志</p></div><button type="button" className="secondary-button" onClick={onOpenScope}>选择知识范围</button></header>
@@ -348,6 +508,7 @@ const PodcastEditor = ({
             <small>
               {[podcast.generation.providerName, podcast.generation.model].filter(Boolean).join(" / ")}
               {podcast.generation.status === "running" ? ` · 已用时 ${formatElapsed(podcast.generation.startedAt, currentTime)}` : ""}
+              {podcast.generation.status === "running" && podcast.generation.heartbeatAt ? ` · 最近活动 ${formatAgo(podcast.generation.heartbeatAt, currentTime)}` : ""}
               {podcast.generation.current !== undefined && podcast.generation.total !== undefined ? ` · ${podcast.generation.current}/${podcast.generation.total}` : ""}
               {podcast.generation.partCurrent !== undefined && podcast.generation.partTotal !== undefined ? ` · 分片 ${podcast.generation.partCurrent}/${podcast.generation.partTotal}` : ""}
             </small>
@@ -367,9 +528,24 @@ const PodcastEditor = ({
           {podcast.scriptDiagnostic.requestId ? ` · 请求 ID ${podcast.scriptDiagnostic.requestId}` : ""}
         </p>
       )}
+      {podcast.ttsDiagnostics?.length ? (() => {
+        const diagnostic = podcast.ttsDiagnostics[podcast.ttsDiagnostics.length - 1];
+        return <p className="podcast-diagnostic">最近 Fish 请求：{diagnostic.unitTitle || "音频单元"}{diagnostic.partCurrent && diagnostic.partTotal ? ` · 分片 ${diagnostic.partCurrent}/${diagnostic.partTotal}` : ""}{diagnostic.httpStatus ? ` · HTTP ${diagnostic.httpStatus}` : ""}{diagnostic.requestId ? ` · 请求 ID ${diagnostic.requestId}` : ""} · {diagnostic.message}</p>;
+      })() : null}
+      {scriptNeedsRegeneration && <p className="status-message">当前脚本与音频会保留并可继续播放；节目策划、时长或模式已改变，重新生成脚本后才会应用新要求。</p>}
       {sourceChanged && <p className="status-message">来源记录已更新，建议重新生成脚本；当前手工编辑内容不会被自动覆盖。</p>}
       {legacyAudioLayout && podcast.segments.some((segment) => segment.audioAssetId) && <p className="status-message">音频格式已更新，需要重新生成整期音频后，开场、章节与结尾才会作为独立录音播放。</p>}
       {podcast.lastError && <p className="error-message"><CircleAlert size={16} />{podcast.lastError}</p>}
+      {voiceChangeChoiceOpen && <section className="podcast-voice-change-card" role="alert">
+        <strong>全局 Voice ID 已更改</strong>
+        <p>已生成的 MP3 不会自动修改。继续补全会让本期可能混合两种音色；推荐按新 Voice 重生成整期。</p>
+        <div className="podcast-actions">
+          <button type="button" className="primary-button" onClick={() => { setVoiceChangeChoiceOpen(false); void startAudioGeneration(invalidatePodcastAudioUnits(podcast)); }}>按新 Voice 重生成整期</button>
+          <button type="button" className="secondary-button" onClick={() => { setVoiceChangeChoiceOpen(false); void startAudioGeneration(podcast); }}>仅继续缺失单元</button>
+          <button type="button" className="secondary-button" onClick={() => setVoiceChangeChoiceOpen(false)}>取消</button>
+        </div>
+      </section>}
+      <p className={`podcast-duration-estimate ${durationOutsideTarget ? "out-of-range" : ""}`}>预计朗读时长 {formatDuration(scriptEstimate.estimatedDurationSeconds ?? 0)} · {scriptEstimate.speechCharacterCount ?? 0} 字 · 目标 {podcast.targetMinutes} 分钟{durationOutsideTarget ? "（偏差较大，可编辑脚本或重新生成）" : ""}</p>
       <section className="podcast-actions">
         <button type="button" className="secondary-button" onClick={() => void saveDraft()}><Save size={17} />保存草稿</button>
         <button type="button" className="primary-button" onClick={() => void generateScript()} disabled={scriptRunning || audioRunning}><Sparkles size={17} />{scriptRunning ? "生成脚本中…" : "生成脚本"}</button>

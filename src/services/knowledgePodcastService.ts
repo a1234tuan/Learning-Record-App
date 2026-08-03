@@ -5,6 +5,7 @@ import type {
   AppSettings,
   KnowledgePodcast,
   KnowledgePodcastAudioUnit,
+  KnowledgePodcastCreativeBrief,
   KnowledgePodcastScriptDiagnostic,
   KnowledgePodcastSegment,
   RecordBlock,
@@ -22,6 +23,55 @@ export const PODCAST_MAX_SOURCE_RECORDS = 20;
 export const PODCAST_SCRIPT_TIMEOUT_MS = 5 * 60 * 1000;
 export const PODCAST_MIN_OUTPUT_TOKENS = 16_384;
 export const PODCAST_MAX_OUTPUT_TOKENS = 32_768;
+export const PODCAST_SPEECH_CHARACTERS_PER_MINUTE = 240;
+export const PODCAST_DURATION_TOLERANCE = 0.15;
+
+export const PODCAST_TEMPLATE_VARIABLES = [
+  { token: "{{策划摘要}}", label: "完整策划摘要", description: "插入本期所有已填写的策划内容" },
+  { token: "{{节目目标}}", label: "节目目标", description: "本期希望达成的学习效果" },
+  { token: "{{目标听众}}", label: "目标听众", description: "节目面向的听众" },
+  { token: "{{讲述角色}}", label: "讲述角色", description: "AI 在节目中的角色" },
+  { token: "{{讲述风格}}", label: "讲述风格", description: "语气与表达方式" },
+  { token: "{{组织结构}}", label: "组织结构", description: "章节组织方式" },
+  { token: "{{必须覆盖}}", label: "必须覆盖", description: "必须讲到的内容" },
+  { token: "{{避免内容}}", label: "避免内容", description: "需要避免的内容" },
+  { token: "{{章节要求}}", label: "章节要求", description: "每章应具备的内容" },
+  { token: "{{开场要求}}", label: "开场要求", description: "opening 的写作要求" },
+  { token: "{{结尾要求}}", label: "结尾要求", description: "closing 的写作要求" },
+  { token: "{{本期补充要求}}", label: "本期补充要求", description: "仅作用于本期的额外方向" },
+  { token: "{{目标时长}}", label: "目标时长", description: "本期选择的分钟数" },
+  { token: "{{目标字数}}", label: "目标字数", description: "按中文朗读速度估算的字符数" },
+  { token: "{{知识范围摘要}}", label: "知识范围摘要", description: "用户选择的日志范围" },
+] as const;
+
+const PODCAST_TEMPLATE_TOKEN_NAMES = new Set(PODCAST_TEMPLATE_VARIABLES.map((item) => item.token.slice(2, -2)));
+const PODCAST_BRIEF_FIELDS = [
+  "objective", "audience", "narratorRole", "tone", "organization", "mustCover", "avoid",
+  "chapterRequirements", "openingRequirements", "closingRequirements",
+] as const;
+
+const PODCAST_BRIEF_DEFAULTS: Record<Extract<KnowledgePodcast["mode"], "summary" | "explain">, KnowledgePodcastCreativeBrief> = {
+  summary: {
+    objective: "提炼重点、关键结论和记录之间的联系",
+    audience: "未来的自己",
+    narratorRole: "清晰的知识整理者",
+    tone: "简洁、自然、重点明确",
+    organization: "按主题组织，并在结尾浓缩关键结论",
+    chapterRequirements: "每章先说明核心结论，再简要说明其与其他记录的联系",
+    openingRequirements: "简短说明本期范围与最值得关注的主题",
+    closingRequirements: "用少量结论收束，不重复逐条复述章节",
+  },
+  explain: {
+    objective: "像老师一样讲清重点、联系和易错点，并帮助复习",
+    audience: "未来的自己",
+    narratorRole: "耐心的复习老师",
+    tone: "自然口语化、清晰严谨、循序渐进",
+    organization: "按概念关系和难度递进组织",
+    chapterRequirements: "每章说明概念、联系、易错点，并穿插少量回忆提示",
+    openingRequirements: "以本期要解决的学习问题开场，快速建立学习目标",
+    closingRequirements: "总结最重要结论，并给出简短的复习提示",
+  },
+};
 
 const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : undefined;
 
@@ -108,6 +158,156 @@ const stripCodeFence = (value: string): string => value
 
 const asText = (value: unknown): string => typeof value === "string" ? value.trim() : "";
 
+const isBuiltinPodcastMode = (mode: KnowledgePodcast["mode"]): mode is "summary" | "explain" => mode === "summary" || mode === "explain";
+
+export const getPodcastCreativeBriefDefaults = (mode: KnowledgePodcast["mode"]): KnowledgePodcastCreativeBrief =>
+  isBuiltinPodcastMode(mode) ? { ...PODCAST_BRIEF_DEFAULTS[mode] } : {};
+
+/** Normalizes legacy focusInstruction into the new per-episode editorial brief. */
+export const normalizePodcastCreativeBrief = (
+  brief?: KnowledgePodcastCreativeBrief,
+  legacyFocusInstruction?: string,
+): KnowledgePodcastCreativeBrief => {
+  const normalized: KnowledgePodcastCreativeBrief = {};
+  for (const field of [...PODCAST_BRIEF_FIELDS, "supplementaryRequirements"] as const) {
+    const value = brief?.[field]?.trim();
+    if (value) normalized[field] = value;
+  }
+  if (!normalized.supplementaryRequirements && legacyFocusInstruction?.trim()) {
+    normalized.supplementaryRequirements = legacyFocusInstruction.trim();
+  }
+  return normalized;
+};
+
+/** Supplies built-in recommendations for old episodes without overwriting explicitly cleared fields. */
+export const getPodcastCreativeBriefWithDefaults = (
+  brief: KnowledgePodcastCreativeBrief | undefined,
+  mode: KnowledgePodcast["mode"],
+  legacyFocusInstruction?: string,
+): KnowledgePodcastCreativeBrief => {
+  const result: KnowledgePodcastCreativeBrief = { ...getPodcastCreativeBriefDefaults(mode), ...(brief ?? {}) };
+  if (!Object.prototype.hasOwnProperty.call(brief ?? {}, "supplementaryRequirements") && legacyFocusInstruction?.trim()) {
+    result.supplementaryRequirements = legacyFocusInstruction.trim();
+  }
+  return result;
+};
+
+/**
+ * Replace only fields that still equal the previous built-in recommendation.
+ * This lets mode changes update defaults without overwriting an episode's edits.
+ */
+export const applyPodcastCreativeBriefMode = (
+  brief: KnowledgePodcastCreativeBrief | undefined,
+  previousMode: KnowledgePodcast["mode"],
+  nextMode: KnowledgePodcast["mode"],
+  legacyFocusInstruction?: string,
+): KnowledgePodcastCreativeBrief => {
+  const current = getPodcastCreativeBriefWithDefaults(brief, previousMode, legacyFocusInstruction);
+  if (!isBuiltinPodcastMode(nextMode)) return current;
+  const previousDefaults = getPodcastCreativeBriefDefaults(previousMode);
+  const nextDefaults = getPodcastCreativeBriefDefaults(nextMode);
+  const next: KnowledgePodcastCreativeBrief = { ...current };
+  for (const field of PODCAST_BRIEF_FIELDS) {
+    const explicitlyEdited = Object.prototype.hasOwnProperty.call(brief ?? {}, field) && brief?.[field] !== previousDefaults[field];
+    if (!explicitlyEdited) {
+      const replacement = nextDefaults[field];
+      if (replacement) next[field] = replacement;
+      else delete next[field];
+    }
+  }
+  return next;
+};
+
+export const formatPodcastCreativeBrief = (
+  brief?: KnowledgePodcastCreativeBrief,
+  legacyFocusInstruction?: string,
+): string => {
+  const current = normalizePodcastCreativeBrief(brief, legacyFocusInstruction);
+  const rows: Array<[keyof KnowledgePodcastCreativeBrief, string]> = [
+    ["objective", "节目目标"],
+    ["audience", "目标听众"],
+    ["narratorRole", "讲述角色"],
+    ["tone", "讲述风格"],
+    ["organization", "组织结构"],
+    ["mustCover", "必须覆盖"],
+    ["avoid", "避免内容"],
+    ["chapterRequirements", "章节要求"],
+    ["openingRequirements", "开场要求"],
+    ["closingRequirements", "结尾要求"],
+    ["supplementaryRequirements", "本期补充要求"],
+  ];
+  const content = rows
+    .map(([field, label]) => current[field] ? `${label}：${current[field]}` : "")
+    .filter(Boolean)
+    .join("\n");
+  return content ? `本期节目策划：\n${content}` : "";
+};
+
+export const validatePodcastModeTemplate = (template: string): string[] => {
+  const unsupported = new Set<string>();
+  for (const match of template.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const tokenName = match[1].trim();
+    if (!PODCAST_TEMPLATE_TOKEN_NAMES.has(tokenName)) unsupported.add(`{{${tokenName}}}`);
+  }
+  return [...unsupported];
+};
+
+const templateUsesBrief = (template: string): boolean => /\{\{\s*策划摘要\s*\}\}/.test(template);
+
+const renderPodcastModeTemplate = (template: string, variables: Record<string, string>): string => {
+  const unsupported = validatePodcastModeTemplate(template);
+  if (unsupported.length) throw new Error(`播客模板包含不支持的变量：${unsupported.join("、")}。`);
+  return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, tokenName: string) => variables[tokenName.trim()] ?? "");
+};
+
+const podcastTemplateVariables = (options: {
+  brief?: KnowledgePodcastCreativeBrief;
+  focusInstruction?: string;
+  targetMinutes: KnowledgePodcast["targetMinutes"];
+  scopeTitle: string;
+}): Record<string, string> => {
+  const brief = normalizePodcastCreativeBrief(options.brief, options.focusInstruction);
+  const targetCharacters = podcastTargetSpeechCharacters(options.targetMinutes);
+  return {
+    "策划摘要": formatPodcastCreativeBrief(brief),
+    "节目目标": brief.objective ?? "未设置",
+    "目标听众": brief.audience ?? "未设置",
+    "讲述角色": brief.narratorRole ?? "未设置",
+    "讲述风格": brief.tone ?? "未设置",
+    "组织结构": brief.organization ?? "未设置",
+    "必须覆盖": brief.mustCover ?? "未设置",
+    "避免内容": brief.avoid ?? "未设置",
+    "章节要求": brief.chapterRequirements ?? "未设置",
+    "开场要求": brief.openingRequirements ?? "未设置",
+    "结尾要求": brief.closingRequirements ?? "未设置",
+    "本期补充要求": brief.supplementaryRequirements ?? "未设置",
+    "目标时长": `约 ${options.targetMinutes} 分钟`,
+    "目标字数": `约 ${targetCharacters} 个朗读字符`,
+    "知识范围摘要": options.scopeTitle,
+  };
+};
+
+export const podcastTargetSpeechCharacters = (targetMinutes: KnowledgePodcast["targetMinutes"]): number =>
+  targetMinutes * PODCAST_SPEECH_CHARACTERS_PER_MINUTE;
+
+export const estimatePodcastScriptDuration = (
+  script: Pick<KnowledgePodcast, "opening" | "segments" | "closing">,
+  targetMinutes: KnowledgePodcast["targetMinutes"],
+): Pick<KnowledgePodcast, "speechCharacterCount" | "estimatedDurationSeconds" | "durationTargetDeviation"> => {
+  const spokenText = [script.opening, ...script.segments.map((segment) => segment.text), script.closing]
+    .filter((text): text is string => Boolean(text))
+    .join("")
+    .replace(/\s+/g, "");
+  const speechCharacterCount = Array.from(spokenText).length;
+  const estimatedDurationSeconds = Math.round(speechCharacterCount / PODCAST_SPEECH_CHARACTERS_PER_MINUTE * 60);
+  const targetSeconds = targetMinutes * 60;
+  return {
+    speechCharacterCount,
+    estimatedDurationSeconds,
+    durationTargetDeviation: targetSeconds > 0 ? (estimatedDurationSeconds - targetSeconds) / targetSeconds : 0,
+  };
+};
+
 export const parsePodcastScript = async (
   raw: string,
   records: RecordBlock[],
@@ -142,30 +342,78 @@ export const parsePodcastScript = async (
 
 export const buildPodcastPrompt = (options: {
   mode: KnowledgePodcast["mode"];
+  customMode?: KnowledgePodcast["customMode"];
+  creativeBrief?: KnowledgePodcastCreativeBrief;
+  focusInstruction?: string;
   targetMinutes: KnowledgePodcast["targetMinutes"];
   context: AiContextPack;
 }): string => {
-  const modeText = options.mode === "summary" ? "精炼回顾" : "复习讲解";
+  const modeText = options.mode === "summary"
+    ? "精炼回顾"
+    : options.mode === "explain"
+      ? "复习讲解"
+      : options.customMode?.title.trim() || "自定义模式";
+  const builtInInstruction = options.mode === "summary"
+    ? "提炼重点、结论和记录之间的联系。"
+    : options.mode === "explain"
+      ? "像老师一样解释重点、联系、易错点，并穿插少量回忆提示。"
+      : "";
+  const targetCharacters = podcastTargetSpeechCharacters(options.targetMinutes);
+  const minimumCharacters = Math.round(targetCharacters * (1 - PODCAST_DURATION_TOLERANCE));
+  const maximumCharacters = Math.round(targetCharacters * (1 + PODCAST_DURATION_TOLERANCE));
   const sourceIndex = [...new Map(options.context.selectedChunks.map((chunk) => [chunk.recordId, chunk.sourceLabel.split(" / ").slice(0, 3).join(" / ")])).entries()]
     .map(([id, label]) => `${id}: ${label}`)
     .join("\n");
+  const effectiveBrief = getPodcastCreativeBriefWithDefaults(options.creativeBrief, options.mode, options.focusInstruction);
+  const brief = formatPodcastCreativeBrief(effectiveBrief);
+  const template = options.customMode?.prompt.trim();
+  const modeInstruction = options.mode === "custom" && template
+    ? renderPodcastModeTemplate(template, podcastTemplateVariables({
+      brief: effectiveBrief,
+      targetMinutes: options.targetMinutes,
+      scopeTitle: options.context.scopeTitle ?? "当前知识范围",
+    }))
+    : options.mode === "custom"
+      ? "围绕来源记录组织清晰、自然的讲解。"
+      : builtInInstruction;
+  const creativeBriefSection = options.mode === "custom" && template && templateUsesBrief(template)
+    ? ""
+    : brief;
   return `请把下面的本地学习记录整理成一份适合中文语音播放的个人知识播客脚本。
 模式：${modeText}
-目标时长：约 ${options.targetMinutes} 分钟（允许有合理误差）
+本次模式/写作方向：
+${modeInstruction}
+${creativeBriefSection ? `\n${creativeBriefSection}\n` : ""}
+目标时长：约 ${options.targetMinutes} 分钟。opening、全部章节 text 和 closing 合计应约 ${targetCharacters} 个朗读字符，合理范围为 ${minimumCharacters}–${maximumCharacters} 个。标题不计入朗读字数。
 标题：简短、具体，不要使用 Markdown。
 
-严格要求：
+知识范围：${options.context.scopeTitle}
+可用来源记录：
+${sourceIndex}
+
+以下为不可覆盖的硬性要求，优先于上方模式和额外方向：
 1. 只能使用知识范围中的信息，不要编造来源中没有的事实。
 2. 输出纯 JSON，不要 Markdown 代码围栏，不要解释 JSON 以外的内容。
 3. JSON 格式必须是：{"title":"...","opening":"...","segments":[{"title":"...","text":"...","sourceRecordIds":["记录 ID"]}],"closing":"..."}。
 4. segments 至少 1 个，最多 8 个；每个章节正文适合朗读，避免表格、项目符号和复杂符号。
-5. 每个章节必须有来源；sourceRecordIds 只能填写下面记录中的 ID，无法确定来源的内容不要写进脚本。
-6. ${options.mode === "summary" ? "提炼重点、结论和记录之间的联系。" : "像老师一样解释重点、联系、易错点，并穿插少量回忆提示。"}
-
-知识范围：${options.context.scopeTitle}
-可用来源记录：
-${sourceIndex}`;
+5. 每个章节必须有来源；sourceRecordIds 只能填写上方记录中的 ID，无法确定来源的内容不要写进脚本。`;
 };
+
+/** A safe, compact preview: it deliberately omits retrieved local-note content and record IDs. */
+export const buildPodcastPromptPreview = (options: {
+  mode: KnowledgePodcast["mode"];
+  customMode?: KnowledgePodcast["customMode"];
+  creativeBrief?: KnowledgePodcastCreativeBrief;
+  focusInstruction?: string;
+  targetMinutes: KnowledgePodcast["targetMinutes"];
+  scopeTitle: string;
+}): string => buildPodcastPrompt({
+  ...options,
+  context: {
+    scopeTitle: options.scopeTitle,
+    selectedChunks: [{ recordId: "<生成时的记录 ID>", sourceLabel: "生成时将根据当前知识范围列出来源" }],
+  } as AiContextPack,
+});
 
 const buildPodcastRetryPrompt = (prompt: string): string => `${prompt}
 
@@ -239,6 +487,7 @@ export const generatePodcastScript = async (options: {
 }): Promise<{
   context: AiContextPack;
   script: Pick<KnowledgePodcast, "title" | "opening" | "segments" | "closing">;
+  estimate: Pick<KnowledgePodcast, "speechCharacterCount" | "estimatedDurationSeconds" | "durationTargetDeviation">;
   diagnostic: KnowledgePodcastScriptDiagnostic;
 }> => {
   const blocks = options.blocks as import("../types").Block[];
@@ -246,7 +495,7 @@ export const generatePodcastScript = async (options: {
   const provider = getCurrentAiProvider(options.settings.ai);
   const apiKey = provider ? (await storage.getAiSecret?.(provider.id))?.apiKey : undefined;
   if (!provider) throw new Error("请先在“更多 → AI 设置”里配置 AI 供应商。");
-  const initialPrompt = `请生成一份${options.podcast.mode === "summary" ? "精炼回顾" : "复习讲解"}知识播客脚本。`;
+  const initialPrompt = `请生成一份${options.podcast.mode === "summary" ? "精炼回顾" : options.podcast.mode === "explain" ? "复习讲解" : options.podcast.customMode?.title || "自定义"}知识播客脚本。`;
   const outputTokens = scriptOutputTokens(provider);
   const podcastProvider = { ...provider, maxTokens: outputTokens };
   const initialBudget = calculateAiRequestBudget({ provider: podcastProvider, history: [], prompt: initialPrompt });
@@ -257,7 +506,14 @@ export const generatePodcastScript = async (options: {
     preferDiverse: true,
   });
   if (context.recordIds.length === 0) throw new Error("当前知识范围没有可用于播客的记录。");
-  const prompt = buildPodcastPrompt({ mode: options.podcast.mode, targetMinutes: options.podcast.targetMinutes, context });
+  const prompt = buildPodcastPrompt({
+    mode: options.podcast.mode,
+    customMode: options.podcast.customMode,
+    creativeBrief: options.podcast.creativeBrief,
+    focusInstruction: options.podcast.focusInstruction,
+    targetMinutes: options.podcast.targetMinutes,
+    context,
+  });
   const budget = calculateAiRequestBudget({ provider: podcastProvider, history: [], prompt, attachment: context });
   const records = getAiKnowledgeScopeRecords(options.podcast.scope, blocks, context.date);
   const deepSeek = isOfficialDeepSeekV4(provider);
@@ -303,7 +559,12 @@ export const generatePodcastScript = async (options: {
     try {
       await options.onProgress?.("parsing-script", "AI 已返回内容，正在校验章节和来源…", attempt);
       const script = await parsePodcastScript(lastResult.content, records);
-      return { context, script, diagnostic: toScriptDiagnostic(provider, lastResult, attempt) };
+      return {
+        context,
+        script,
+        estimate: estimatePodcastScriptDuration(script, options.podcast.targetMinutes),
+        diagnostic: toScriptDiagnostic(provider, lastResult, attempt),
+      };
     } catch (error) {
       lastParseError = error;
     }
@@ -408,6 +669,7 @@ export const splitTtsText = (text: string, maxBytes = 800): string[] => {
 
 export const createEmptyPodcast = (scope: AiKnowledgeScope, mode: KnowledgePodcast["mode"] = "summary", targetMinutes: KnowledgePodcast["targetMinutes"] = 5): KnowledgePodcast => ({
   ...createBaseEntity(), title: "未命名知识播客", mode, targetMinutes, scope, sourceRecordIds: [], contextHash: "",
+  creativeBrief: getPodcastCreativeBriefDefaults(mode),
   scriptStatus: "idle", audioStatus: "idle", segments: [], audioLayoutVersion: 2, audioUnits: [],
   ttsConfig: { providerId: "fish-audio", model: DEFAULT_FISH_MODEL, voiceId: "", format: "mp3" },
 });

@@ -878,6 +878,7 @@ export const App = () => {
       case "podcasts":
         return (
           <KnowledgePodcastPage
+            settings={settings}
             podcasts={app.podcasts}
             blocks={app.blocks}
             assets={app.assets}

@@ -55,6 +55,7 @@ const podcast = (): KnowledgePodcast => ({
 
 afterEach(() => {
   cancelKnowledgePodcastJob("podcast-job", "script");
+  cancelKnowledgePodcastJob("podcast-job", "audio");
   vi.restoreAllMocks();
   generatePodcastScriptMock.mockReset();
   synthesizeMock.mockReset();
@@ -145,5 +146,27 @@ describe("knowledgePodcastJobService", () => {
       ["opening", "ready", "asset-1"], ["segment", "ready", "asset-2"], ["closing", "ready", "asset-3"],
     ]);
     expect(current.audioStatus).toBe("ready");
+  });
+
+  it("uses the globally configured Voice ID for new audio generation", async () => {
+    let current: KnowledgePodcast = {
+      ...podcast(),
+      segments: [{ id: "segment-1", order: 0, title: "第一章", text: "正文。", sourceRecordIds: ["record-1"], textHash: "", audioStatus: "pending" }],
+    };
+    const globalSettings = { ...settings(), tts: { model: "s2.1-pro-free", voiceId: "global-voice", format: "mp3" as const } };
+    synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
+    vi.spyOn(storage, "getSettings").mockResolvedValue(globalSettings);
+    vi.spyOn(storage, "getAiSecret").mockResolvedValue({ id: "fish-audio", apiKey: "test", updatedAt: "2026-08-03T00:00:00.000Z" });
+    vi.spyOn(storage, "getAsset").mockResolvedValue(undefined);
+    vi.spyOn(storage, "saveAsset").mockImplementation(async (file) => ({ id: "asset-global", createdAt: "2026-08-03T00:00:00.000Z", updatedAt: "2026-08-03T00:00:00.000Z", fileName: file.name, title: file.name, mimeType: file.type, size: file.size, kind: "audio", data: file }));
+    vi.spyOn(storage, "patchAsset").mockResolvedValue(undefined);
+    vi.spyOn(storage, "saveKnowledgePodcast").mockImplementation(async (next) => { current = next; return next; });
+
+    await startKnowledgePodcastAudioJob(current.id);
+    await vi.waitFor(() => expect(isKnowledgePodcastJobRunning(current.id, "audio")).toBe(false));
+
+    expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ voiceId: "global-voice" }));
+    expect(current.ttsConfig.voiceId).toBe("global-voice");
   });
 });
