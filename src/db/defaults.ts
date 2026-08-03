@@ -3,6 +3,7 @@ import { createBaseEntity, newId } from "../lib/entity";
 import { nowISO, todayISO } from "../lib/date";
 import { createDefaultSubjects, DEFAULT_SUBJECT, nextRecordTitle } from "../lib/subjects";
 import { createDefaultAiProviders } from "../lib/aiProviders";
+import { normalizeTtsConfig } from "../lib/ttsProviders";
 
 export const DEFAULT_EXAM_DATE = "2026-12-27";
 
@@ -174,7 +175,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     presets: createDefaultAiPresets(),
     imageInputMode: "local-ocr",
   },
-  schemaVersion: 3,
+  tts: normalizeTtsConfig(undefined),
+  schemaVersion: 5,
 };
 
 export const DEFAULT_TAGS = [

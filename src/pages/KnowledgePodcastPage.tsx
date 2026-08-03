@@ -33,6 +33,7 @@ import {
   startKnowledgePodcastAudioJob,
   startKnowledgePodcastScriptJob,
 } from "../services/knowledgePodcastJobService";
+import { normalizeTtsConfig, getCurrentTtsProvider } from "../lib/ttsProviders";
 
 interface KnowledgePodcastPageProps {
   settings?: AppSettings;
@@ -259,7 +260,7 @@ const PodcastEditor = ({
   const modeTemplates = useMemo(() => [...(settings?.knowledgePodcastModeTemplates ?? [])].sort((a, b) => a.order - b.order), [settings?.knowledgePodcastModeTemplates]);
   const scriptEstimate = useMemo(() => estimatePodcastScriptDuration(podcast, podcast.targetMinutes), [podcast]);
   const durationOutsideTarget = Boolean(scriptEstimate.speechCharacterCount) && Math.abs(scriptEstimate.durationTargetDeviation ?? 0) > PODCAST_DURATION_TOLERANCE;
-  const globalVoiceId = settings?.tts?.voiceId?.trim();
+  const globalVoiceId = getCurrentTtsProvider(normalizeTtsConfig(settings?.tts))?.voice?.trim();
   const voiceHasChanged = Boolean(globalVoiceId && podcast.ttsConfig.voiceId && globalVoiceId !== podcast.ttsConfig.voiceId && audioUnits.some((unit) => unit.audioStatus === "ready"));
   const creativeBrief = useMemo(
     () => getPodcastCreativeBriefWithDefaults(podcast.creativeBrief, podcast.mode, podcast.focusInstruction),
@@ -457,14 +458,12 @@ const PodcastEditor = ({
         <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
         <label>模式<select value={podcast.mode === "custom" ? `custom:${podcast.customMode?.templateId ?? ""}` : podcast.mode} onChange={(event) => changeMode(event.target.value)}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option>{podcast.mode === "custom" && podcast.customMode && !modeTemplates.some((template) => template.id === podcast.customMode!.templateId) && <option value={`custom:${podcast.customMode.templateId}`}>{podcast.customMode.title}（已保存快照）</option>}{modeTemplates.map((template) => <option key={template.id} value={`custom:${template.id}`}>{template.title}</option>)}</select></label>
         <label>目标时长<select value={podcast.targetMinutes} onChange={(event) => updatePodcast({ targetMinutes: Number(event.target.value) as KnowledgePodcast["targetMinutes"], scriptStatus: "idle" })}><option value={3}>3 分钟</option><option value={5}>5 分钟</option><option value={10}>10 分钟</option></select></label>
-        <label>Fish 模型<input value={podcast.ttsConfig.model} onChange={(event) => setPodcast((current) => invalidatePodcastAudioUnits({ ...current, ttsConfig: { ...current.ttsConfig, model: event.target.value } }))} /></label>
-        <label>全局 Voice ID<input value={settings?.tts?.voiceId ? "已在 AI 工具中配置" : "尚未配置，请前往 AI 工具设置"} readOnly /></label>
       </section>
-      <section className="podcast-scope-card podcast-planner-card">
-        <header className="podcast-planner-header">
+      <details className="podcast-scope-card podcast-planner-card">
+        <summary className="podcast-planner-header">
           <div><p className="eyebrow">Podcast Planner</p><h2>节目策划</h2><p>从建议中选择，或直接输入自己的要求。它们会与所选模式一起生成播客脚本。</p></div>
-          {(podcast.mode === "summary" || podcast.mode === "explain") && <button type="button" className="secondary-button" onClick={restoreModeRecommendations}>恢复模式推荐设置</button>}
-        </header>
+          {(podcast.mode === "summary" || podcast.mode === "explain") && <button type="button" className="secondary-button" onClick={(e) => { e.stopPropagation(); restoreModeRecommendations(); }}>恢复模式推荐设置</button>}
+        </summary>
         <details className="podcast-planner-group" open>
           <summary>节目定位</summary>
           <div className="podcast-planner-grid">
@@ -496,7 +495,7 @@ const PodcastEditor = ({
           <summary>查看本期生成指令预览</summary>
           {promptPreview.error ? <p className="error-text">{promptPreview.error}</p> : <><p>预览不包含完整本地日志正文；生成时会将当前范围的 RAG 上下文作为独立附件发送。</p><pre>{promptPreview.value}</pre></>}
         </details>
-      </section>
+      </details>
       <section className="podcast-scope-card">
         <header><div><p className="eyebrow">Knowledge Scope</p><h2>知识范围</h2><p>{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {getAiKnowledgeScopeRecords(podcast.scope, records, new Date().toISOString().slice(0, 10)).length} 条日志</p></div><button type="button" className="secondary-button" onClick={onOpenScope}>选择知识范围</button></header>
       </section>
@@ -518,20 +517,6 @@ const PodcastEditor = ({
           )}
         </section>
       )}
-      {podcast.scriptDiagnostic && (
-        <p className="podcast-diagnostic">
-          最近脚本请求：{podcast.scriptDiagnostic.providerName} / {podcast.scriptDiagnostic.model}
-          {podcast.scriptDiagnostic.finishReason ? ` · ${podcast.scriptDiagnostic.finishReason}` : ""}
-          {podcast.scriptDiagnostic.usage?.promptTokens !== undefined ? ` · 输入 ${podcast.scriptDiagnostic.usage.promptTokens}` : ""}
-          {podcast.scriptDiagnostic.usage?.completionTokens !== undefined ? ` · 输出 ${podcast.scriptDiagnostic.usage.completionTokens}` : ""}
-          {podcast.scriptDiagnostic.usage?.reasoningTokens !== undefined ? ` · 推理 ${podcast.scriptDiagnostic.usage.reasoningTokens}` : ""} Token
-          {podcast.scriptDiagnostic.requestId ? ` · 请求 ID ${podcast.scriptDiagnostic.requestId}` : ""}
-        </p>
-      )}
-      {podcast.ttsDiagnostics?.length ? (() => {
-        const diagnostic = podcast.ttsDiagnostics[podcast.ttsDiagnostics.length - 1];
-        return <p className="podcast-diagnostic">最近 Fish 请求：{diagnostic.unitTitle || "音频单元"}{diagnostic.partCurrent && diagnostic.partTotal ? ` · 分片 ${diagnostic.partCurrent}/${diagnostic.partTotal}` : ""}{diagnostic.httpStatus ? ` · HTTP ${diagnostic.httpStatus}` : ""}{diagnostic.requestId ? ` · 请求 ID ${diagnostic.requestId}` : ""} · {diagnostic.message}</p>;
-      })() : null}
       {scriptNeedsRegeneration && <p className="status-message">当前脚本与音频会保留并可继续播放；节目策划、时长或模式已改变，重新生成脚本后才会应用新要求。</p>}
       {sourceChanged && <p className="status-message">来源记录已更新，建议重新生成脚本；当前手工编辑内容不会被自动覆盖。</p>}
       {legacyAudioLayout && podcast.segments.some((segment) => segment.audioAssetId) && <p className="status-message">音频格式已更新，需要重新生成整期音频后，开场、章节与结尾才会作为独立录音播放。</p>}

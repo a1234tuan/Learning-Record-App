@@ -1,10 +1,11 @@
-import { BrainCircuit, ChevronDown, ChevronUp, Copy, Eye, EyeOff, FileJson, FileText, Headphones, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
+import { BrainCircuit, ChevronDown, ChevronUp, Copy, FileJson, FileText, Headphones, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { AppSettings, ExportKind, KnowledgePodcastModeTemplate } from "../types";
 import { exportKnowledge } from "../services/knowledgeExportService";
 import { storage } from "../services/storageAdapter";
 import { AiSettingsPanel } from "../components/AiSettingsPanel";
+import { TtsSettingsPanel } from "../components/TtsSettingsPanel";
 import { ListRow, PageHeader } from "../components/ui";
 import { createBaseEntity } from "../lib/entity";
 import { buildPodcastPromptPreview, getPodcastCreativeBriefDefaults, PODCAST_TEMPLATE_VARIABLES, validatePodcastModeTemplate } from "../services/knowledgePodcastService";
@@ -41,28 +42,13 @@ export const AiToolsPage = ({ settings, onChanged, onOpenAi, onOpenPodcasts }: A
   const [busy, setBusy] = useState<AiExportKind | null>(null);
   const [aiKind, setAiKind] = useState<AiExportKind>("subject-markdown");
   const [exportOpen, setExportOpen] = useState(false);
-  const [fishKey, setFishKey] = useState("");
-  const [showFishKey, setShowFishKey] = useState(false);
-  const [fishModel, setFishModel] = useState(settings.tts?.model ?? "s2.1-pro-free");
-  const [fishVoiceId, setFishVoiceId] = useState(settings.tts?.voiceId ?? "");
   const [podcastModes, setPodcastModes] = useState<KnowledgePodcastModeTemplate[]>(settings.knowledgePodcastModeTemplates ?? []);
   const modePromptRefs = useRef(new Map<string, HTMLTextAreaElement>());
   const selectedOption = AI_EXPORT_OPTIONS.find((item) => item.kind === aiKind);
 
   useEffect(() => {
-    setFishModel(settings.tts?.model ?? "s2.1-pro-free");
-    setFishVoiceId(settings.tts?.voiceId ?? "");
     setPodcastModes(settings.knowledgePodcastModeTemplates ?? []);
-    void storage.getAiSecret?.("fish-audio").then((secret) => setFishKey(secret?.apiKey ?? "")).catch(() => setFishKey(""));
   }, [settings]);
-
-  const saveFishSettings = async () => {
-    if (fishKey.trim()) await storage.saveAiSecret?.(fishKey.trim(), "fish-audio");
-    else await storage.clearAiSecret?.("fish-audio");
-    await storage.saveSettings({ ...settings, tts: { model: fishModel.trim() || "s2.1-pro-free", voiceId: fishVoiceId.trim(), format: "mp3" } });
-    await onChanged();
-    setMessage("Fish Audio 设置已保存。API Key 只保存在本机，不进入备份。");
-  };
 
   const updatePodcastMode = (id: string, patch: Partial<KnowledgePodcastModeTemplate>) => {
     setPodcastModes((current) => current.map((mode) => mode.id === id ? { ...mode, ...patch } : mode));
@@ -195,18 +181,7 @@ export const AiToolsPage = ({ settings, onChanged, onOpenAi, onOpenPodcasts }: A
 
       <AiSettingsPanel settings={settings} onChanged={onChanged} />
 
-      <section className="ai-settings-panel fish-audio-settings">
-        <div className="ai-settings-body">
-          <header className="inline-section-header"><div><h3>Fish Audio 文本转语音</h3><p>用于知识播客音频生成。适合个人自用；公开发布时应改为后端代理。</p></div></header>
-          <div className="settings-grid">
-            <label>模型<input value={fishModel} onChange={(event) => setFishModel(event.target.value)} placeholder="s2.1-pro-free" /></label>
-            <label>Voice ID<input value={fishVoiceId} onChange={(event) => setFishVoiceId(event.target.value)} placeholder="Fish Audio reference_id" /></label>
-            <label>API Key<span className="secret-input"><input type={showFishKey ? "text" : "password"} value={fishKey} onChange={(event) => setFishKey(event.target.value)} placeholder="sk-..." /><button type="button" onClick={() => setShowFishKey((value) => !value)} aria-label="切换 Fish 密钥显示">{showFishKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
-            <label>输出格式<input value="MP3" readOnly /></label>
-          </div>
-          <button type="button" className="primary-button" onClick={() => void saveFishSettings()}><Save size={17} />保存 Fish Audio 设置</button>
-        </div>
-      </section>
+      <TtsSettingsPanel settings={settings} onChanged={onChanged} />
 
       <section className="ai-settings-panel podcast-mode-settings">
         <div className="ai-settings-body">

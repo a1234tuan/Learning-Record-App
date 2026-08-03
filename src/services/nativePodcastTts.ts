@@ -12,8 +12,13 @@ export interface NativePodcastTtsJobRequest {
   podcastId: string;
   podcastTitle: string;
   apiKey: string;
+  /** Tencent Cloud only: SecretKey (apiKey holds the SecretId). */
+  apiKeySecondary?: string;
+  providerId: string;
   model: string;
   voiceId: string;
+  region?: string;
+  languageCode?: string;
   units: NativePodcastTtsQueueUnit[];
 }
 
@@ -64,7 +69,7 @@ export interface NativePodcastTtsArtifact {
 
 interface NativePodcastTtsPlugin {
   requestNotificationPermission(): Promise<{ granted: boolean }>;
-  start(options: { apiKey: string; job: Omit<NativePodcastTtsJobRequest, "apiKey"> }): Promise<void>;
+  start(options: { apiKey: string; apiKeySecondary?: string; job: Omit<NativePodcastTtsJobRequest, "apiKey" | "apiKeySecondary"> }): Promise<void>;
   getState(): Promise<{ state?: string }>;
   takeNextArtifact(): Promise<{ artifact?: NativePodcastTtsArtifact }>;
   acknowledgeArtifact(options: { jobId: string; unitId: string }): Promise<void>;
@@ -83,8 +88,8 @@ export const requestNativePodcastTtsNotificationPermission = async (): Promise<v
 
 export const startNativePodcastTts = async (job: NativePodcastTtsJobRequest): Promise<void> => {
   if (!isNativePodcastTtsAvailable()) return;
-  const { apiKey, ...request } = job;
-  await NativePodcastTts.start({ apiKey, job: request });
+  const { apiKey, apiKeySecondary, ...request } = job;
+  await NativePodcastTts.start({ apiKey, apiKeySecondary, job: request });
 };
 
 export const getNativePodcastTtsState = async (): Promise<NativePodcastTtsState | undefined> => {

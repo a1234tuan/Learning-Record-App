@@ -40,12 +40,13 @@ public class NativePodcastTtsPlugin extends Plugin {
     @PluginMethod
     public void start(PluginCall call) {
         String apiKey = call.getString("apiKey", "").trim();
+        String apiKeySecondary = call.getString("apiKeySecondary", "").trim();
         JSObject job = call.getObject("job");
         if (apiKey.isEmpty() || job == null || job.optString("jobId", "").isEmpty() || job.optString("podcastId", "").isEmpty()) {
             call.reject("后台播客音频任务参数不完整。");
             return;
         }
-        PodcastTtsForegroundService.start(getContext(), job.toString(), apiKey);
+        PodcastTtsForegroundService.start(getContext(), job.toString(), apiKey, apiKeySecondary);
         call.resolve();
     }
 

@@ -9,13 +9,15 @@ import type {
   KnowledgePodcastScriptDiagnostic,
   KnowledgePodcastSegment,
   RecordBlock,
+  TtsProviderProfile,
 } from "../types";
 import { createBaseEntity, newId } from "../lib/entity";
 import { buildAiKnowledgeContextPackAsync, getAiKnowledgeScopeRecords } from "./aiContextService";
 import { getCurrentAiProvider } from "../lib/aiProviders";
 import { calculateAiRequestBudget, sendChatCompletionDetailed } from "./aiClientService";
 import { storage } from "./storageAdapter";
-import { synthesizeFishAudioOnHost } from "./nativeTts";
+import { signTencentRequest } from "../lib/tencentSigning";
+import { synthesizeOnHost } from "./nativeTts";
 
 export const FISH_AUDIO_PROVIDER_ID = "fish-audio";
 export const DEFAULT_FISH_MODEL = "s2.1-pro-free";
@@ -576,19 +578,14 @@ export const generatePodcastScript = async (options: {
 };
 
 export interface TextToSpeechProvider {
-  synthesize(text: string, options: {
-    model: string;
-    voiceId: string;
-    format: "mp3";
-    signal?: AbortSignal;
-  }): Promise<Blob>;
+  synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob>;
 }
 
 export class FishAudioTtsProvider implements TextToSpeechProvider {
-  constructor(private readonly apiKey: string) {}
+  constructor(private readonly profile: TtsProviderProfile, private readonly apiKey: string) {}
 
-  async synthesize(text: string, options: Parameters<TextToSpeechProvider["synthesize"]>[1]): Promise<Blob> {
-    const hosted = await synthesizeFishAudioOnHost({ apiKey: this.apiKey, model: options.model, voiceId: options.voiceId, text, format: options.format }, options.signal);
+  async synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob> {
+    const hosted = await synthesizeOnHost({ providerId: "fish-audio", apiKey: this.apiKey, model: this.profile.model, voiceId: this.profile.voice, text, format: "mp3" }, options.signal);
     if (hosted) return hosted;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: Response;
@@ -599,12 +596,12 @@ export class FishAudioTtsProvider implements TextToSpeechProvider {
             Authorization: `Bearer ${this.apiKey.trim()}`,
             "Content-Type": "application/json",
             Accept: "audio/mpeg",
-            model: options.model,
+            model: this.profile.model,
           },
           body: JSON.stringify({
             text,
-            reference_id: options.voiceId,
-            format: options.format,
+            reference_id: this.profile.voice,
+            format: "mp3",
             normalize: true,
             mp3_bitrate: 128,
             latency: "normal",
@@ -623,9 +620,7 @@ export class FishAudioTtsProvider implements TextToSpeechProvider {
       }
       const detail = await response.text().catch(() => "");
       const retryable = response.status === 429 || response.status >= 500;
-      if (!retryable || attempt === 2) {
-        throw new Error(`Fish Audio 请求失败（${response.status}）：${detail.slice(0, 180)}`);
-      }
+      if (!retryable || attempt === 2) throw new Error(`Fish Audio 请求失败（${response.status}）：${detail.slice(0, 180)}`);
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 350 * (attempt + 1));
         options.signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("TTS cancelled", "AbortError")); }, { once: true });
@@ -634,6 +629,111 @@ export class FishAudioTtsProvider implements TextToSpeechProvider {
     throw new Error("Fish Audio 请求失败。");
   }
 }
+
+export class AliyunTtsProvider implements TextToSpeechProvider {
+  constructor(private readonly profile: TtsProviderProfile, private readonly apiKey: string) {}
+
+  async synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob> {
+    const hosted = await synthesizeOnHost({ providerId: "aliyun", apiKey: this.apiKey, model: this.profile.model, voiceId: this.profile.voice, text, format: "mp3" }, options.signal);
+    if (hosted) return hosted;
+    let response: Response;
+    try {
+      response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this.profile.model, input: { text, voice: this.profile.voice }, parameters: { format: "mp3", sample_rate: 22050 } }),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new Error("浏览器无法直接访问阿里云 TTS（可能被 CORS 拦截）。请使用桌面版或 Android 版。");
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`阿里云 TTS 请求失败（${response.status}）：${detail.slice(0, 180)}`);
+    }
+    const json = await response.json() as { output?: { audio?: { url?: string } } };
+    const url = json?.output?.audio?.url;
+    if (!url) throw new Error("阿里云 TTS 未返回音频地址。");
+    const audioResponse = await fetch(url, { signal: options.signal });
+    if (!audioResponse.ok) throw new Error(`阿里云音频下载失败（${audioResponse.status}）。`);
+    const blob = await audioResponse.blob();
+    if (blob.size === 0) throw new Error("阿里云 TTS 返回了空音频。");
+    return new Blob([blob], { type: "audio/mpeg" });
+  }
+}
+
+const base64ToBlob = (b64: string): Blob => {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: "audio/mpeg" });
+};
+
+export class TencentTtsProvider implements TextToSpeechProvider {
+  constructor(private readonly profile: TtsProviderProfile, private readonly secretId: string, private readonly secretKey: string) {}
+
+  async synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob> {
+    const hosted = await synthesizeOnHost({ providerId: "tencent", apiKey: this.secretId, apiKeySecondary: this.secretKey, model: this.profile.model, voiceId: this.profile.voice, text, format: "mp3", region: this.profile.region }, options.signal);
+    if (hosted) return hosted;
+    const host = "tts.tencentcloudapi.com";
+    const payload = JSON.stringify({ Text: text, SessionId: crypto.randomUUID(), VoiceType: Number(this.profile.voice) || 101001, Codec: "mp3", SampleRate: 16000 });
+    const headers = await signTencentRequest({ secretId: this.secretId, secretKey: this.secretKey, host, action: "TextToVoice", version: "2019-08-23", region: this.profile.region ?? "ap-guangzhou", payload });
+    let response: Response;
+    try {
+      response = await fetch(`https://${host}`, { method: "POST", headers, body: payload, signal: options.signal });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new Error("浏览器无法直接访问腾讯云 TTS（可能被 CORS 拦截）。请使用桌面版或 Android 版。");
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`腾讯云 TTS 请求失败（${response.status}）：${detail.slice(0, 180)}`);
+    }
+    const json = await response.json() as { Response?: { Audio?: string; Error?: { Message: string } } };
+    if (json?.Response?.Error) throw new Error(`腾讯云 TTS 错误：${json.Response.Error.Message}`);
+    const audio = json?.Response?.Audio;
+    if (!audio) throw new Error("腾讯云 TTS 未返回音频数据。");
+    return base64ToBlob(audio);
+  }
+}
+
+export class GoogleTtsProvider implements TextToSpeechProvider {
+  constructor(private readonly profile: TtsProviderProfile, private readonly apiKey: string) {}
+
+  async synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob> {
+    const hosted = await synthesizeOnHost({ providerId: "google", apiKey: this.apiKey, model: this.profile.model, voiceId: this.profile.voice, text, format: "mp3", languageCode: this.profile.languageCode }, options.signal);
+    if (hosted) return hosted;
+    let response: Response;
+    try {
+      response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(this.apiKey)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: { text }, voice: { languageCode: this.profile.languageCode ?? "cmn-CN", name: this.profile.voice }, audioConfig: { audioEncoding: "MP3" } }),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new Error(`Google Cloud TTS 请求失败：${error instanceof Error ? error.message : "网络错误"}`);
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Google Cloud TTS 请求失败（${response.status}）：${detail.slice(0, 180)}`);
+    }
+    const json = await response.json() as { audioContent?: string };
+    if (!json?.audioContent) throw new Error("Google Cloud TTS 未返回音频数据。");
+    return base64ToBlob(json.audioContent);
+  }
+}
+
+export const createTtsProvider = (profile: TtsProviderProfile, apiKey: string, apiKeySecondary?: string): TextToSpeechProvider => {
+  switch (profile.providerId) {
+    case "aliyun": return new AliyunTtsProvider(profile, apiKey);
+    case "tencent": return new TencentTtsProvider(profile, apiKey, apiKeySecondary ?? "");
+    case "google": return new GoogleTtsProvider(profile, apiKey);
+    default: return new FishAudioTtsProvider(profile, apiKey);
+  }
+};
 
 export const splitTtsText = (text: string, maxBytes = 800): string[] => {
   const parts: string[] = [];

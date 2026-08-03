@@ -33,7 +33,17 @@ declare global {
         deleteFile: (path: string) => Promise<void>;
       }>;
       tts: Readonly<{
-        synthesize: (options: { apiKey: string; model: string; voiceId: string; text: string; format: "mp3" }) => Promise<{ data: string; mimeType?: string }>;
+        synthesize: (options: {
+          providerId: string;
+          apiKey: string;
+          apiKeySecondary?: string;
+          model: string;
+          voiceId: string;
+          text: string;
+          format: "mp3";
+          region?: string;
+          languageCode?: string;
+        }) => Promise<{ data: string; mimeType?: string }>;
       }>;
       onBackupFlushRequested: (listener: (reason: "minimize" | "close") => Promise<void> | void) => () => void;
     }>;

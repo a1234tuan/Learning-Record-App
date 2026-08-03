@@ -335,6 +335,8 @@ export interface AiProviderConfig {
 export interface AiSecret {
   id: EntityId;
   apiKey: string;
+  /** Second credential for providers needing a key pair (e.g. Tencent Cloud SecretId + SecretKey). */
+  apiKeySecondary?: string;
   updatedAt: ISODateTime;
 }
 
@@ -408,10 +410,23 @@ export interface AiCompletionResult {
   requestId?: string;
 }
 
-export interface AiTtsConfig {
+export type TtsProviderId = "fish-audio" | "aliyun" | "tencent" | "google";
+
+export interface TtsProviderProfile {
+  id: EntityId;
+  providerId: TtsProviderId;
+  providerName: string;
   model: string;
-  voiceId: string;
-  format: "mp3";
+  voice: string;
+  /** Tencent Cloud requires a signing region (e.g. ap-guangzhou). */
+  region?: string;
+  /** Google Cloud TTS voices are scoped to a BCP-47 language code (e.g. cmn-CN). */
+  languageCode?: string;
+}
+
+export interface TtsProviderConfig {
+  currentProviderId: EntityId;
+  providers: TtsProviderProfile[];
 }
 
 /** The per-episode editorial brief used to steer a knowledge-podcast script. */
@@ -563,10 +578,14 @@ export interface KnowledgePodcast extends BaseEntity {
   ttsDiagnostics?: KnowledgePodcastTtsDiagnostic[];
   playback?: { unitId?: EntityId; segmentId?: EntityId; positionSeconds: number };
   ttsConfig: {
-    providerId: "fish-audio";
+    providerId: TtsProviderId;
     model: string;
     voiceId: string;
     format: "mp3";
+    /** Tencent Cloud requires a signing region (e.g. ap-guangzhou). */
+    region?: string;
+    /** Google Cloud TTS voices are scoped to a BCP-47 language code (e.g. cmn-CN). */
+    languageCode?: string;
   };
 }
 
@@ -706,9 +725,9 @@ export interface AppSettings {
   subjects?: SubjectConfig[];
   autoBackup?: AutoBackupSettings;
   ai?: AiProviderConfig;
-  tts?: AiTtsConfig;
+  tts?: TtsProviderConfig;
   knowledgePodcastModeTemplates?: KnowledgePodcastModeTemplate[];
-  schemaVersion?: 1 | 2 | 3 | 4;
+  schemaVersion?: 1 | 2 | 3 | 4 | 5;
 }
 
 export interface BackupManifest {
@@ -924,7 +943,7 @@ export interface StorageAdapter {
   deleteAiAttachment?(id: EntityId): Promise<void>;
   deleteAiAttachmentsForSession?(sessionId: EntityId): Promise<void>;
   getAiSecret?(providerId?: EntityId): Promise<AiSecret | undefined>;
-  saveAiSecret?(apiKey: string, providerId?: EntityId): Promise<AiSecret>;
+  saveAiSecret?(apiKey: string, providerId?: EntityId, apiKeySecondary?: string): Promise<AiSecret>;
   clearAiSecret?(providerId?: EntityId): Promise<void>;
 }
 

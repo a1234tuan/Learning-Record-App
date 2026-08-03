@@ -58,6 +58,7 @@ import {
 import { normalizeRecordTags, sameRecordTags } from "../lib/recordTags";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
+import { normalizeTtsConfig } from "../lib/ttsProviders";
 import {
   DEFAULT_REVIEW_EASE,
   DEFAULT_REVIEW_KIND,
@@ -228,6 +229,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateRecordTags();
     await this.migrateSettingsToDynamicSubjects();
     await this.migrateAiSettings();
+    await this.migrateTtsSettings();
     await this.purgeMistakeAndReviewData();
     await this.migrateRecordReviewsToMixedSystem();
     await this.resetStaleOcrJobs(10 * 60 * 1000);
@@ -433,6 +435,15 @@ export class DexieStorageAdapter implements StorageAdapter {
       ...settings,
       ai: nextAi,
     });
+  }
+
+  private async migrateTtsSettings(): Promise<void> {
+    const settings = await this.getSettings();
+    const normalized = normalizeTtsConfig(settings.tts);
+    if (JSON.stringify(settings.tts ?? {}) === JSON.stringify(normalized)) {
+      return;
+    }
+    await db.settings.put({ ...settings, tts: normalized });
   }
 
   private async migrateRecordsToLinearContent(): Promise<void> {
@@ -1735,10 +1746,11 @@ export class DexieStorageAdapter implements StorageAdapter {
     return db.aiSecrets.get(providerId);
   }
 
-  async saveAiSecret(apiKey: string, providerId = "default"): Promise<AiSecret> {
+  async saveAiSecret(apiKey: string, providerId = "default", apiKeySecondary?: string): Promise<AiSecret> {
     const secret: AiSecret = {
       id: providerId,
       apiKey,
+      ...(apiKeySecondary ? { apiKeySecondary } : {}),
       updatedAt: nowISO(),
     };
     await db.aiSecrets.put(secret);

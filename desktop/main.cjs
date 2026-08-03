@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require("electron");
 const { cpSync, existsSync, mkdirSync, renameSync } = require("node:fs");
 const fs = require("node:fs/promises");
-const { randomUUID } = require("node:crypto");
+const { randomUUID, createHmac, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { recognizePaddleOcr } = require("./ocr.cjs");
@@ -329,23 +329,97 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
     throw new Error("TTS 请求来源无效。");
   }
+  const providerId = typeof options?.providerId === "string" ? options.providerId : "fish-audio";
   const apiKey = typeof options?.apiKey === "string" ? options.apiKey.trim() : "";
-  const model = typeof options?.model === "string" ? options.model.trim() : "s2.1-pro-free";
+  const apiKeySecondary = typeof options?.apiKeySecondary === "string" ? options.apiKeySecondary.trim() : "";
+  const model = typeof options?.model === "string" ? options.model.trim() : "";
   const voiceId = typeof options?.voiceId === "string" ? options.voiceId.trim() : "";
   const text = typeof options?.text === "string" ? options.text : "";
-  if (!apiKey || !voiceId || !text.trim()) throw new Error("Fish Audio 请求配置不完整。");
+  const region = typeof options?.region === "string" ? options.region.trim() : "ap-guangzhou";
+  const languageCode = typeof options?.languageCode === "string" ? options.languageCode.trim() : "cmn-CN";
+  if (!apiKey || !voiceId || !text.trim()) throw new Error("TTS 请求配置不完整。");
+
+  if (providerId === "aliyun") {
+    const aliyunModel = model || "qwen3-tts-flash";
+    const resp = await net.fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: aliyunModel, input: { text, voice: voiceId }, parameters: { format: "mp3", sample_rate: 24000 } }),
+    });
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(`阿里云 TTS 请求失败（${resp.status}）：${JSON.stringify(json).slice(0, 200)}`);
+    const audioUrl = json?.output?.audio?.url;
+    if (!audioUrl) throw new Error("阿里云 TTS 未返回音频链接。");
+    const audioResp = await net.fetch(audioUrl);
+    if (!audioResp.ok) throw new Error(`阿里云音频下载失败（${audioResp.status}）`);
+    const buffer = Buffer.from(await audioResp.arrayBuffer());
+    return { data: buffer.toString("base64"), mimeType: "audio/mpeg" };
+  }
+
+  if (providerId === "tencent") {
+    const secretId = apiKey;
+    const secretKey = apiKeySecondary;
+    if (!secretKey) throw new Error("腾讯云 TTS 需要 SecretKey（API Key Secondary）。");
+    const voiceType = parseInt(voiceId, 10);
+    if (isNaN(voiceType)) throw new Error("腾讯云 VoiceType 必须为数字。");
+    const host = "tts.tencentcloudapi.com";
+    const service = "tts";
+    const action = "TextToVoice";
+    const version = "2019-08-23";
+    const timestamp = Math.floor(Date.now() / 1000);
+    const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+    const payload = JSON.stringify({ Text: text, SessionId: randomUUID(), VoiceType: voiceType, Codec: "mp3", SampleRate: 16000 });
+    const hashedPayload = createHash("sha256").update(payload).digest("hex");
+    const canonicalRequest = `POST\n/\n\ncontent-type:application/json\nhost:${host}\n\ncontent-type;host\n${hashedPayload}`;
+    const credentialScope = `${date}/${service}/tc3_request`;
+    const stringToSign = `TC3-HMAC-SHA256\n${timestamp}\n${credentialScope}\n${createHash("sha256").update(canonicalRequest).digest("hex")}`;
+    const secretDate = createHmac("sha256", `TC3${secretKey}`).update(date).digest();
+    const secretService = createHmac("sha256", secretDate).update(service).digest();
+    const secretSigning = createHmac("sha256", secretService).update("tc3_request").digest();
+    const signature = createHmac("sha256", secretSigning).update(stringToSign).digest("hex");
+    const authorization = `TC3-HMAC-SHA256 Credential=${secretId}/${credentialScope}, SignedHeaders=content-type;host, Signature=${signature}`;
+    const resp = await net.fetch(`https://${host}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: host,
+        Authorization: authorization,
+        "X-TC-Action": action,
+        "X-TC-Timestamp": String(timestamp),
+        "X-TC-Version": version,
+        "X-TC-Region": region,
+      },
+      body: payload,
+    });
+    const json = await resp.json();
+    if (!resp.ok || json?.Response?.Error) throw new Error(`腾讯云 TTS 请求失败：${JSON.stringify(json?.Response?.Error ?? json).slice(0, 200)}`);
+    const audio = json?.Response?.Audio;
+    if (!audio) throw new Error("腾讯云 TTS 未返回音频数据。");
+    return { data: audio, mimeType: "audio/mpeg" };
+  }
+
+  if (providerId === "google") {
+    const resp = await net.fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: { text }, voice: { languageCode, name: voiceId }, audioConfig: { audioEncoding: "MP3" } }),
+    });
+    const json = await resp.json();
+    if (!resp.ok) throw new Error(`Google TTS 请求失败（${resp.status}）：${JSON.stringify(json).slice(0, 200)}`);
+    const audioContent = json?.audioContent;
+    if (!audioContent) throw new Error("Google TTS 未返回音频数据。");
+    return { data: audioContent, mimeType: "audio/mpeg" };
+  }
+
+  // Fish Audio (default)
+  const fishModel = model || "s2.1-pro-free";
   const response = await net.fetch("https://api.fish.audio/v1/tts", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "audio/mpeg",
-      model,
-    },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "audio/mpeg", model: fishModel },
     body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", normalize: true, mp3_bitrate: 128, latency: "normal", chunk_length: 300 }),
   });
   const buffer = Buffer.from(await response.arrayBuffer());
-  if (!response.ok) throw new Error(`Fish Audio 请求失败（${response.status}）：${buffer.toString("utf8").slice(0, 180)}`);
+  if (!response.ok) throw new Error(`Fish Audio 请求失败（${response.status}）：${buffer.toString("utf8").slice(0, 200)}`);
   return { data: buffer.toString("base64"), mimeType: "audio/mpeg" };
 });
 ipcMain.handle("study-journal:desktop-backup-status", desktopBackupStatus);

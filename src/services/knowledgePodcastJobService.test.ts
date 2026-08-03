@@ -9,7 +9,7 @@ vi.mock("./knowledgePodcastService", async (importOriginal) => {
   return {
     ...original,
     generatePodcastScript: generatePodcastScriptMock,
-    FishAudioTtsProvider: class { synthesize = synthesizeMock; },
+    createTtsProvider: () => ({ synthesize: synthesizeMock }),
   };
 });
 
@@ -32,6 +32,10 @@ const settings = (): AppSettings => ({
     }],
     presets: [],
     imageInputMode: "local-ocr",
+  },
+  tts: {
+    currentProviderId: "fish-audio",
+    providers: [{ id: "fish-audio", providerId: "fish-audio" as const, providerName: "Fish Audio", model: "s2.1-pro-free", voice: "test-voice" }],
   },
 });
 
@@ -153,7 +157,13 @@ describe("knowledgePodcastJobService", () => {
       ...podcast(),
       segments: [{ id: "segment-1", order: 0, title: "第一章", text: "正文。", sourceRecordIds: ["record-1"], textHash: "", audioStatus: "pending" }],
     };
-    const globalSettings = { ...settings(), tts: { model: "s2.1-pro-free", voiceId: "global-voice", format: "mp3" as const } };
+    const globalSettings = {
+      ...settings(),
+      tts: {
+        currentProviderId: "fish-audio",
+        providers: [{ id: "fish-audio", providerId: "fish-audio" as const, providerName: "Fish Audio", model: "s2.1-pro-free", voice: "global-voice" }],
+      },
+    };
     synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
     vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
     vi.spyOn(storage, "getSettings").mockResolvedValue(globalSettings);
@@ -166,7 +176,7 @@ describe("knowledgePodcastJobService", () => {
     await startKnowledgePodcastAudioJob(current.id);
     await vi.waitFor(() => expect(isKnowledgePodcastJobRunning(current.id, "audio")).toBe(false));
 
-    expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ voiceId: "global-voice" }));
+    expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(current.ttsConfig.voiceId).toBe("global-voice");
   });
 });

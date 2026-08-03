@@ -1,15 +1,21 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import type { TtsProviderId } from "../types";
 
-interface TtsRequestOptions {
+export interface TtsSynthesisOptions {
+  providerId: TtsProviderId;
   apiKey: string;
+  /** Tencent Cloud only: SecretKey (apiKey is the SecretId). */
+  apiKeySecondary?: string;
   model: string;
   voiceId: string;
   text: string;
   format: "mp3";
+  region?: string;
+  languageCode?: string;
 }
 
 interface NativeTtsPlugin {
-  synthesize(options: TtsRequestOptions): Promise<{ data: string; mimeType?: string }>;
+  synthesize(options: TtsSynthesisOptions): Promise<{ data: string; mimeType?: string }>;
 }
 
 const NativeTts = registerPlugin<NativeTtsPlugin>("NativeTts");
@@ -21,7 +27,7 @@ const base64ToBlob = (data: string, mimeType = "audio/mpeg"): Blob => {
   return new Blob([bytes], { type: mimeType });
 };
 
-export const synthesizeFishAudioOnHost = async (options: TtsRequestOptions, signal?: AbortSignal): Promise<Blob | undefined> => {
+export const synthesizeOnHost = async (options: TtsSynthesisOptions, signal?: AbortSignal): Promise<Blob | undefined> => {
   if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
     if (signal?.aborted) throw new DOMException("TTS cancelled", "AbortError");
     const result = await NativeTts.synthesize(options);

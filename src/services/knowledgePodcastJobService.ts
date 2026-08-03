@@ -1,8 +1,9 @@
 import type { KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastGenerationProgress, KnowledgePodcastTtsDiagnostic } from "../types";
 import { newId } from "../lib/entity";
 import { getCurrentAiProvider } from "../lib/aiProviders";
+import { normalizeTtsConfig, getCurrentTtsProvider, TTS_PROVIDER_LABELS } from "../lib/ttsProviders";
 import {
-  FishAudioTtsProvider,
+  createTtsProvider,
   createPodcastAudioUnits,
   reconcilePodcastAudioUnits,
   generatePodcastScript,
@@ -211,9 +212,12 @@ export const syncNativeKnowledgePodcastTtsJobs = async (): Promise<Set<string>> 
     const nativeUnit = nativeUnits.get(unit.id);
     if (!nativeUnit || nativeUnit.status === "ready") continue;
     if (nativeUnit.status === "failed") {
-      podcast = updateUnit(podcast, unit.id, { audioStatus: "failed", error: nativeUnit.error || "Fish Audio 生成失败。" });
+      podcast = updateUnit(podcast, unit.id, { audioStatus: "failed", error: nativeUnit.error || `${TTS_PROVIDER_LABELS[podcast.ttsConfig.providerId] ?? podcast.ttsConfig.providerId} 生成失败。` });
     } else if (nativeRunning) {
       podcast = updateUnit(podcast, unit.id, { audioStatus: nativeUnit.status === "generating" ? "generating" : "pending", error: undefined });
+    } else if (unit.audioStatus !== "ready") {
+      // Service ended without producing an artifact for this unit — reset to pending so user can retry.
+      podcast = updateUnit(podcast, unit.id, { audioStatus: "pending", error: undefined });
     }
   }
   podcast = appendTtsDiagnostics(podcast, state.diagnostics);
@@ -223,7 +227,7 @@ export const syncNativeKnowledgePodcastTtsJobs = async (): Promise<Set<string>> 
       ...podcast,
       audioStatus: "generating",
       generation: progress("audio", "generating-segment", state.message, startedAt, {
-        providerName: "Fish Audio",
+        providerName: TTS_PROVIDER_LABELS[podcast.ttsConfig.providerId] ?? podcast.ttsConfig.providerId,
         model: podcast.ttsConfig.model,
         current: state.current,
         total: state.total,
@@ -241,14 +245,18 @@ export const syncNativeKnowledgePodcastTtsJobs = async (): Promise<Set<string>> 
   if (allReady) podcast = await cleanupReplacedAudio(podcast);
   const cancelled = state.status === "cancelled";
   const failed = state.status === "failed" || state.status === "running";
-  const terminalMessage = state.status === "running" ? "后台音频任务没有活动服务，任务可能已中断，请继续生成。" : state.message;
+  const terminalMessage = state.status === "running"
+    ? "后台音频任务没有活动服务，任务可能已中断，请继续生成。"
+    : (!allReady && state.status === "completed")
+      ? "音频生成完成，部分章节未能生成，请点击重试缺失章节。"
+      : state.message;
   await savePodcast({
     ...podcast,
     audioStatus: allReady ? "ready" : audioStatusForUnits(podcast.audioUnits ?? []),
     lastError: failed ? terminalMessage : undefined,
     generation: {
       ...progress("audio", cancelled ? "cancelled" : failed ? "failed" : "completed", terminalMessage, startedAt, {
-        providerName: "Fish Audio",
+        providerName: TTS_PROVIDER_LABELS[podcast.ttsConfig.providerId] ?? podcast.ttsConfig.providerId,
         model: podcast.ttsConfig.model,
         current: state.current,
         total: state.total,
@@ -374,12 +382,13 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
   if (!podcast) throw new Error("知识播客不存在或已被删除。");
   if (!podcast?.segments.length || !podcast.audioUnits?.length) throw new Error("请先生成脚本。");
   const settings = await storage.getSettings();
-  const apiKey = (await storage.getAiSecret?.("fish-audio"))?.apiKey;
-  // The AI-tools setting is the source of truth for all future generation.
-  // Legacy per-episode values are only kept as a compatibility fallback.
-  const voiceId = settings.tts?.voiceId?.trim() || podcast.ttsConfig.voiceId.trim();
-  if (!apiKey) throw new Error("请先在 AI 工具设置中填写 Fish Audio API Key。");
-  if (!voiceId) throw new Error("请先在 AI 工具设置中填写 Voice ID。");
+  const ttsConfig = normalizeTtsConfig(settings.tts);
+  const ttsProfile = getCurrentTtsProvider(ttsConfig);
+  if (!ttsProfile) throw new Error("请先在 AI 工具设置中配置 TTS 供应商。");
+  const ttsSecret = await storage.getAiSecret?.(ttsProfile.id);
+  if (!ttsSecret?.apiKey) throw new Error(`请先在 AI 工具设置中填写 ${ttsProfile.providerName} 的 API Key。`);
+  if (ttsProfile.providerId === "tencent" && !ttsSecret.apiKeySecondary) throw new Error("腾讯云 TTS 需要同时填写 SecretId（API Key）和 SecretKey。");
+  if (!ttsProfile.voice) throw new Error(`请先在 AI 工具设置中为 ${ttsProfile.providerName} 配置语音 ID。`);
 
   const startedAt = now();
   const controller = new AbortController();
@@ -388,10 +397,10 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
     ...podcast,
     audioStatus: "generating",
     lastError: undefined,
-    ttsConfig: { ...podcast.ttsConfig, voiceId },
+    ttsConfig: { ...podcast.ttsConfig, providerId: ttsProfile.providerId, model: ttsProfile.model, voiceId: ttsProfile.voice, region: ttsProfile.region, languageCode: ttsProfile.languageCode },
     generation: progress("audio", "preparing-audio", "正在准备播客音频…", startedAt, {
-      providerName: "Fish Audio",
-      model: podcast.ttsConfig.model,
+      providerName: ttsProfile.providerName,
+      model: ttsProfile.model,
       current: 0,
       total: podcast.audioUnits.length,
     }),
@@ -419,8 +428,8 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
     current = await savePodcast({
       ...current,
       generation: progress("audio", "preparing-audio", "正在启动 Android 后台音频服务…", startedAt, {
-        providerName: "Fish Audio",
-        model: current.ttsConfig.model,
+        providerName: ttsProfile.providerName,
+        model: ttsProfile.model,
         current: 0,
         total: queue.length,
         nativeJobId,
@@ -432,9 +441,13 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
         jobId: nativeJobId,
         podcastId: current.id,
         podcastTitle: current.title,
-        apiKey,
-        model: current.ttsConfig.model,
-        voiceId,
+        apiKey: ttsSecret.apiKey,
+        apiKeySecondary: ttsSecret.apiKeySecondary,
+        providerId: ttsProfile.providerId,
+        model: ttsProfile.model,
+        voiceId: ttsProfile.voice,
+        region: ttsProfile.region,
+        languageCode: ttsProfile.languageCode,
         units: queue,
       });
       startNativeMonitor(current.id);
@@ -454,7 +467,7 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
   }
 
   void (async () => {
-    const provider = new FishAudioTtsProvider(apiKey);
+    const provider = createTtsProvider(ttsProfile, ttsSecret.apiKey, ttsSecret.apiKeySecondary);
     try {
       for (const unit of current.audioUnits ?? []) {
         if (onlyUnitId && unit.id !== onlyUnitId) continue;
@@ -467,8 +480,8 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
         current = await savePodcast(updateUnit({
           ...current,
           generation: progress("audio", "generating-segment", `正在生成${unit.title}音频…`, startedAt, {
-            providerName: "Fish Audio",
-            model: current.ttsConfig.model,
+            providerName: ttsProfile.providerName,
+            model: ttsProfile.model,
             current: unit.order + 1,
             total: current.audioUnits?.length ?? 0,
           }),
@@ -479,26 +492,21 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
             current = await savePodcast({
               ...current,
               generation: progress("audio", "generating-segment", `${unit.title}语音片段 ${partIndex + 1}/${parts.length}`, startedAt, {
-                providerName: "Fish Audio",
-                model: current.ttsConfig.model,
+                providerName: ttsProfile.providerName,
+                model: ttsProfile.model,
                 current: unit.order + 1,
                 total: current.audioUnits?.length ?? 0,
                 partCurrent: partIndex + 1,
                 partTotal: parts.length,
               }),
             });
-            blobs.push(await provider.synthesize(part, {
-              model: current.ttsConfig.model,
-              voiceId,
-              format: "mp3",
-              signal: controller.signal,
-            }));
+            blobs.push(await provider.synthesize(part, { signal: controller.signal }));
           }
           current = await savePodcast({
             ...current,
             generation: progress("audio", "saving-audio", `正在保存${unit.title}音频…`, startedAt, {
-              providerName: "Fish Audio",
-              model: current.ttsConfig.model,
+              providerName: ttsProfile.providerName,
+              model: ttsProfile.model,
               current: unit.order + 1,
               total: current.audioUnits?.length ?? 0,
             }),

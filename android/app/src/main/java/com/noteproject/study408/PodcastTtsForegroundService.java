@@ -20,14 +20,18 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -40,6 +44,7 @@ public final class PodcastTtsForegroundService extends Service {
     public static final String ACTION_CANCEL = "com.noteproject.study408.PODCAST_TTS_CANCEL";
     private static final String EXTRA_JOB = "job";
     private static final String EXTRA_API_KEY = "apiKey";
+    private static final String EXTRA_API_KEY_SECONDARY = "apiKeySecondary";
     private static final String CHANNEL_ID = "study_podcast_tts";
     private static final int NOTIFICATION_ID = 40802;
     private static final String PREFS = "podcast_tts_state";
@@ -56,11 +61,12 @@ public final class PodcastTtsForegroundService extends Service {
     private volatile long requestStartedAtMs;
     private JSONObject state;
 
-    public static void start(Context context, String jobJson, String apiKey) {
+    public static void start(Context context, String jobJson, String apiKey, String apiKeySecondary) {
         Intent intent = new Intent(context, PodcastTtsForegroundService.class)
             .setAction(ACTION_START)
             .putExtra(EXTRA_JOB, jobJson)
-            .putExtra(EXTRA_API_KEY, apiKey);
+            .putExtra(EXTRA_API_KEY, apiKey)
+            .putExtra(EXTRA_API_KEY_SECONDARY, apiKeySecondary != null ? apiKeySecondary : "");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
         else context.startService(intent);
     }
@@ -161,6 +167,8 @@ public final class PodcastTtsForegroundService extends Service {
         if (!ACTION_START.equals(action)) return START_NOT_STICKY;
         String jobJson = intent.getStringExtra(EXTRA_JOB);
         String apiKey = intent.getStringExtra(EXTRA_API_KEY);
+        String apiKeySecondary = intent.getStringExtra(EXTRA_API_KEY_SECONDARY);
+        if (apiKeySecondary == null) apiKeySecondary = "";
         if (jobJson == null || apiKey == null || apiKey.trim().isEmpty()) {
             markInterrupted("后台服务启动参数不完整，任务已中断。");
             return START_NOT_STICKY;
@@ -174,7 +182,8 @@ public final class PodcastTtsForegroundService extends Service {
                 persistLocked();
             }
             startForegroundNotification();
-            worker.execute(() -> runJob(job, apiKey.trim()));
+            final String finalApiKeySecondary = apiKeySecondary;
+            worker.execute(() -> runJob(job, apiKey.trim(), finalApiKeySecondary.trim()));
         } catch (Exception error) {
             markInterrupted("无法启动后台音频任务：" + safeMessage(error));
         }
@@ -235,8 +244,13 @@ public final class PodcastTtsForegroundService extends Service {
         return next;
     }
 
-    private void runJob(JSONObject job, String apiKey) {
+    private void runJob(JSONObject job, String apiKey, String apiKeySecondary) {
         try {
+            String providerId = job.optString("providerId", "fish-audio");
+            String model = job.optString("model", "");
+            String voiceId = job.optString("voiceId", "");
+            String region = job.optString("region", "ap-guangzhou");
+            String languageCode = job.optString("languageCode", "cmn-CN");
             JSONArray inputUnits = job.optJSONArray("units");
             if (inputUnits == null || inputUnits.length() == 0) throw new IllegalArgumentException("没有可生成的音频单元。");
             boolean anyFailure = false;
@@ -247,7 +261,10 @@ public final class PodcastTtsForegroundService extends Service {
                 String unitId = inputUnit.optString("unitId");
                 String title = inputUnit.optString("title", "章节");
                 JSONArray parts = inputUnit.optJSONArray("parts");
-                if (unitId.isEmpty() || parts == null || parts.length() == 0) continue;
+                if (unitId.isEmpty() || parts == null || parts.length() == 0) {
+                    anyFailure = true;
+                    continue;
+                }
                 updateUnit(unitId, "generating", null, index + 1, inputUnits.length(), 0, parts.length(), "正在生成" + title + "音频…");
                 File output = outputFile(unitId);
                 if (output.exists()) output.delete();
@@ -258,8 +275,8 @@ public final class PodcastTtsForegroundService extends Service {
                         String text = parts.optString(partIndex, "").trim();
                         if (text.isEmpty()) continue;
                         updateUnit(unitId, "generating", null, index + 1, inputUnits.length(), partIndex + 1, parts.length(), title + "语音片段 " + (partIndex + 1) + "/" + parts.length());
-                        byte[] audio = requestAudio(apiKey, job.optString("model"), job.optString("voiceId"), text, unitId, title, partIndex + 1, parts.length());
-                        if (audio == null || audio.length == 0) throw new IllegalStateException("Fish Audio 返回了空音频。");
+                        byte[] audio = requestAudio(providerId, apiKey, apiKeySecondary, model, voiceId, region, languageCode, text, unitId, title, partIndex + 1, parts.length());
+                        if (audio == null || audio.length == 0) throw new IllegalStateException("TTS 返回了空音频。");
                         outputStream.write(audio);
                     }
                 } catch (Exception error) {
@@ -293,7 +310,7 @@ public final class PodcastTtsForegroundService extends Service {
         }
     }
 
-    private byte[] requestAudio(String apiKey, String model, String voiceId, String text, String unitId, String title, int partCurrent, int partTotal) throws Exception {
+    private byte[] requestAudio(String providerId, String apiKey, String apiKeySecondary, String model, String voiceId, String region, String languageCode, String text, String unitId, String title, int partCurrent, int partTotal) throws Exception {
         Exception lastError = null;
         for (int attempt = 1; attempt <= 3; attempt += 1) {
             if (cancelled) throw new InterruptedException("已取消");
@@ -301,40 +318,53 @@ public final class PodcastTtsForegroundService extends Service {
             requestStartedAtMs = System.currentTimeMillis();
             markRequestStarted();
             try {
-                connection = (HttpURLConnection) new URL("https://api.fish.audio/v1/tts").openConnection();
-                activeConnection = connection;
-                connection.setRequestMethod("POST");
-                connection.setConnectTimeout(30_000);
-                connection.setReadTimeout(120_000);
-                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                connection.setRequestProperty("Accept", "audio/mpeg");
-                connection.setRequestProperty("model", model);
-                connection.setDoOutput(true);
-                JSONObject payload = new JSONObject();
-                payload.put("text", text);
-                payload.put("reference_id", voiceId);
-                payload.put("format", "mp3");
-                payload.put("normalize", true);
-                payload.put("mp3_bitrate", 128);
-                payload.put("latency", "normal");
-                payload.put("chunk_length", 300);
-                try (OutputStream output = connection.getOutputStream()) {
-                    output.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+                byte[] result = null;
+                switch (providerId) {
+                    case "aliyun": result = requestAliyun(apiKey, model, voiceId, text); break;
+                    case "tencent": result = requestTencent(apiKey, apiKeySecondary, voiceId, text, region); break;
+                    case "google": result = requestGoogle(apiKey, voiceId, text, languageCode); break;
+                    default: {
+                        String fishModel = model.isEmpty() ? "s2.1-pro-free" : model;
+                        connection = (HttpURLConnection) new URL("https://api.fish.audio/v1/tts").openConnection();
+                        activeConnection = connection;
+                        connection.setRequestMethod("POST");
+                        connection.setConnectTimeout(30_000);
+                        connection.setReadTimeout(120_000);
+                        connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                        connection.setRequestProperty("Accept", "audio/mpeg");
+                        connection.setRequestProperty("model", fishModel);
+                        connection.setDoOutput(true);
+                        JSONObject payload = new JSONObject();
+                        payload.put("text", text);
+                        payload.put("reference_id", voiceId);
+                        payload.put("format", "mp3");
+                        payload.put("normalize", true);
+                        payload.put("mp3_bitrate", 128);
+                        payload.put("latency", "normal");
+                        payload.put("chunk_length", 300);
+                        try (OutputStream out = connection.getOutputStream()) {
+                            out.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+                        }
+                        int code = connection.getResponseCode();
+                        String requestId = firstNonEmpty(connection.getHeaderField("x-request-id"), connection.getHeaderField("request-id"));
+                        byte[] bytes = readAll(code >= 400 ? connection.getErrorStream() : connection.getInputStream());
+                        if (code >= 200 && code < 300) {
+                            addDiagnostic(unitId, title, partCurrent, partTotal, attempt, code, requestId, "Fish Audio 请求成功。");
+                            result = bytes;
+                        } else {
+                            String detail = truncate(new String(bytes, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim(), 180);
+                            String message = "Fish Audio 请求失败（" + code + "）：" + detail;
+                            addDiagnostic(unitId, title, partCurrent, partTotal, attempt, code, requestId, message);
+                            if (code != 429 && code < 500) throw new IllegalStateException(message);
+                            lastError = new IllegalStateException(message);
+                        }
+                    }
                 }
-                int code = connection.getResponseCode();
-                String requestId = firstNonEmpty(connection.getHeaderField("x-request-id"), connection.getHeaderField("request-id"));
-                InputStream input = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                byte[] bytes = readAll(input);
-                if (code >= 200 && code < 300) {
-                    addDiagnostic(unitId, title, partCurrent, partTotal, attempt, code, requestId, "Fish Audio 请求成功。");
-                    return bytes;
+                if (result != null) {
+                    addDiagnostic(unitId, title, partCurrent, partTotal, attempt, 200, null, providerId + " 请求成功。");
+                    return result;
                 }
-                String detail = new String(bytes, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
-                String message = "Fish Audio 请求失败（" + code + "）：" + truncate(detail, 180);
-                addDiagnostic(unitId, title, partCurrent, partTotal, attempt, code, requestId, message);
-                if (code != 429 && code < 500) throw new IllegalStateException(message);
-                lastError = new IllegalStateException(message);
             } catch (Exception error) {
                 if (cancelled) throw new InterruptedException("已取消");
                 lastError = error;
@@ -347,8 +377,153 @@ public final class PodcastTtsForegroundService extends Service {
             }
             if (attempt < 3) Thread.sleep(500L * attempt);
         }
-        throw lastError != null ? lastError : new IllegalStateException("Fish Audio 请求失败。");
+        throw lastError != null ? lastError : new IllegalStateException("TTS 请求失败。");
     }
+
+    private byte[] requestAliyun(String apiKey, String model, String voiceId, String text) throws Exception {
+        String aliyunModel = model.isEmpty() ? "qwen3-tts-flash" : model;
+        JSONObject input = new JSONObject();
+        input.put("text", text);
+        input.put("voice", voiceId);
+        JSONObject parameters = new JSONObject();
+        parameters.put("format", "mp3");
+        parameters.put("sample_rate", 24000);
+        JSONObject payload = new JSONObject();
+        payload.put("model", aliyunModel);
+        payload.put("input", input);
+        payload.put("parameters", parameters);
+        HttpURLConnection conn = openPost("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio");
+        activeConnection = conn;
+        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        writeBody(conn, payload.toString());
+        int code = conn.getResponseCode();
+        byte[] respBytes = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+        conn.disconnect();
+        activeConnection = null;
+        if (code < 200 || code >= 300) throw new IllegalStateException("阿里云 TTS 请求失败（" + code + "）：" + truncate(new String(respBytes, StandardCharsets.UTF_8), 180));
+        JSONObject json = new JSONObject(new String(respBytes, StandardCharsets.UTF_8));
+        String audioUrl = json.getJSONObject("output").getJSONObject("audio").getString("url");
+        HttpURLConnection audioConn = (HttpURLConnection) new URL(audioUrl).openConnection();
+        activeConnection = audioConn;
+        audioConn.setConnectTimeout(30_000);
+        audioConn.setReadTimeout(120_000);
+        int audioCode = audioConn.getResponseCode();
+        byte[] audioBytes = readAll(audioCode >= 400 ? audioConn.getErrorStream() : audioConn.getInputStream());
+        audioConn.disconnect();
+        activeConnection = null;
+        if (audioCode < 200 || audioCode >= 300) throw new IllegalStateException("阿里云音频下载失败（" + audioCode + "）");
+        return audioBytes;
+    }
+
+    private byte[] requestTencent(String secretId, String secretKey, String voiceId, String text, String region) throws Exception {
+        if (secretKey.isEmpty()) throw new IllegalStateException("腾讯云 TTS 需要 SecretKey。");
+        int voiceType;
+        try { voiceType = Integer.parseInt(voiceId); }
+        catch (NumberFormatException e) { throw new IllegalStateException("腾讯云 VoiceType 必须为数字。"); }
+        String host = "tts.tencentcloudapi.com";
+        String service = "tts";
+        long timestamp = System.currentTimeMillis() / 1000;
+        String date = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(timestamp * 1000));
+        JSONObject payloadObj = new JSONObject();
+        payloadObj.put("Text", text);
+        payloadObj.put("SessionId", UUID.randomUUID().toString());
+        payloadObj.put("VoiceType", voiceType);
+        payloadObj.put("Codec", "mp3");
+        payloadObj.put("SampleRate", 16000);
+        String payloadStr = payloadObj.toString();
+        String hashedPayload = sha256Hex(payloadStr);
+        String canonicalRequest = "POST\n/\n\ncontent-type:application/json\nhost:" + host + "\n\ncontent-type;host\n" + hashedPayload;
+        String credentialScope = date + "/" + service + "/tc3_request";
+        String stringToSign = "TC3-HMAC-SHA256\n" + timestamp + "\n" + credentialScope + "\n" + sha256Hex(canonicalRequest);
+        byte[] secretDate = hmacSha256(("TC3" + secretKey).getBytes(StandardCharsets.UTF_8), date);
+        byte[] secretService = hmacSha256(secretDate, service);
+        byte[] secretSigning = hmacSha256(secretService, "tc3_request");
+        String signature = hexEncode(hmacSha256(secretSigning, stringToSign));
+        String authorization = "TC3-HMAC-SHA256 Credential=" + secretId + "/" + credentialScope + ", SignedHeaders=content-type;host, Signature=" + signature;
+        HttpURLConnection conn = openPost("https://" + host);
+        activeConnection = conn;
+        conn.setRequestProperty("Authorization", authorization);
+        conn.setRequestProperty("Host", host);
+        conn.setRequestProperty("X-TC-Action", "TextToVoice");
+        conn.setRequestProperty("X-TC-Timestamp", String.valueOf(timestamp));
+        conn.setRequestProperty("X-TC-Version", "2019-08-23");
+        conn.setRequestProperty("X-TC-Region", region);
+        writeBody(conn, payloadStr);
+        int code = conn.getResponseCode();
+        byte[] respBytes = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+        conn.disconnect();
+        activeConnection = null;
+        JSONObject json = new JSONObject(new String(respBytes, StandardCharsets.UTF_8));
+        if (code < 200 || code >= 300 || (json.optJSONObject("Response") != null && json.getJSONObject("Response").has("Error"))) {
+            throw new IllegalStateException("腾讯云 TTS 请求失败：" + truncate(json.toString(), 200));
+        }
+        String audio = json.getJSONObject("Response").getString("Audio");
+        return Base64.decode(audio, Base64.DEFAULT);
+    }
+
+    private byte[] requestGoogle(String apiKey, String voiceId, String text, String languageCode) throws Exception {
+        JSONObject input = new JSONObject();
+        input.put("text", text);
+        JSONObject voice = new JSONObject();
+        voice.put("languageCode", languageCode.isEmpty() ? "cmn-CN" : languageCode);
+        voice.put("name", voiceId);
+        JSONObject audioConfig = new JSONObject();
+        audioConfig.put("audioEncoding", "MP3");
+        JSONObject payload = new JSONObject();
+        payload.put("input", input);
+        payload.put("voice", voice);
+        payload.put("audioConfig", audioConfig);
+        String urlStr = "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + java.net.URLEncoder.encode(apiKey, "UTF-8");
+        HttpURLConnection conn = (HttpURLConnection) new java.net.URL(urlStr).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(30_000);
+        conn.setReadTimeout(30_000);
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        conn.setDoOutput(true);
+        activeConnection = conn;
+        writeBody(conn, payload.toString());
+        int code = conn.getResponseCode();
+        byte[] respBytes = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+        conn.disconnect();
+        activeConnection = null;
+        if (code < 200 || code >= 300) throw new IllegalStateException("Google TTS 请求失败（" + code + "）：" + truncate(new String(respBytes, StandardCharsets.UTF_8), 180));
+        JSONObject json = new JSONObject(new String(respBytes, StandardCharsets.UTF_8));
+        String audioContent = json.getString("audioContent");
+        return Base64.decode(audioContent, Base64.DEFAULT);
+    }
+
+    private HttpURLConnection openPost(String urlStr) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(30_000);
+        conn.setReadTimeout(120_000);
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        conn.setDoOutput(true);
+        return conn;
+    }
+
+    private void writeBody(HttpURLConnection conn, String body) throws Exception {
+        try (OutputStream out = conn.getOutputStream()) {
+            out.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private byte[] hmacSha256(byte[] key, String data) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key, "HmacSHA256"));
+        return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String sha256Hex(String data) throws Exception {
+        return hexEncode(MessageDigest.getInstance("SHA-256").digest(data.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private String hexEncode(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
 
     private void heartbeat() {
         HttpURLConnection connection = activeConnection;
