@@ -1,11 +1,15 @@
-import type { Asset, RecordBlock, Subject, SubjectConfig } from "../types";
+import type { Asset, KnowledgePodcast, RecordBlock, Subject, SubjectConfig } from "../types";
 import { normalizeSubjectName } from "./subjects";
+
+export type RecordingFolderKind = "subject" | "knowledge-podcast";
 
 export interface RecordingItem {
   id: string;
   assetId: string;
   asset: Asset;
-  subject: Subject;
+  folderId: string;
+  folderTitle: string;
+  folderKind: RecordingFolderKind;
   recordId: string;
   recordTitle: string;
   recordDate: string;
@@ -17,7 +21,9 @@ export interface RecordingItem {
 }
 
 export interface RecordingFolder {
-  subject: Subject;
+  id: string;
+  title: string;
+  kind: RecordingFolderKind;
   items: RecordingItem[];
 }
 
@@ -26,6 +32,10 @@ const normalize = (value: string): string => value.toLocaleLowerCase("zh-CN");
 const subjectOrder = (subjects: SubjectConfig[]): Map<string, number> =>
   new Map(subjects.map((subject, index) => [normalizeSubjectName(subject.name), subject.order ?? index]));
 
+export const recordingFolderIdForSubject = (subject: Subject): string => `subject:${normalizeSubjectName(subject)}`;
+
+export const recordingFolderIdForPodcast = (podcastId: string): string => `knowledge-podcast:${podcastId}`;
+
 const recordingTitle = (refTitle: string | undefined, asset: Asset): string =>
   refTitle?.trim() || asset.title?.trim() || asset.fileName || "录音";
 
@@ -33,13 +43,21 @@ export const getRecordingFolders = (
   records: RecordBlock[],
   assets: Asset[],
   subjects: SubjectConfig[],
+  podcasts: KnowledgePodcast[] = [],
 ): RecordingFolder[] => {
-  const audioAssets = new Map(assets.filter((asset) => asset.kind === "audio").map((asset) => [asset.id, asset]));
+  const audioAssets = new Map(assets.filter((asset) => asset.kind === "audio" && asset.generatedBy !== "knowledge-podcast").map((asset) => [asset.id, asset]));
+  const podcastAudioAssets = new Map(assets.filter((asset) => asset.kind === "audio" && asset.generatedBy === "knowledge-podcast").map((asset) => [asset.id, asset]));
   const order = subjectOrder(subjects);
-  const folders = new Map<Subject, RecordingItem[]>();
+  const folders = new Map<string, RecordingFolder>();
 
   for (const subject of subjects.filter((item) => !item.archivedAt).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
-    folders.set(normalizeSubjectName(subject.name), []);
+    const title = normalizeSubjectName(subject.name);
+    folders.set(recordingFolderIdForSubject(title), {
+      id: recordingFolderIdForSubject(title),
+      title,
+      kind: "subject",
+      items: [],
+    });
   }
 
   const sortedRecords = [...records].sort((a, b) => {
@@ -52,6 +70,11 @@ export const getRecordingFolders = (
 
   for (const record of sortedRecords) {
     const subject = normalizeSubjectName(record.subject);
+    const folderId = recordingFolderIdForSubject(subject);
+    if (!folders.has(folderId)) {
+      folders.set(folderId, { id: folderId, title: subject, kind: "subject", items: [] });
+    }
+    const folder = folders.get(folderId)!;
     for (const [assetOrderIndex, ref] of record.assets.entries()) {
       if (ref.kind !== "audio") {
         continue;
@@ -60,14 +83,13 @@ export const getRecordingFolders = (
       if (!asset) {
         continue;
       }
-      if (!folders.has(subject)) {
-        folders.set(subject, []);
-      }
-      folders.get(subject)?.push({
+      folder.items.push({
         id: `${record.id}:${ref.id}:${assetOrderIndex}`,
         assetId: ref.id,
         asset,
-        subject,
+        folderId,
+        folderTitle: subject,
+        folderKind: "subject",
         recordId: record.id,
         recordTitle: record.title,
         recordDate: record.date,
@@ -80,16 +102,52 @@ export const getRecordingFolders = (
     }
   }
 
-  return Array.from(folders.entries())
-    .map(([subject, items]) => ({ subject, items }))
+  const subjectFolders = Array.from(folders.values())
     .sort((a, b) => {
-      const aOrder = order.get(a.subject) ?? Number.MAX_SAFE_INTEGER;
-      const bOrder = order.get(b.subject) ?? Number.MAX_SAFE_INTEGER;
+      const aOrder = order.get(a.title) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = order.get(b.title) ?? Number.MAX_SAFE_INTEGER;
       if (aOrder !== bOrder) {
         return aOrder - bOrder;
       }
-      return a.subject.localeCompare(b.subject, "zh-CN");
+      return a.title.localeCompare(b.title, "zh-CN");
     });
+
+  const podcastFolders = [...podcasts]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map((podcast): RecordingFolder => {
+      const id = recordingFolderIdForPodcast(podcast.id);
+      return {
+        id,
+        title: podcast.title.trim() || "未命名知识播客",
+        kind: "knowledge-podcast",
+        items: (podcast.audioLayoutVersion === 2 ? [...(podcast.audioUnits ?? [])] : [])
+          .sort((a, b) => a.order - b.order)
+          .flatMap((unit) => {
+            if (unit.audioStatus !== "ready") return [];
+            const asset = unit.audioAssetId ? podcastAudioAssets.get(unit.audioAssetId) : undefined;
+            if (!asset) return [];
+            return [{
+              id: `${podcast.id}:${unit.id}`,
+              assetId: asset.id,
+              asset,
+              folderId: id,
+              folderTitle: podcast.title.trim() || "未命名知识播客",
+              folderKind: "knowledge-podcast",
+              recordId: podcast.id,
+              recordTitle: "知识播客",
+              recordDate: podcast.createdAt.slice(0, 10),
+              recordOrder: 0,
+              assetOrder: unit.order,
+              title: asset.title?.trim() || unit.title,
+              fileName: asset.fileName,
+              durationSeconds: asset.durationSeconds ?? unit.durationSeconds,
+            }];
+          }),
+      };
+    })
+    .filter((folder) => folder.items.length > 0);
+
+  return [...subjectFolders, ...podcastFolders];
 };
 
 export const searchRecordingItems = (folders: RecordingFolder[], query: string): RecordingItem[] => {
@@ -100,7 +158,7 @@ export const searchRecordingItems = (folders: RecordingFolder[], query: string):
   return folders
     .flatMap((folder) => folder.items)
     .filter((item) =>
-      normalize(`${item.title} ${item.asset.title ?? ""} ${item.fileName}`).includes(normalizedQuery),
+      normalize(`${item.folderKind === "knowledge-podcast" ? item.folderTitle : ""} ${item.title} ${item.asset.title ?? ""} ${item.fileName}`).includes(normalizedQuery),
     );
 };
 

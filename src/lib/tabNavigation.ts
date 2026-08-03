@@ -11,10 +11,12 @@ export type MoreSubRoute =
   | "aiTools"
   | "ocrSettings"
   | "recordings"
+  | "podcasts"
   | "templates"
   | "guide"
   | null;
 export type AiWorkspaceScreen = "chat" | "scope";
+export type PodcastWorkspaceScreen = "editor" | "scope";
 export type ReviewMode = "queue" | "manage";
 
 export type ReviewDeckScope =
@@ -88,11 +90,13 @@ export type TabMemory = {
     subRoute: MoreSubRoute;
     aiScreen: AiWorkspaceScreen;
     recordingsState: {
-      selectedSubject?: Subject;
+      selectedFolderId?: string;
       playerAssetId?: EntityId;
       query: string;
       searchOpen: boolean;
     };
+    podcastId?: EntityId;
+    podcastScreen: PodcastWorkspaceScreen;
   };
 };
 
@@ -119,6 +123,8 @@ export const createInitialTabMemory = (): TabMemory => ({
       query: "",
       searchOpen: false,
     },
+    podcastId: undefined,
+    podcastScreen: "editor",
   },
 });
 
@@ -201,13 +207,16 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
       if (memory.more.subRoute === "ai" && memory.more.aiScreen === "scope") {
         return 2;
       }
+      if (memory.more.subRoute === "podcasts" && memory.more.podcastId) {
+        return memory.more.podcastScreen === "scope" ? 3 : 2;
+      }
       if (memory.more.subRoute !== "recordings") {
         return memory.more.subRoute ? 1 : 0;
       }
       if (memory.more.recordingsState.playerAssetId) {
         return 3;
       }
-      if (memory.more.recordingsState.selectedSubject || memory.more.recordingsState.searchOpen) {
+      if (memory.more.recordingsState.selectedFolderId || memory.more.recordingsState.searchOpen) {
         return 2;
       }
       return 1;
@@ -243,7 +252,7 @@ export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionI
   }
   if (tab === "more") {
     const pageDepth = memory.more.subRoute === "ai" ? 1 : depth;
-    return `${tab}-${pageDepth}-${recordPart}-${memory.more.subRoute ?? "root"}-${activeAiSessionId ?? "none"}`;
+    return `${tab}-${pageDepth}-${recordPart}-${memory.more.subRoute ?? "root"}-${memory.more.podcastId ?? "none"}-${memory.more.podcastScreen}-${activeAiSessionId ?? "none"}`;
   }
   return `${tab}-${depth}-${recordPart}`;
 };
@@ -341,12 +350,12 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
             },
           };
         }
-        if (memory.more.recordingsState.selectedSubject) {
+        if (memory.more.recordingsState.selectedFolderId) {
           return {
             ...memory,
             more: {
               ...memory.more,
-              recordingsState: { ...memory.more.recordingsState, selectedSubject: undefined },
+              recordingsState: { ...memory.more.recordingsState, selectedFolderId: undefined },
             },
           };
         }
@@ -360,9 +369,15 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
           };
         }
       }
+      if (memory.more.subRoute === "podcasts" && memory.more.podcastId) {
+        if (memory.more.podcastScreen === "scope") {
+          return { ...memory, more: { ...memory.more, podcastScreen: "editor" } };
+        }
+        return { ...memory, more: { ...memory.more, podcastId: undefined, podcastScreen: "editor" } };
+      }
       return {
         ...memory,
-        more: { ...memory.more, subRoute: null, aiScreen: "chat" },
+        more: { ...memory.more, subRoute: null, aiScreen: "chat", podcastScreen: "editor" },
       };
   }
 };

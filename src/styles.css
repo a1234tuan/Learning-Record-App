@@ -4136,6 +4136,10 @@ button:disabled {
   color: var(--text);
 }
 
+.ai-scope-mode-control.four-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .ai-scope-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4148,6 +4152,13 @@ button:disabled {
   color: var(--muted);
   font-size: 0.85rem;
   font-weight: 700;
+}
+
+.ai-scope-fields :where(input, select) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .ai-scope-record-picker {
@@ -4295,6 +4306,10 @@ button:disabled {
 .ai-scope-preview span {
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.ai-scope-preview.unavailable {
+  border-color: color-mix(in srgb, var(--color-danger, #bb2d3b) 36%, var(--border));
 }
 
 .ai-history-drawer {
@@ -4714,6 +4729,10 @@ button:disabled {
   .ai-scope-mode-control,
   .ai-recent-range-control {
     width: 100%;
+  }
+
+  .ai-scope-mode-control.four-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
 }

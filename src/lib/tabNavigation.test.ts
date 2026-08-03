@@ -278,7 +278,7 @@ describe("tabNavigation", () => {
         ...createInitialTabMemory().more,
         subRoute: "recordings" as const,
         recordingsState: {
-          selectedSubject: "英语",
+          selectedFolderId: "subject:英语",
           playerAssetId: "audio-1",
           query: "听力",
           searchOpen: true,
@@ -293,7 +293,7 @@ describe("tabNavigation", () => {
     expect(getTabDepth("more", folder)).toBe(2);
 
     const recordings = popTabDepth(folder, "more");
-    expect(recordings.more.recordingsState.selectedSubject).toBeUndefined();
+    expect(recordings.more.recordingsState.selectedFolderId).toBeUndefined();
     expect(getTabDepth("more", recordings)).toBe(2);
 
     const rootRecordings = popTabDepth(recordings, "more");
@@ -367,5 +367,28 @@ describe("tabNavigation", () => {
     expect(chat.more.aiScreen).toBe("chat");
     expect(getTabDepth("more", chat)).toBe(1);
     expect(popTabDepth(chat, "more").more.subRoute).toBeNull();
+  });
+
+  it("returns from podcast scope to editor and then to the podcast list", () => {
+    const memory = {
+      ...createInitialTabMemory(),
+      more: {
+        ...createInitialTabMemory().more,
+        subRoute: "podcasts" as const,
+        podcastId: "podcast-1",
+        podcastScreen: "scope" as const,
+      },
+    };
+
+    expect(getTabDepth("more", memory)).toBe(3);
+    const editor = popTabDepth(memory, "more");
+    expect(editor.more.podcastScreen).toBe("editor");
+    expect(editor.more.podcastId).toBe("podcast-1");
+    expect(getTabDepth("more", editor)).toBe(2);
+
+    const list = popTabDepth(editor, "more");
+    expect(list.more.podcastId).toBeUndefined();
+    expect(list.more.podcastScreen).toBe("editor");
+    expect(getTabDepth("more", list)).toBe(1);
   });
 });

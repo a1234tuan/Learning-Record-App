@@ -29,6 +29,7 @@ import { MorePage } from "./pages/MorePage";
 import { BackupPage } from "./pages/BackupPage";
 import { AiToolsPage } from "./pages/AiToolsPage";
 import { AiChatPage } from "./pages/AiChatPage";
+import { KnowledgePodcastPage } from "./pages/KnowledgePodcastPage";
 import { OcrSettingsPage } from "./pages/OcrSettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
@@ -38,6 +39,7 @@ import { PageTransition } from "./components/PageTransition";
 import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
 import { createAiSessionForScope } from "./services/aiSessionService";
+import { createEmptyPodcast } from "./services/knowledgePodcastService";
 import { exportRecordTransferPackage } from "./services/recordTransferService";
 import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
@@ -279,6 +281,8 @@ export const App = () => {
           recordEditing: undefined,
           referenceStack: [],
           restoreScrollY: undefined,
+          podcastId: subRoute === "podcasts" ? current.tabMemory.more.podcastId : undefined,
+          podcastScreen: subRoute === "podcasts" ? current.tabMemory.more.podcastScreen : "editor",
         },
       };
       commitNavigation({ ...current, activeTab: "more", tabMemory: nextMemory });
@@ -729,18 +733,19 @@ export const App = () => {
           <RecordingsPage
             blocks={app.blocks}
             assets={app.assets}
+            podcasts={app.podcasts}
             subjects={app.subjects}
-            selectedSubject={tabMemory.more.recordingsState.selectedSubject}
+            selectedFolderId={tabMemory.more.recordingsState.selectedFolderId}
             playerAssetId={tabMemory.more.recordingsState.playerAssetId}
             query={tabMemory.more.recordingsState.query}
             searchOpen={tabMemory.more.recordingsState.searchOpen}
-            onSelectedSubjectChange={(selectedSubject) => {
+            onSelectedFolderChange={(selectedFolderId) => {
               const current = navigationStateRef.current;
-              if (!selectedSubject && current.tabMemory.more.recordingsState.selectedSubject) {
+              if (!selectedFolderId && current.tabMemory.more.recordingsState.selectedFolderId) {
                 popCurrentTabDepth();
                 return;
               }
-              if (current.tabMemory.more.recordingsState.selectedSubject === selectedSubject) {
+              if (current.tabMemory.more.recordingsState.selectedFolderId === selectedFolderId) {
                 return;
               }
               commitNavigation({
@@ -749,7 +754,7 @@ export const App = () => {
                   ...current.tabMemory,
                   more: {
                     ...current.tabMemory.more,
-                    recordingsState: { ...current.tabMemory.more.recordingsState, selectedSubject },
+                    recordingsState: { ...current.tabMemory.more.recordingsState, selectedFolderId },
                   },
                 },
               });
@@ -867,6 +872,36 @@ export const App = () => {
             settings={settings}
             onChanged={app.refresh}
             onOpenAi={() => openMoreSubRoute("ai")}
+            onOpenPodcasts={() => openMoreSubRoute("podcasts")}
+          />
+        );
+      case "podcasts":
+        return (
+          <KnowledgePodcastPage
+            podcasts={app.podcasts}
+            blocks={app.blocks}
+            assets={app.assets}
+            podcastId={tabMemory.more.podcastId}
+            screen={tabMemory.more.podcastScreen}
+            onBack={popCurrentTabDepth}
+            onOpenScope={() => {
+              const current = navigationStateRef.current;
+              if (!current.tabMemory.more.podcastId) return;
+              commitNavigation({
+                ...current,
+                tabMemory: { ...current.tabMemory, more: { ...current.tabMemory.more, podcastScreen: "scope" } },
+              });
+            }}
+            onOpenPodcast={(podcastId) => {
+              const current = navigationStateRef.current;
+              commitNavigation({
+                ...current,
+                tabMemory: { ...current.tabMemory, more: { ...current.tabMemory.more, subRoute: "podcasts", podcastId, podcastScreen: "editor" } },
+              });
+            }}
+            onSavePodcast={app.saveKnowledgePodcast}
+            onDeletePodcast={app.deleteKnowledgePodcast}
+            onOpenRecord={(record) => openRecordInTab(record, "more")}
           />
         );
       case "ocrSettings":
@@ -904,6 +939,15 @@ export const App = () => {
             onOpenSettings={() => openMoreSubRoute("aiTools")}
             onOpenScopeScreen={() => setAiWorkspaceScreen("scope")}
             onBackFromScopeScreen={popCurrentTabDepth}
+            onOpenPodcastForScope={(scope) => {
+              void app.saveKnowledgePodcast(createEmptyPodcast(scope)).then((saved) => {
+                const current = navigationStateRef.current;
+                commitNavigation({
+                  ...current,
+                  tabMemory: { ...current.tabMemory, more: { ...current.tabMemory.more, subRoute: "podcasts", podcastId: saved.id, podcastScreen: "editor", aiScreen: "chat" } },
+                });
+              });
+            }}
           />
         );
       case null:
@@ -1187,7 +1231,7 @@ export const App = () => {
     && !(activeTab === "journal" && tabMemory.journal.searchOpen)
     && !(activeTab === "journal" && tabMemory.journal.selectedSubject)
     && !(activeTab === "categories" && (tabMemory.categories.activeSubject || tabMemory.categories.managing))
-    && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai"));
+    && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai" || tabMemory.more.subRoute === "podcasts"));
 
   return (
     <div className={shellClassName}>

@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
     readChunk: (path, offset, length) => ipcRenderer.invoke("study-journal:desktop-backup-read-chunk", path, offset, length),
     deleteFile: (path) => ipcRenderer.invoke("study-journal:desktop-backup-delete", path),
   }),
+  tts: Object.freeze({
+    synthesize: (options) => ipcRenderer.invoke("study-journal:tts-synthesize", options),
+  }),
   onBackupFlushRequested: (listener) => {
     backupFlushListeners.add(listener);
     return () => backupFlushListeners.delete(listener);

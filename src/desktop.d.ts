@@ -32,6 +32,9 @@ declare global {
         readChunk: (path: string, offset: number, length: number) => Promise<{ data: string; bytesRead: number; done: boolean }>;
         deleteFile: (path: string) => Promise<void>;
       }>;
+      tts: Readonly<{
+        synthesize: (options: { apiKey: string; model: string; voiceId: string; text: string; format: "mp3" }) => Promise<{ data: string; mimeType?: string }>;
+      }>;
       onBackupFlushRequested: (listener: (reason: "minimize" | "close") => Promise<void> | void) => () => void;
     }>;
   }

@@ -43,6 +43,7 @@ const MORE_SUB_ROUTES: readonly MoreSubRoute[] = [
   "aiTools",
   "ocrSettings",
   "recordings",
+  "podcasts",
   "guide",
   null,
 ];
@@ -217,11 +218,14 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
       subRoute,
       aiScreen: value.more.aiScreen === "scope" ? "scope" : "chat",
       recordingsState: {
-        selectedSubject: optionalString(recordings.selectedSubject),
+        selectedFolderId: optionalString(recordings.selectedFolderId)
+          ?? (optionalString(recordings.selectedSubject) ? `subject:${optionalString(recordings.selectedSubject)}` : undefined),
         playerAssetId: optionalString(recordings.playerAssetId),
         query: optionalString(recordings.query) ?? "",
         searchOpen: optionalBoolean(recordings.searchOpen) ?? false,
       },
+      podcastId: optionalString(value.more.podcastId),
+      podcastScreen: value.more.podcastScreen === "scope" ? "scope" : "editor",
     },
   };
 };

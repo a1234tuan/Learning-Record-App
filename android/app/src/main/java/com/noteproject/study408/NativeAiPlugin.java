@@ -26,6 +26,10 @@ public class NativeAiPlugin extends Plugin {
         String messagesJson = call.getString("messagesJson", "[]");
         double temperature = call.getDouble("temperature", 0.7);
         int maxTokens = call.getInt("maxTokens", 4096);
+        boolean structuredOutput = Boolean.TRUE.equals(call.getBoolean("structuredOutput", false));
+        String thinkingMode = call.getString("thinkingMode", "");
+        String reasoningEffort = call.getString("reasoningEffort", "");
+        int timeoutMs = call.getInt("timeoutMs", 120000);
 
         if (baseUrl.trim().isEmpty() || apiKey.trim().isEmpty() || model.trim().isEmpty()) {
             call.reject("AI 接口配置不完整。");
@@ -40,9 +44,18 @@ public class NativeAiPlugin extends Plugin {
                 payload.put("messages", messages);
                 payload.put("temperature", temperature);
                 payload.put("max_tokens", maxTokens);
+                if (structuredOutput) {
+                    payload.put("response_format", new JSONObject().put("type", "json_object"));
+                }
+                if (!thinkingMode.trim().isEmpty()) {
+                    payload.put("thinking", new JSONObject().put("type", thinkingMode.trim()));
+                }
+                if (!reasoningEffort.trim().isEmpty()) {
+                    payload.put("reasoning_effort", reasoningEffort.trim());
+                }
 
                 String requestUrl = normalizeChatUrl(baseUrl);
-                HttpURLConnection connection = openConnection(requestUrl);
+                HttpURLConnection connection = openConnection(requestUrl, timeoutMs);
                 connection.setRequestProperty("Authorization", "Bearer " + apiKey);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 connection.setDoOutput(true);
@@ -67,14 +80,37 @@ public class NativeAiPlugin extends Plugin {
                 }
                 JSONObject first = choices.optJSONObject(0);
                 JSONObject message = first != null ? first.optJSONObject("message") : null;
-                String content = message != null ? message.optString("content", "") : first != null ? first.optString("text", "") : "";
-                if (content.trim().isEmpty()) {
-                    call.reject("AI 接口返回为空。");
-                    return;
-                }
+                String content = message != null && !message.isNull("content")
+                    ? message.optString("content", "")
+                    : first != null && !first.isNull("text") ? first.optString("text", "") : "";
 
                 JSObject result = new JSObject();
                 result.put("content", content.trim());
+                if (first != null && !first.isNull("finish_reason")) {
+                    result.put("finishReason", first.optString("finish_reason", ""));
+                }
+                JSONObject usage = json.optJSONObject("usage");
+                if (usage != null) {
+                    JSObject usageResult = new JSObject();
+                    putOptionalInt(usageResult, "promptTokens", usage, "prompt_tokens");
+                    putOptionalInt(usageResult, "completionTokens", usage, "completion_tokens");
+                    putOptionalInt(usageResult, "totalTokens", usage, "total_tokens");
+                    putOptionalInt(usageResult, "reasoningTokens", usage, "reasoning_tokens");
+                    putOptionalInt(usageResult, "cachedPromptTokens", usage, "prompt_cache_hit_tokens");
+                    JSONObject completionDetails = usage.optJSONObject("completion_tokens_details");
+                    if (completionDetails != null && completionDetails.has("reasoning_tokens")) {
+                        usageResult.put("reasoningTokens", completionDetails.optInt("reasoning_tokens"));
+                    }
+                    JSONObject promptDetails = usage.optJSONObject("prompt_tokens_details");
+                    if (promptDetails != null && promptDetails.has("cached_tokens")) {
+                        usageResult.put("cachedPromptTokens", promptDetails.optInt("cached_tokens"));
+                    }
+                    result.put("usage", usageResult);
+                }
+                String requestId = connection.getHeaderField("x-request-id");
+                if (requestId == null || requestId.trim().isEmpty()) requestId = connection.getHeaderField("request-id");
+                if ((requestId == null || requestId.trim().isEmpty()) && !json.isNull("id")) requestId = json.optString("id", "");
+                if (requestId != null && !requestId.trim().isEmpty()) result.put("requestId", requestId.trim());
                 call.resolve(result);
             } catch (Exception error) {
                 call.reject(error.getMessage() != null ? error.getMessage() : "AI 请求失败。", error);
@@ -149,11 +185,15 @@ public class NativeAiPlugin extends Plugin {
         return compact.length() > 180 ? compact.substring(0, 180) + "..." : compact;
     }
 
-    private HttpURLConnection openConnection(String url) throws Exception {
+    private void putOptionalInt(JSObject target, String targetName, JSONObject source, String sourceName) throws JSONException {
+        if (source.has(sourceName) && !source.isNull(sourceName)) target.put(targetName, source.getInt(sourceName));
+    }
+
+    private HttpURLConnection openConnection(String url, int timeoutMs) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setRequestMethod("POST");
         connection.setConnectTimeout(30000);
-        connection.setReadTimeout(120000);
+        connection.setReadTimeout(Math.max(30000, timeoutMs));
         return connection;
     }
 

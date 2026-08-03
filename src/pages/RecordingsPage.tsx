@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Asset, Block, Subject, SubjectConfig } from "../types";
+import type { Asset, Block, KnowledgePodcast, SubjectConfig } from "../types";
 import { PageHeader } from "../components/ui";
 import { getRecordBlocks } from "../lib/journalSelectors";
 import {
@@ -33,12 +33,13 @@ import {
 interface RecordingsPageProps {
   blocks: Block[];
   assets: Asset[];
+  podcasts: KnowledgePodcast[];
   subjects: SubjectConfig[];
-  selectedSubject?: Subject;
+  selectedFolderId?: string;
   playerAssetId?: string;
   query: string;
   searchOpen: boolean;
-  onSelectedSubjectChange: (subject: Subject | undefined) => void;
+  onSelectedFolderChange: (folderId: string | undefined) => void;
   onPlayerChange: (assetId: string | undefined) => void;
   onQueryChange: (query: string) => void;
   onSearchOpenChange: (open: boolean) => void;
@@ -408,7 +409,7 @@ const RecordingPlayerPage = ({
           返回
         </button>
         <div>
-          <p className="eyebrow">{current.subject}</p>
+          <p className="eyebrow">{current.folderTitle}</p>
           <h1>{current.title}</h1>
         </div>
       </header>
@@ -474,12 +475,13 @@ const RecordingPlayerPage = ({
 export const RecordingsPage = ({
   blocks,
   assets,
+  podcasts,
   subjects,
-  selectedSubject,
+  selectedFolderId,
   playerAssetId,
   query,
   searchOpen,
-  onSelectedSubjectChange,
+  onSelectedFolderChange,
   onPlayerChange,
   onQueryChange,
   onSearchOpenChange,
@@ -488,13 +490,13 @@ export const RecordingsPage = ({
   onDurationKnown,
 }: RecordingsPageProps) => {
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
-  const folders = useMemo(() => getRecordingFolders(records, assets, subjects), [assets, records, subjects]);
+  const folders = useMemo(() => getRecordingFolders(records, assets, subjects, podcasts), [assets, podcasts, records, subjects]);
   const searchResults = useMemo(() => searchRecordingItems(folders, query), [folders, query]);
   const allItems = useMemo(() => folders.flatMap((folder) => folder.items), [folders]);
   const playerItem = playerAssetId ? allItems.find((item) => item.assetId === playerAssetId) : undefined;
-  const playerFolder = playerItem ? folders.find((folder) => folder.subject === playerItem.subject) : undefined;
-  const selectedFolder: RecordingFolder | undefined = selectedSubject
-    ? folders.find((folder) => folder.subject === selectedSubject) ?? { subject: selectedSubject, items: [] }
+  const playerFolder = playerItem ? folders.find((folder) => folder.id === playerItem.folderId) : undefined;
+  const selectedFolder: RecordingFolder | undefined = selectedFolderId
+    ? folders.find((folder) => folder.id === selectedFolderId)
     : undefined;
 
   if (playerAssetId && playerItem && playerFolder) {
@@ -513,10 +515,10 @@ export const RecordingsPage = ({
       <main className="page recordings-page">
         <PageHeader
           eyebrow="Recordings"
-          title={selectedFolder.subject}
+          title={selectedFolder.title}
           subtitle={`${selectedFolder.items.length} 条录音`}
           actions={(
-            <button type="button" className="secondary-button" onClick={() => onSelectedSubjectChange(undefined)}>
+            <button type="button" className="secondary-button" onClick={() => onSelectedFolderChange(undefined)}>
               <ArrowLeft size={18} />
               返回
             </button>
@@ -548,7 +550,7 @@ export const RecordingsPage = ({
       <PageHeader
         eyebrow="Recordings"
         title="录音"
-        subtitle="按学科查看日志里的录音文件。"
+        subtitle="按学科或知识播客查看录音文件。"
         actions={(
           <>
             {onBack && (
@@ -604,17 +606,17 @@ export const RecordingsPage = ({
         <section className="recording-folder-grid">
           {folders.map((folder) => (
             <button
-              key={folder.subject}
+              key={folder.id}
               type="button"
               className="recording-folder-card"
-              onClick={() => onSelectedSubjectChange(folder.subject)}
+              onClick={() => onSelectedFolderChange(folder.id)}
             >
               <span className="recording-folder-icon">
                 <Folder size={24} />
               </span>
               <span>
-                <strong>{folder.subject}</strong>
-                <small>{folder.items.length} 条录音</small>
+                <strong>{folder.title}</strong>
+                <small>{folder.kind === "knowledge-podcast" ? "知识播客 · " : ""}{folder.items.length} 条录音</small>
               </span>
               <ChevronRight size={18} />
             </button>

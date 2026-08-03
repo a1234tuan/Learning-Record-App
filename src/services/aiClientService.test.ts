@@ -7,7 +7,9 @@ import {
   buildSessionMemorySummary,
   calculateAiRequestBudget,
   normalizeAiChatCompletionsUrl,
+  parseOpenAiCompletionResult,
   selectRecentChatContext,
+  sendChatCompletionDetailed,
   testAiProviderConnection,
 } from "./aiClientService";
 import { estimateAiTokens } from "./aiContextService";
@@ -211,6 +213,85 @@ describe("buildAiMessages", () => {
       messages: [{ role: "user", content: "请只回复 OK。" }],
     });
     expect(JSON.stringify(body)).not.toContain("学习日志上下文");
+  });
+
+  it("preserves empty final content, finish reason and reasoning token diagnostics", () => {
+    const result = parseOpenAiCompletionResult({
+      id: "completion-1",
+      choices: [{ message: { content: null, reasoning_content: "not exposed" }, finish_reason: "length" }],
+      usage: {
+        prompt_tokens: 120,
+        completion_tokens: 16384,
+        total_tokens: 16504,
+        completion_tokens_details: { reasoning_tokens: 16120 },
+        prompt_tokens_details: { cached_tokens: 80 },
+      },
+    }, "request-header-id");
+
+    expect(result).toEqual({
+      content: "",
+      finishReason: "length",
+      usage: {
+        promptTokens: 120,
+        completionTokens: 16384,
+        totalTokens: 16504,
+        reasoningTokens: 16120,
+        cachedPromptTokens: 80,
+      },
+      requestId: "request-header-id",
+    });
+    expect(JSON.stringify(result)).not.toContain("not exposed");
+  });
+
+  it("sends task-level structured thinking options without changing normal chat defaults", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "{}" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    }), { status: 200, headers: { "content-type": "application/json", "x-request-id": "req-structured" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = {
+      id: "deepseek",
+      providerName: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-pro",
+      temperature: 0.7,
+      maxTokens: 4096,
+      contextWindowTokens: 65_536,
+    };
+
+    const result = await sendChatCompletionDetailed({
+      provider,
+      apiKey: "test",
+      history: [],
+      prompt: "输出 JSON",
+      budget: {
+        contextWindowTokens: 65_536,
+        outputTokens: 16_384,
+        historyTokens: 0,
+        retrievalMode: "coverage",
+        retrievalTargetTokens: 24_000,
+        retrievalTokens: 24_000,
+        selectedContextTokens: 24_000,
+        estimatedInputTokens: 26_000,
+      },
+      request: {
+        maxTokens: 16_384,
+        structuredOutput: true,
+        thinkingMode: "enabled",
+        reasoningEffort: "high",
+        timeoutMs: 300_000,
+      },
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toMatchObject({
+      model: "deepseek-v4-pro",
+      max_tokens: 16_384,
+      response_format: { type: "json_object" },
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect(result).toMatchObject({ content: "{}", finishReason: "stop", requestId: "req-structured" });
   });
 
   it("reports HTML responses as likely Base URL path errors", async () => {

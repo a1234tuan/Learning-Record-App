@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-import type { AiChatPayloadMessage } from "./aiClientService";
+import type { AiCompletionResult } from "../types";
+import type { AiChatPayloadMessage, AiCompletionRequestOptions } from "./aiClientService";
 
 interface NativeAiPlugin {
   chat(options: {
@@ -10,7 +11,11 @@ interface NativeAiPlugin {
     temperature: number;
     maxTokens: number;
     messagesJson: string;
-  }): Promise<{ content: string }>;
+    structuredOutput?: boolean;
+    thinkingMode?: "enabled" | "disabled";
+    reasoningEffort?: "low" | "high" | "max";
+    timeoutMs?: number;
+  }): Promise<AiCompletionResult>;
 }
 
 const NativeAi = registerPlugin<NativeAiPlugin>("NativeAi");
@@ -25,10 +30,17 @@ export const runNativeAiChat = async (options: {
   temperature: number;
   maxTokens: number;
   messages: AiChatPayloadMessage[];
-}): Promise<string> => {
-  const result = await NativeAi.chat({
-    ...options,
-    messagesJson: JSON.stringify(options.messages),
+} & Pick<AiCompletionRequestOptions, "structuredOutput" | "thinkingMode" | "reasoningEffort" | "timeoutMs" | "signal">): Promise<AiCompletionResult> => {
+  const { signal, messages, ...nativeOptions } = options;
+  const nativePromise = NativeAi.chat({
+    ...nativeOptions,
+    messagesJson: JSON.stringify(messages),
   });
-  return result.content;
+  if (!signal) return nativePromise;
+  if (signal.aborted) throw new DOMException("AI request cancelled", "AbortError");
+  return new Promise<AiCompletionResult>((resolve, reject) => {
+    const abort = () => reject(new DOMException("AI request cancelled", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    nativePromise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 };

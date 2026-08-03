@@ -20,7 +20,7 @@ describe("web navigation history snapshots", () => {
     memory.more.subRoute = "recordings";
     memory.more.aiScreen = "scope";
     memory.more.recordingsState = {
-      selectedSubject: "英语",
+      selectedFolderId: "subject:英语",
       playerAssetId: "audio-1",
       query: "听力",
       searchOpen: true,

@@ -11,6 +11,7 @@ import type {
   Block,
   ContentTemplate,
   DayEntry,
+  KnowledgePodcast,
   MistakeCard,
   RecordDraft,
   RecordBlock,
@@ -91,6 +92,33 @@ const normalizeSnapshotTemplates = (templates: ContentTemplate[] | undefined): C
     ...template,
     title: template.title?.trim() || "未命名模板",
     contentHtml: template.contentHtml?.trim() || "<p></p>",
+  }));
+
+const normalizeSnapshotPodcasts = (podcasts: KnowledgePodcast[] | undefined): KnowledgePodcast[] =>
+  (podcasts ?? []).map((podcast) => ({
+    ...podcast,
+    audioStatus: podcast.generation?.kind === "audio" && podcast.generation.status === "running" ? "partial" : "idle",
+    ...(podcast.generation?.status === "running" ? {
+      scriptStatus: podcast.generation.kind === "script" ? "failed" as const : podcast.scriptStatus,
+      lastError: "上次生成因 APP 关闭或恢复备份而中断，请重新生成。",
+      generation: {
+        ...podcast.generation,
+        status: "failed" as const,
+        stage: "failed" as const,
+        message: "上次生成因 APP 关闭或恢复备份而中断，请重新生成。",
+        updatedAt: nowISO(),
+      },
+    } : {}),
+    segments: podcast.segments.map(({ audioAssetId: _audioAssetId, durationSeconds: _durationSeconds, ...segment }) => ({
+      ...segment,
+      audioStatus: "pending",
+      error: undefined,
+    })),
+    audioUnits: podcast.audioUnits?.map(({ audioAssetId: _audioAssetId, durationSeconds: _durationSeconds, ...unit }) => ({
+      ...unit,
+      audioStatus: "pending" as const,
+      error: undefined,
+    })),
   }));
 
 const assertSnapshotIntegrity = (
@@ -203,6 +231,25 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.purgeMistakeAndReviewData();
     await this.migrateRecordReviewsToMixedSystem();
     await this.resetStaleOcrJobs(10 * 60 * 1000);
+    const interruptedPodcasts = await db.knowledgePodcasts.filter((podcast) => podcast.scriptStatus === "generating" || podcast.audioStatus === "generating").toArray();
+    if (interruptedPodcasts.length > 0) {
+      await db.knowledgePodcasts.bulkPut(interruptedPodcasts.map((podcast) => ({
+        ...podcast,
+        scriptStatus: podcast.scriptStatus === "generating" ? "failed" as const : podcast.scriptStatus,
+        audioStatus: podcast.audioStatus === "generating" ? "partial" as const : podcast.audioStatus,
+        segments: podcast.segments.map((segment) => segment.audioStatus === "generating" ? { ...segment, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : segment),
+        audioUnits: podcast.audioUnits?.map((unit) => unit.audioStatus === "generating" ? { ...unit, audioStatus: "failed" as const, error: "上次生成被中断，请重试。" } : unit),
+        lastError: "上次生成被中断，请继续生成或重试失败章节。",
+        generation: podcast.generation ? {
+          ...podcast.generation,
+          status: "failed" as const,
+          stage: "failed" as const,
+          message: "上次生成被中断，请重新开始。",
+          updatedAt: nowISO(),
+        } : undefined,
+        updatedAt: nowISO(),
+      })));
+    }
     await this.getOrCreateEntry(todayISO());
   }
 
@@ -1096,6 +1143,36 @@ export class DexieStorageAdapter implements StorageAdapter {
     return asset;
   }
 
+  async listKnowledgePodcasts(): Promise<KnowledgePodcast[]> {
+    return db.knowledgePodcasts.orderBy("updatedAt").reverse().toArray();
+  }
+
+  async getKnowledgePodcast(id: string): Promise<KnowledgePodcast | undefined> {
+    return db.knowledgePodcasts.get(id);
+  }
+
+  async saveKnowledgePodcast(podcast: KnowledgePodcast): Promise<KnowledgePodcast> {
+    const saved = touch(podcast);
+    await db.knowledgePodcasts.put(saved);
+    return saved;
+  }
+
+  async deleteKnowledgePodcast(id: string): Promise<void> {
+    const podcast = await db.knowledgePodcasts.get(id);
+    const assetIds = Array.from(new Set([
+      ...(podcast?.segments.flatMap((segment) => segment.audioAssetId ? [segment.audioAssetId] : []) ?? []),
+      ...(podcast?.audioUnits?.flatMap((unit) => unit.audioAssetId ? [unit.audioAssetId] : []) ?? []),
+      ...(podcast?.pendingAudioCleanupAssetIds ?? []),
+    ]));
+    await db.transaction("rw", db.knowledgePodcasts, db.assets, async () => {
+      await db.knowledgePodcasts.delete(id);
+      for (const assetId of assetIds) {
+        const asset = await db.assets.get(assetId);
+        if (asset?.generatedBy === "knowledge-podcast") await db.assets.delete(assetId);
+      }
+    });
+  }
+
   async patchAsset(id: string, patch: Partial<Omit<Asset, "id" | "data">>): Promise<Asset | undefined> {
     const existing = await db.assets.get(id);
     if (!existing) {
@@ -1195,6 +1272,10 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   async getAsset(id: string): Promise<Asset | undefined> {
     return db.assets.get(id);
+  }
+
+  async deleteAsset(id: string): Promise<void> {
+    await db.assets.delete(id);
   }
 
   async listAssets(): Promise<Asset[]> {
@@ -1321,9 +1402,9 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createSnapshot(): Promise<StorageSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1335,14 +1416,16 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviews.toArray(),
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
+          db.knowledgePodcasts.toArray(),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
     const cleanedDrafts = normalizeSnapshotRecordDrafts(snapshot.recordDrafts);
     const cleanedTemplates = normalizeSnapshotTemplates(snapshot.templates);
-    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, snapshot.assets);
+    const backupAssets = snapshot.assets.filter((asset) => asset.generatedBy !== "knowledge-podcast");
+    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, backupAssets);
 
     return {
       payload: {
@@ -1355,7 +1438,7 @@ export class DexieStorageAdapter implements StorageAdapter {
             entries: snapshot.entries.length,
             blocks: cleanedBlocks.length,
             mistakes: 0,
-            assets: snapshot.assets.length,
+            assets: backupAssets.length,
             tags: snapshot.tags.length,
             reviews: 0,
             studySessions: snapshot.studySessions.length,
@@ -1377,8 +1460,9 @@ export class DexieStorageAdapter implements StorageAdapter {
         recordReviewDayStats: snapshot.recordReviewDayStats,
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
       },
-      assets: snapshot.assets,
+      assets: backupAssets,
       recordDrafts: cleanedDrafts,
     };
   }
@@ -1386,9 +1470,9 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1400,15 +1484,16 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviews.toArray(),
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
+          db.knowledgePodcasts.toArray(),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
     const cleanedDrafts = normalizeSnapshotRecordDrafts(snapshot.recordDrafts);
     const cleanedTemplates = normalizeSnapshotTemplates(snapshot.templates);
-    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, snapshot.assets);
-    const assets = snapshot.assets.map(assetToMeta);
+    const assets = snapshot.assets.filter((asset) => asset.generatedBy !== "knowledge-podcast").map(assetToMeta);
+    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, assets);
 
     return {
       payload: {
@@ -1443,6 +1528,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         recordReviewDayStats: snapshot.recordReviewDayStats,
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
       },
       assets,
       recordDrafts: cleanedDrafts,
@@ -1470,6 +1556,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.studySessions,
         db.settings,
         db.assets,
+        db.knowledgePodcasts,
       ],
       async () => {
         await Promise.all([
@@ -1486,6 +1573,7 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.studySessions.clear(),
           db.settings.clear(),
           db.assets.clear(),
+          db.knowledgePodcasts.clear(),
         ]);
         const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
         await Promise.all([
@@ -1500,6 +1588,7 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.studySessions.bulkPut(snapshot.payload.studySessions),
           db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
           db.assets.bulkPut(snapshot.assets),
+          db.knowledgePodcasts.bulkPut(normalizeSnapshotPodcasts(snapshot.payload.podcasts)),
         ]);
       },
     );
@@ -1541,12 +1630,12 @@ export class DexieStorageAdapter implements StorageAdapter {
       options.onProgress?.({ stage: "restoring", message: "资源校验完成，正在一次性恢复数据。" });
       await db.transaction(
         "rw",
-        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.restoreStagingAssets],
+        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.restoreStagingAssets],
         async () => {
           await Promise.all([
             db.entries.clear(), db.blocks.clear(), db.templates.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
             db.recordReviewDayStats.clear(), db.mistakes.clear(), db.tags.clear(), db.reviews.clear(), db.studySessions.clear(),
-            db.settings.clear(), db.assets.clear(),
+            db.settings.clear(), db.assets.clear(), db.knowledgePodcasts.clear(),
           ]);
           await Promise.all([
             db.entries.bulkPut(snapshot.payload.entries),
@@ -1560,6 +1649,7 @@ export class DexieStorageAdapter implements StorageAdapter {
             db.studySessions.bulkPut(snapshot.payload.studySessions),
             db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
             db.assets.bulkPut(staged.map((entry) => entry.asset)),
+            db.knowledgePodcasts.bulkPut(normalizeSnapshotPodcasts(snapshot.payload.podcasts)),
             db.restoreStagingAssets.where("sessionId").equals(sessionId).delete(),
           ]);
         },

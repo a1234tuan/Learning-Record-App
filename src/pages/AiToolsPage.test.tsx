@@ -8,7 +8,7 @@ describe("AiToolsPage", () => {
   it("opens AI chat records and uses a single-layer AI settings toggle", () => {
     const onOpenAi = vi.fn();
 
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={onOpenAi} />);
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={onOpenAi} onOpenPodcasts={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /AI 问答与聊天记录/ }));
     expect(onOpenAi).toHaveBeenCalledTimes(1);
@@ -22,7 +22,7 @@ describe("AiToolsPage", () => {
   });
 
   it("keeps AI export collapsed until the user expands it", () => {
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={vi.fn()} />);
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={vi.fn()} onOpenPodcasts={vi.fn()} />);
 
     expect(screen.queryByLabelText("导出格式")).not.toBeInTheDocument();
 

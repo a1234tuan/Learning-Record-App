@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Asset, RecordBlock, SubjectConfig } from "../types";
+import type { Asset, KnowledgePodcast, RecordBlock, SubjectConfig } from "../types";
+import { recordingFolderIdForPodcast, recordingFolderIdForSubject } from "../lib/recordings";
 import { RecordingsPage } from "./RecordingsPage";
 
 const stamp = "2026-06-21T00:00:00.000Z";
@@ -84,14 +85,35 @@ const record: RecordBlock = {
   mistakeRefs: [],
 };
 
+const podcast: KnowledgePodcast = {
+  id: "podcast-1",
+  createdAt: stamp,
+  updatedAt: stamp,
+  title: "本周数据结构复习",
+  mode: "summary",
+  targetMinutes: 5,
+  scope: { kind: "recent", days: 7 },
+  sourceRecordIds: [],
+  contextHash: "",
+  scriptStatus: "ready",
+  audioStatus: "ready",
+  audioLayoutVersion: 2,
+  audioUnits: [{ id: "unit-segment-1", kind: "segment", order: 0, title: "二叉树遍历", segmentId: "segment-1", textHash: "hash", audioAssetId: "podcast-audio-1", audioStatus: "ready" }],
+  segments: [{ id: "segment-1", order: 0, title: "二叉树遍历", text: "正文", sourceRecordIds: [], textHash: "hash", audioAssetId: "podcast-audio-1", audioStatus: "ready" }],
+  ttsConfig: { providerId: "fish-audio", model: "s2.1-pro-free", voiceId: "voice", format: "mp3" },
+};
+
+const podcastAsset: Asset = { ...asset, id: "podcast-audio-1", title: "二叉树遍历", fileName: "podcast-1.mp3", generatedBy: "knowledge-podcast", mimeType: "audio/mpeg" };
+
 const renderPage = (overrides: Partial<ComponentProps<typeof RecordingsPage>> = {}) => {
   const props: ComponentProps<typeof RecordingsPage> = {
     blocks: [record],
     assets: [asset],
+    podcasts: [],
     subjects,
     query: "",
     searchOpen: false,
-    onSelectedSubjectChange: vi.fn(),
+    onSelectedFolderChange: vi.fn(),
     onPlayerChange: vi.fn(),
     onQueryChange: vi.fn(),
     onSearchOpenChange: vi.fn(),
@@ -111,7 +133,7 @@ describe("RecordingsPage", () => {
 
     expect(screen.getByText("1 条录音")).toBeInTheDocument();
     expect(screen.getByText("0 条录音")).toBeInTheDocument();
-    expect(props.onSelectedSubjectChange).toHaveBeenCalledWith("OS");
+    expect(props.onSelectedFolderChange).toHaveBeenCalledWith(recordingFolderIdForSubject("OS"));
   });
 
   it("exposes a root-level return action when opened from More", () => {
@@ -124,7 +146,7 @@ describe("RecordingsPage", () => {
   });
 
   it("lists recordings inside a subject folder", () => {
-    renderPage({ selectedSubject: "OS" });
+    renderPage({ selectedFolderId: recordingFolderIdForSubject("OS") });
 
     expect(screen.getByText("进程同步")).toBeInTheDocument();
     expect(screen.getByText("调度讲解")).toBeInTheDocument();
@@ -140,7 +162,7 @@ describe("RecordingsPage", () => {
 
   it("renames recordings through the global rename callback", async () => {
     const onRenameAudio = vi.fn().mockResolvedValue(undefined);
-    renderPage({ selectedSubject: "OS", onRenameAudio });
+    renderPage({ selectedFolderId: recordingFolderIdForSubject("OS"), onRenameAudio });
 
     fireEvent.click(screen.getByRole("button", { name: "重命名 调度讲解" }));
     fireEvent.change(screen.getByLabelText("录音标题"), { target: { value: "新的录音名" } });
@@ -150,7 +172,7 @@ describe("RecordingsPage", () => {
   });
 
   it("autoplays after metadata is ready and advances the timer", async () => {
-    renderPage({ selectedSubject: "OS", playerAssetId: "audio-1" });
+    renderPage({ selectedFolderId: recordingFolderIdForSubject("OS"), playerAssetId: "audio-1" });
 
     const audio = document.querySelector("audio") as HTMLAudioElement;
     expect(audio).toBeTruthy();
@@ -170,12 +192,13 @@ describe("RecordingsPage", () => {
     const props: ComponentProps<typeof RecordingsPage> = {
       blocks: [record],
       assets: [asset],
+      podcasts: [],
       subjects,
-      selectedSubject: "OS",
+      selectedFolderId: recordingFolderIdForSubject("OS"),
       playerAssetId: "audio-1",
       query: "",
       searchOpen: false,
-      onSelectedSubjectChange: vi.fn(),
+      onSelectedFolderChange: vi.fn(),
       onPlayerChange: vi.fn(),
       onQueryChange: vi.fn(),
       onSearchOpenChange: vi.fn(),
@@ -196,7 +219,7 @@ describe("RecordingsPage", () => {
   });
 
   it("renders the dedicated player controls", () => {
-    renderPage({ selectedSubject: "OS", playerAssetId: "audio-1" });
+    renderPage({ selectedFolderId: recordingFolderIdForSubject("OS"), playerAssetId: "audio-1" });
 
     expect(screen.getByText("00:00:00")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /单录音循环/ })).toBeInTheDocument();
@@ -207,7 +230,7 @@ describe("RecordingsPage", () => {
   it("does not expose interrupted play errors to users", async () => {
     const abortError = new DOMException("The play() request was interrupted by a new load request", "AbortError");
     playMock.mockRejectedValueOnce(abortError);
-    renderPage({ selectedSubject: "OS", playerAssetId: "audio-1" });
+    renderPage({ selectedFolderId: recordingFolderIdForSubject("OS"), playerAssetId: "audio-1" });
 
     const audio = document.querySelector("audio") as HTMLAudioElement;
     Object.defineProperty(audio, "duration", { value: 75, configurable: true });
@@ -216,5 +239,19 @@ describe("RecordingsPage", () => {
     await waitFor(() => expect(playMock).toHaveBeenCalledTimes(1));
     expect(screen.getByTitle("播放")).toBeInTheDocument();
     expect(screen.queryByText(/interrupted by a new load request/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a podcast as one recordings folder and uses the shared player queue", async () => {
+    const props = renderPage({ assets: [asset, podcastAsset], podcasts: [podcast] });
+
+    fireEvent.click(screen.getByRole("button", { name: /本周数据结构复习/ }));
+    expect(props.onSelectedFolderChange).toHaveBeenCalledWith(recordingFolderIdForPodcast("podcast-1"));
+
+    renderPage({ assets: [asset, podcastAsset], podcasts: [podcast], selectedFolderId: recordingFolderIdForPodcast("podcast-1"), playerAssetId: "podcast-audio-1" });
+    expect(screen.getByText("二叉树遍历")).toBeInTheDocument();
+    const audio = document.querySelector("audio") as HTMLAudioElement;
+    fireEvent.loadedMetadata(audio);
+    await waitFor(() => expect(playMock).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: /单录音循环/ })).toBeInTheDocument();
   });
 });

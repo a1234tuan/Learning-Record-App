@@ -1,4 +1,4 @@
-import type { AiChatAttachment, AiChatMessage, AiContextPack, AiProviderProfile } from "../types";
+import type { AiChatAttachment, AiChatMessage, AiCompletionResult, AiCompletionUsage, AiContextPack, AiProviderProfile } from "../types";
 import { DEFAULT_AI_CONTEXT_WINDOW_TOKENS, DEFAULT_AI_MEMORY_TURNS } from "../lib/aiProviders";
 import { blobToBase64 } from "./backup";
 import { canUseNativeAi, runNativeAiChat } from "./nativeAi";
@@ -24,6 +24,14 @@ export type AiChatPayloadMessage = {
 export interface AiConnectionTestResult {
   requestUrl: string;
   content: string;
+}
+
+export interface AiCompletionRequestOptions {
+  structuredOutput?: boolean;
+  thinkingMode?: "enabled" | "disabled";
+  reasoningEffort?: "low" | "high" | "max";
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 const SYSTEM_PROMPT = [
@@ -250,13 +258,41 @@ export const buildSessionMemorySummary = (
   ].join("\n");
 };
 
-const parseOpenAiContent = (body: unknown): string => {
-  const content = (body as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> }).choices?.[0]?.message?.content ??
-    (body as { choices?: Array<{ text?: unknown }> }).choices?.[0]?.text;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("AI 接口返回为空，或不是 OpenAI 兼容格式。");
-  }
-  return content.trim();
+const optionalNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const parseUsage = (value: unknown): AiCompletionUsage | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const usage = value as Record<string, unknown>;
+  const completionDetails = usage.completion_tokens_details && typeof usage.completion_tokens_details === "object"
+    ? usage.completion_tokens_details as Record<string, unknown>
+    : undefined;
+  const promptDetails = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === "object"
+    ? usage.prompt_tokens_details as Record<string, unknown>
+    : undefined;
+  const result: AiCompletionUsage = {
+    promptTokens: optionalNumber(usage.prompt_tokens),
+    completionTokens: optionalNumber(usage.completion_tokens),
+    totalTokens: optionalNumber(usage.total_tokens),
+    reasoningTokens: optionalNumber(completionDetails?.reasoning_tokens) ?? optionalNumber(usage.reasoning_tokens),
+    cachedPromptTokens: optionalNumber(promptDetails?.cached_tokens) ?? optionalNumber(usage.prompt_cache_hit_tokens),
+  };
+  return Object.values(result).some((item) => item !== undefined) ? result : undefined;
+};
+
+export const parseOpenAiCompletionResult = (body: unknown, requestId?: string): AiCompletionResult => {
+  const first = (body as { choices?: Array<{ message?: { content?: unknown }; text?: unknown; finish_reason?: unknown }> }).choices?.[0];
+  if (!first) throw new Error("AI 接口没有返回 choices，可能不是 OpenAI 兼容格式。");
+  const rawContent = first.message?.content ?? first.text;
+  const content = typeof rawContent === "string" ? rawContent.trim() : "";
+  const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : undefined;
+  const bodyRequestId = (body as { id?: unknown; request_id?: unknown }).request_id ?? (body as { id?: unknown }).id;
+  return {
+    content,
+    finishReason,
+    usage: parseUsage((body as { usage?: unknown }).usage),
+    requestId: requestId || (typeof bodyRequestId === "string" ? bodyRequestId : undefined),
+  };
 };
 
 const extractErrorMessage = (body: unknown, fallback: string): string => {
@@ -265,12 +301,12 @@ const extractErrorMessage = (body: unknown, fallback: string): string => {
   return typeof errorMessage === "string" && errorMessage.trim() ? errorMessage : fallback;
 };
 
-const requestOpenAiChatCompletion = async (options: {
+const requestOpenAiChatCompletionDetailed = async (options: {
   provider: AiProviderProfile;
   apiKey: string;
   messages: AiChatPayloadMessage[];
   maxTokens?: number;
-}): Promise<string> => {
+} & AiCompletionRequestOptions): Promise<AiCompletionResult> => {
   const { provider, apiKey, messages } = options;
   const maxTokens = options.maxTokens ?? provider.maxTokens;
 
@@ -282,10 +318,24 @@ const requestOpenAiChatCompletion = async (options: {
       temperature: provider.temperature,
       maxTokens,
       messages,
+      structuredOutput: options.structuredOutput,
+      thinkingMode: options.thinkingMode,
+      reasoningEffort: options.reasoningEffort,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
     });
   }
 
   const requestUrl = normalizeAiChatCompletionsUrl(provider.baseUrl);
+  const timeoutController = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 0;
+  let timedOut = false;
+  const timeoutId = timeoutMs > 0 ? globalThis.setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort();
+  }, timeoutMs) : undefined;
+  const abortFromCaller = () => timeoutController.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
     const response = await fetch(requestUrl, {
       method: "POST",
@@ -298,7 +348,11 @@ const requestOpenAiChatCompletion = async (options: {
         messages,
         temperature: provider.temperature,
         max_tokens: maxTokens,
+        ...(options.structuredOutput ? { response_format: { type: "json_object" } } : {}),
+        ...(options.thinkingMode ? { thinking: { type: options.thinkingMode } } : {}),
+        ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
       }),
+      signal: timeoutController.signal,
     });
     const text = await response.text();
     const contentType = response.headers.get("content-type") ?? "";
@@ -324,13 +378,26 @@ const requestOpenAiChatCompletion = async (options: {
       );
     }
 
-    return parseOpenAiContent(parsed.value);
+    return parseOpenAiCompletionResult(parsed.value, response.headers.get("x-request-id") ?? response.headers.get("request-id") ?? undefined);
   } catch (error) {
+    if (timedOut) {
+      throw new Error(`AI 请求等待超过 ${Math.round((options.timeoutMs ?? 0) / 1000)} 秒，已停止等待。`);
+    }
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
     if (error instanceof TypeError) {
       throw new Error("Web 端请求失败，可能被第三方接口 CORS 限制。请在 Android 端使用，或配置允许跨域的代理 Base URL。");
     }
     throw error;
+  } finally {
+    if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
+};
+
+const requestOpenAiChatCompletion = async (options: Parameters<typeof requestOpenAiChatCompletionDetailed>[0]): Promise<string> => {
+  const result = await requestOpenAiChatCompletionDetailed(options);
+  if (!result.content) throw new Error("AI 接口返回为空，或没有返回最终正文。");
+  return result.content;
 };
 
 const imageAttachmentToContentPart = async (attachment: AiChatAttachment): Promise<AiChatPayloadContentPart> => {
@@ -431,6 +498,30 @@ export const sendChatCompletion = async (options: {
     apiKey: apiKey.trim(),
     messages,
     maxTokens: budget.outputTokens,
+  });
+};
+
+export const sendChatCompletionDetailed = async (options: {
+  provider: AiProviderProfile | undefined;
+  apiKey: string | undefined;
+  attachment?: AiContextPack;
+  history: AiChatMessage[];
+  prompt: string;
+  memorySummary?: string;
+  budget?: AiRequestBudget;
+  request?: AiCompletionRequestOptions & { maxTokens?: number };
+}): Promise<AiCompletionResult> => {
+  const { provider, apiKey, attachment, history, prompt, memorySummary } = options;
+  if (!provider) throw new Error("请先在“更多 → AI 设置”里配置 AI 供应商。");
+  if (!apiKey?.trim()) throw new Error(`请先在“更多 → AI 设置”里填写 ${provider.providerName} 的 API Key。`);
+  if (!provider.model.trim()) throw new Error(`请先填写 ${provider.providerName} 的模型名称。`);
+  const budget = options.budget ?? calculateAiRequestBudget({ provider, history, prompt, memorySummary, attachment });
+  return requestOpenAiChatCompletionDetailed({
+    provider,
+    apiKey: apiKey.trim(),
+    messages: buildAiMessages(attachment, history, prompt, provider.memoryTurns ?? DEFAULT_AI_MEMORY_TURNS, memorySummary),
+    maxTokens: options.request?.maxTokens ?? budget.outputTokens,
+    ...options.request,
   });
 };
 

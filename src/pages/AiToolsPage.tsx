@@ -1,5 +1,5 @@
-import { BrainCircuit, ChevronDown, FileJson, FileText, MessageSquare } from "lucide-react";
-import { useState } from "react";
+import { BrainCircuit, ChevronDown, Eye, EyeOff, FileJson, FileText, Headphones, MessageSquare, Save } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { AppSettings, ExportKind } from "../types";
 import { exportKnowledge } from "../services/knowledgeExportService";
@@ -11,6 +11,7 @@ interface AiToolsPageProps {
   settings: AppSettings;
   onChanged: () => Promise<void> | void;
   onOpenAi: () => void;
+  onOpenPodcasts: () => void;
 }
 
 type AiExportKind = Exclude<ExportKind, "full-backup">;
@@ -33,12 +34,30 @@ const AI_EXPORT_OPTIONS: Array<{ kind: AiExportKind; label: string; helper: stri
   },
 ];
 
-export const AiToolsPage = ({ settings, onChanged, onOpenAi }: AiToolsPageProps) => {
+export const AiToolsPage = ({ settings, onChanged, onOpenAi, onOpenPodcasts }: AiToolsPageProps) => {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<AiExportKind | null>(null);
   const [aiKind, setAiKind] = useState<AiExportKind>("subject-markdown");
   const [exportOpen, setExportOpen] = useState(false);
+  const [fishKey, setFishKey] = useState("");
+  const [showFishKey, setShowFishKey] = useState(false);
+  const [fishModel, setFishModel] = useState(settings.tts?.model ?? "s2.1-pro-free");
+  const [fishVoiceId, setFishVoiceId] = useState(settings.tts?.voiceId ?? "");
   const selectedOption = AI_EXPORT_OPTIONS.find((item) => item.kind === aiKind);
+
+  useEffect(() => {
+    setFishModel(settings.tts?.model ?? "s2.1-pro-free");
+    setFishVoiceId(settings.tts?.voiceId ?? "");
+    void storage.getAiSecret?.("fish-audio").then((secret) => setFishKey(secret?.apiKey ?? "")).catch(() => setFishKey(""));
+  }, [settings]);
+
+  const saveFishSettings = async () => {
+    if (fishKey.trim()) await storage.saveAiSecret?.(fishKey.trim(), "fish-audio");
+    else await storage.clearAiSecret?.("fish-audio");
+    await storage.saveSettings({ ...settings, tts: { model: fishModel.trim() || "s2.1-pro-free", voiceId: fishVoiceId.trim(), format: "mp3" } });
+    await onChanged();
+    setMessage("Fish Audio 设置已保存。API Key 只保存在本机，不进入备份。");
+  };
 
   const exportAiMaterial = async () => {
     setBusy(aiKind);
@@ -71,10 +90,24 @@ export const AiToolsPage = ({ settings, onChanged, onOpenAi }: AiToolsPageProps)
             description="继续问答，或查看、删除本机保存的 AI 对话"
             onClick={onOpenAi}
           />
+          <ListRow icon={<Headphones size={19} />} title="知识播客" description="把本地记录整理成可编辑、可回溯的知识音频" onClick={onOpenPodcasts} />
         </div>
       </section>
 
       <AiSettingsPanel settings={settings} onChanged={onChanged} />
+
+      <section className="ai-settings-panel fish-audio-settings">
+        <div className="ai-settings-body">
+          <header className="inline-section-header"><div><h3>Fish Audio 文本转语音</h3><p>用于知识播客音频生成。适合个人自用；公开发布时应改为后端代理。</p></div></header>
+          <div className="settings-grid">
+            <label>模型<input value={fishModel} onChange={(event) => setFishModel(event.target.value)} placeholder="s2.1-pro-free" /></label>
+            <label>Voice ID<input value={fishVoiceId} onChange={(event) => setFishVoiceId(event.target.value)} placeholder="Fish Audio reference_id" /></label>
+            <label>API Key<span className="secret-input"><input type={showFishKey ? "text" : "password"} value={fishKey} onChange={(event) => setFishKey(event.target.value)} placeholder="sk-..." /><button type="button" onClick={() => setShowFishKey((value) => !value)} aria-label="切换 Fish 密钥显示">{showFishKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+            <label>输出格式<input value="MP3" readOnly /></label>
+          </div>
+          <button type="button" className="primary-button" onClick={() => void saveFishSettings()}><Save size={17} />保存 Fish Audio 设置</button>
+        </div>
+      </section>
 
       <section className={`ai-export-panel ${exportOpen ? "open" : ""}`}>
         <header>

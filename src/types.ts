@@ -393,6 +393,123 @@ export interface AiChatSession extends BaseEntity {
   lastContextHash?: string;
 }
 
+export interface AiCompletionUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cachedPromptTokens?: number;
+}
+
+export interface AiCompletionResult {
+  content: string;
+  finishReason?: string;
+  usage?: AiCompletionUsage;
+  requestId?: string;
+}
+
+export interface AiTtsConfig {
+  model: string;
+  voiceId: string;
+  format: "mp3";
+}
+
+export interface KnowledgePodcastSegment {
+  id: EntityId;
+  order: number;
+  title: string;
+  text: string;
+  sourceRecordIds: EntityId[];
+  textHash: string;
+  audioAssetId?: EntityId;
+  audioStatus: "pending" | "generating" | "ready" | "failed";
+  durationSeconds?: number;
+  error?: string;
+}
+
+export type KnowledgePodcastAudioUnitKind = "opening" | "segment" | "closing";
+
+export interface KnowledgePodcastAudioUnit {
+  id: EntityId;
+  kind: KnowledgePodcastAudioUnitKind;
+  order: number;
+  title: string;
+  segmentId?: EntityId;
+  textHash: string;
+  audioAssetId?: EntityId;
+  audioStatus: "pending" | "generating" | "ready" | "failed";
+  durationSeconds?: number;
+  error?: string;
+}
+
+export type KnowledgePodcastGenerationStage =
+  | "preparing"
+  | "building-context"
+  | "requesting-ai"
+  | "retrying-ai"
+  | "parsing-script"
+  | "saving-script"
+  | "preparing-audio"
+  | "generating-segment"
+  | "saving-audio"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface KnowledgePodcastGenerationProgress {
+  kind: "script" | "audio";
+  status: "running" | "completed" | "failed" | "cancelled";
+  stage: KnowledgePodcastGenerationStage;
+  message: string;
+  startedAt: ISODateTime;
+  updatedAt: ISODateTime;
+  providerName?: string;
+  model?: string;
+  attempt?: number;
+  current?: number;
+  total?: number;
+  partCurrent?: number;
+  partTotal?: number;
+}
+
+export interface KnowledgePodcastScriptDiagnostic {
+  providerName: string;
+  model: string;
+  finishReason?: string;
+  usage?: AiCompletionUsage;
+  requestId?: string;
+  attempts: number;
+}
+
+export interface KnowledgePodcast extends BaseEntity {
+  title: string;
+  mode: "summary" | "explain";
+  targetMinutes: 3 | 5 | 10;
+  scope: AiKnowledgeScope;
+  sourceRecordIds: EntityId[];
+  contextHash: string;
+  scriptStatus: "idle" | "generating" | "ready" | "failed";
+  audioStatus: "idle" | "generating" | "partial" | "ready" | "failed";
+  opening?: string;
+  segments: KnowledgePodcastSegment[];
+  closing?: string;
+  /** Version 2 stores opening, chapters and closing as independent audio units. */
+  audioLayoutVersion?: 2;
+  audioUnits?: KnowledgePodcastAudioUnit[];
+  /** Generated assets superseded by a script or audio layout change, removed after a complete replacement succeeds. */
+  pendingAudioCleanupAssetIds?: EntityId[];
+  lastError?: string;
+  generation?: KnowledgePodcastGenerationProgress;
+  scriptDiagnostic?: KnowledgePodcastScriptDiagnostic;
+  playback?: { unitId?: EntityId; segmentId?: EntityId; positionSeconds: number };
+  ttsConfig: {
+    providerId: "fish-audio";
+    model: string;
+    voiceId: string;
+    format: "mp3";
+  };
+}
+
 export interface AiChatMessage extends BaseEntity {
   sessionId: EntityId;
   role: "user" | "assistant" | "system";
@@ -422,6 +539,7 @@ export interface Asset extends BaseEntity {
   mimeType: string;
   size: number;
   kind: "image" | "attachment" | "audio";
+  generatedBy?: "knowledge-podcast";
   data: Blob;
   durationSeconds?: number;
   ocrStatus?: "idle" | "queued" | "running" | "done" | "failed" | "timeout";
@@ -526,6 +644,7 @@ export interface AppSettings {
   subjects?: SubjectConfig[];
   autoBackup?: AutoBackupSettings;
   ai?: AiProviderConfig;
+  tts?: AiTtsConfig;
   schemaVersion?: 1 | 2 | 3 | 4;
 }
 
@@ -563,6 +682,7 @@ export interface BackupPayload {
   recordReviewDayStats?: RecordReviewDayStat[];
   studySessions: StudySession[];
   settings: AppSettings;
+  podcasts?: KnowledgePodcast[];
 }
 
 export interface SearchResult {
@@ -711,6 +831,7 @@ export interface StorageAdapter {
   resetStaleOcrJobs?(maxAgeMs: number): Promise<void>;
   listAssets(): Promise<Asset[]>;
   getAsset(id: EntityId): Promise<Asset | undefined>;
+  deleteAsset?(id: EntityId): Promise<void>;
   stageRecordTransferAsset(sessionId: string, asset: Asset): Promise<void>;
   commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary>;
   discardRecordTransfer(sessionId: string): Promise<void>;
@@ -723,6 +844,10 @@ export interface StorageAdapter {
     options?: StreamingImportOptions,
   ): Promise<void>;
   clearAll(): Promise<void>;
+  listKnowledgePodcasts?(): Promise<KnowledgePodcast[]>;
+  getKnowledgePodcast?(id: EntityId): Promise<KnowledgePodcast | undefined>;
+  saveKnowledgePodcast?(podcast: KnowledgePodcast): Promise<KnowledgePodcast>;
+  deleteKnowledgePodcast?(id: EntityId): Promise<void>;
   listAiSessions?(): Promise<AiChatSession[]>;
   getAiSession?(id: EntityId): Promise<AiChatSession | undefined>;
   saveAiSession?(session: AiChatSession): Promise<AiChatSession>;

@@ -83,6 +83,7 @@ const renderAiChatPage = () => {
       onOpenSettings={vi.fn()}
       onOpenScopeScreen={vi.fn()}
       onBackFromScopeScreen={vi.fn()}
+      onOpenPodcastForScope={vi.fn()}
     />,
   );
 };
@@ -101,6 +102,7 @@ const AiScopePageHarness = ({ blocks = [] }: { blocks?: RecordBlock[] }) => {
       onOpenSettings={vi.fn()}
       onOpenScopeScreen={() => setScopeScreenOpen(true)}
       onBackFromScopeScreen={() => setScopeScreenOpen(false)}
+      onOpenPodcastForScope={vi.fn()}
     />
   );
 };
@@ -256,6 +258,7 @@ describe("AiChatPage", () => {
         onOpenSettings={vi.fn()}
         onOpenScopeScreen={vi.fn()}
         onBackFromScopeScreen={vi.fn()}
+        onOpenPodcastForScope={vi.fn()}
       />,
     );
 
@@ -283,6 +286,7 @@ describe("AiChatPage", () => {
         onOpenSettings={vi.fn()}
         onOpenScopeScreen={vi.fn()}
         onBackFromScopeScreen={vi.fn()}
+        onOpenPodcastForScope={vi.fn()}
       />,
     );
 
@@ -310,6 +314,7 @@ describe("AiChatPage", () => {
         onOpenSettings={vi.fn()}
         onOpenScopeScreen={vi.fn()}
         onBackFromScopeScreen={vi.fn()}
+        onOpenPodcastForScope={vi.fn()}
       />,
     );
 

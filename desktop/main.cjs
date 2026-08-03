@@ -325,6 +325,29 @@ ipcMain.handle("study-journal:desktop-ocr-recognize", (event, options) => {
   }
   return recognizePaddleOcr(options);
 });
+ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error("TTS 请求来源无效。");
+  }
+  const apiKey = typeof options?.apiKey === "string" ? options.apiKey.trim() : "";
+  const model = typeof options?.model === "string" ? options.model.trim() : "s2.1-pro-free";
+  const voiceId = typeof options?.voiceId === "string" ? options.voiceId.trim() : "";
+  const text = typeof options?.text === "string" ? options.text : "";
+  if (!apiKey || !voiceId || !text.trim()) throw new Error("Fish Audio 请求配置不完整。");
+  const response = await net.fetch("https://api.fish.audio/v1/tts", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+      model,
+    },
+    body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", normalize: true, mp3_bitrate: 128, latency: "normal", chunk_length: 300 }),
+  });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) throw new Error(`Fish Audio 请求失败（${response.status}）：${buffer.toString("utf8").slice(0, 180)}`);
+  return { data: buffer.toString("base64"), mimeType: "audio/mpeg" };
+});
 ipcMain.handle("study-journal:desktop-backup-status", desktopBackupStatus);
 ipcMain.handle("study-journal:desktop-backup-ensure", async () => {
   const { folderName } = await resolveDesktopBackupRepositoryRoot(true);

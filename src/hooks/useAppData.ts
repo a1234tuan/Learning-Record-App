@@ -6,6 +6,7 @@ import type {
   Block,
   ContentTemplate,
   DayEntry,
+  KnowledgePodcast,
   RecordBlock,
   RecordReviewBulkResult,
   RecordReviewDayStat,
@@ -33,6 +34,7 @@ import {
 } from "../lib/subjects";
 import { enqueueAutoOcrForRecord } from "../services/ocrJobService";
 import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupService";
+import { cancelAllKnowledgePodcastJobs, subscribeKnowledgePodcastJobs } from "../services/knowledgePodcastJobService";
 
 export const useAppData = () => {
   const [initialized, setInitialized] = useState(false);
@@ -41,6 +43,7 @@ export const useAppData = () => {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [templates, setTemplates] = useState<ContentTemplate[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [podcasts, setPodcasts] = useState<KnowledgePodcast[]>([]);
   const [deletedRecords, setDeletedRecords] = useState<RecordBlock[]>([]);
   const [recordReviews, setRecordReviews] = useState<RecordReviewState[]>([]);
   const [dueRecordReviews, setDueRecordReviews] = useState<RecordReviewState[]>([]);
@@ -49,7 +52,7 @@ export const useAppData = () => {
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats] = await Promise.all([
+    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.listTemplates(),
@@ -60,6 +63,7 @@ export const useAppData = () => {
       storage.listDueRecordReviews(todayISO()),
       storage.listRecordReviewLogs(),
       storage.getRecordReviewStats(todayISO()),
+      storage.listKnowledgePodcasts?.() ?? Promise.resolve([]),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
@@ -71,6 +75,7 @@ export const useAppData = () => {
     setDueRecordReviews(dueReviews);
     setRecordReviewLogs(reviewLogs);
     setRecordReviewStats(reviewStats);
+    setPodcasts(podcastList);
   }, []);
 
   useEffect(() => {
@@ -547,6 +552,22 @@ export const useAppData = () => {
     [recordBlocks, refresh],
   );
 
+  const saveKnowledgePodcast = useCallback(async (podcast: KnowledgePodcast) => {
+    const saved = await storage.saveKnowledgePodcast?.(podcast);
+    await refresh();
+    return saved ?? podcast;
+  }, [refresh]);
+
+  useEffect(() => subscribeKnowledgePodcastJobs(() => {
+    void refresh();
+  }), [refresh]);
+
+  const deleteKnowledgePodcast = useCallback(async (id: string) => {
+    cancelAllKnowledgePodcastJobs(id);
+    await storage.deleteKnowledgePodcast?.(id);
+    await refresh();
+  }, [refresh]);
+
   return {
     initialized,
     entries,
@@ -554,6 +575,7 @@ export const useAppData = () => {
     assets,
     templates,
     settings,
+    podcasts,
     deletedRecords,
     recordReviews,
     dueRecordReviews,
@@ -605,5 +627,7 @@ export const useAppData = () => {
     saveSubjects,
     addSubject,
     renameSubject,
+    saveKnowledgePodcast,
+    deleteKnowledgePodcast,
   };
 };
