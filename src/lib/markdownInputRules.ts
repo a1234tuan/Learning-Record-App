@@ -230,7 +230,7 @@ export const MarkdownTypingExtension = Extension.create<MarkdownTypingOptions>({
           handler: ({ state }) => replaceShortcutParagraph(
             state,
             collapseBlock.create(
-              { title: "折叠块", summary: "", defaultOpen: false },
+              { title: "折叠块", summary: "", defaultOpen: false, autofocusSummary: true },
               Fragment.from(paragraph.create()),
             ),
             "after",

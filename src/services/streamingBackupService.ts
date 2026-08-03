@@ -189,6 +189,7 @@ export const importNativeStreamableBackupAndRestore = async (
         manifest: data.manifest,
         entries: data.entries ?? [],
         blocks,
+        templates: data.templates ?? [],
         recordDrafts: data.recordDrafts ?? [],
         mistakes: [],
         tags: data.tags ?? [],

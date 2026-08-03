@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TodayPage } from "./TodayPage";
@@ -59,5 +59,39 @@ describe("TodayPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开收藏夹" }));
 
     expect(onOpenFavorites).toHaveBeenCalledTimes(1);
+  });
+
+  it("copies the selected template into a newly created record", async () => {
+    const template = {
+      id: "template-translation",
+      createdAt: stamp,
+      updatedAt: stamp,
+      title: "翻译复盘",
+      contentHtml: "<blockquote>原句</blockquote><ul><li>我的翻译</li></ul>",
+    };
+    const onCreateRecord = vi.fn().mockResolvedValue({ id: "record-1" });
+    render(
+      <TodayPage
+        entry={null}
+        blocks={[]}
+        examDate="2026-12-27"
+        subjects={subjects}
+        templates={[template]}
+        onSaveEntry={vi.fn()}
+        onCreateRecord={onCreateRecord}
+        onOpenFavorites={vi.fn()}
+        onOpenRecord={vi.fn()}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("新记录模板"), { target: { value: template.id } });
+    fireEvent.click(screen.getByRole("button", { name: /新建 .* 记录/ }));
+
+    await waitFor(() => expect(onCreateRecord).toHaveBeenCalledWith(
+      expect.any(String),
+      "数学",
+      template.contentHtml,
+    ));
   });
 });

@@ -151,7 +151,7 @@ export const zipToSnapshot = async (file: File, options: ImportOptions = {}): Pr
   if (
     !data.manifest ||
     !["408-study-journal", "study-journal"].includes(data.manifest.format) ||
-    ![1, 2, 3, 4].includes(data.manifest.version)
+    ![1, 2, 3, 4, 5].includes(data.manifest.version)
   ) {
     const format = data.manifest?.format ?? "未知";
     const version = data.manifest?.version ?? "未知";
@@ -190,6 +190,7 @@ export const zipToSnapshot = async (file: File, options: ImportOptions = {}): Pr
       manifest: data.manifest,
       entries: data.entries ?? [],
       blocks: migratedBlocks,
+      templates: data.templates ?? [],
       recordDrafts: data.recordDrafts ?? [],
       mistakes: [],
       tags: data.tags ?? [],

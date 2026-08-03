@@ -587,6 +587,126 @@ describe("RichTextEditor", () => {
     }
   });
 
+  it("opens a new collapse shortcut and focuses its summary before tabbing into the body", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isDesktopPlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value="<p></p>"
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      act(() => {
+        editorRef?.commands.insertContent("/zdk ", { applyInputRules: true });
+      });
+
+      const summaryInput = await screen.findByPlaceholderText("摘要标签");
+      await waitFor(() => expect(summaryInput).toHaveFocus());
+      expect((document.querySelector(".collapse-block-content") as HTMLElement).style.display).not.toBe("none");
+      expect(editorRef?.getHTML()).toContain('data-default-open="false"');
+      expect(editorRef?.getHTML()).not.toContain("autofocusSummary");
+
+      fireEvent.keyDown(summaryInput, { key: "Tab" });
+
+      await waitFor(() => expect(editorRef?.view.hasFocus()).toBe(true));
+      const $from = editorRef!.state.selection.$from;
+      expect($from.parent.type.name).toBe("paragraph");
+      expect(Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1).type.name)).toContain("recordCollapseBlock");
+    } finally {
+      vi.mocked(isDesktopPlatform).mockReturnValue(false);
+    }
+  });
+
+  it("moves down from the collapse trailing blank line into the paragraph after the block", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<record-collapse data-title="折叠" data-summary="" data-default-open="true">',
+          "<p>正文</p><p></p>",
+          "</record-collapse>",
+          "<p>块后正文</p><p></p>",
+        ].join("")}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const collapse = editorRef!.state.doc.firstChild!;
+    const trailingParagraphStart = 1 + collapse.child(0).nodeSize;
+    act(() => editorRef?.commands.setTextSelection(trailingParagraphStart + 1));
+    vi.spyOn(editorRef!.view, "endOfTextblock").mockReturnValue(true);
+
+    fireEvent.keyDown(document.querySelector(".rich-editor")!, { key: "ArrowDown" });
+
+    const $from = editorRef!.state.selection.$from;
+    expect($from.parent.textContent).toBe("块后正文");
+    expect($from.depth).toBe(1);
+    expect(editorRef?.getHTML().match(/<p><\/p>/g)).toHaveLength(2);
+  });
+
+  it("keeps ArrowDown native before the final collapse child or final visual line", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={'<record-collapse data-title="折叠" data-summary="" data-default-open="true"><p>第一段</p><p></p></record-collapse><p></p>'}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => setSelectionInsideText(editorRef!, "第一段"));
+    const before = editorRef!.state.selection.from;
+    vi.spyOn(editorRef!.view, "endOfTextblock").mockReturnValue(false);
+
+    fireEvent.keyDown(document.querySelector(".rich-editor")!, { key: "ArrowDown" });
+
+    expect(editorRef!.state.selection.from).toBe(before);
+  });
+
+  it("creates an outside paragraph when ArrowDown cannot find an editable position after a root collapse", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={'<record-collapse data-title="折叠" data-summary="" data-default-open="true"><p></p></record-collapse>'}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const collapse = editorRef!.state.doc.firstChild!;
+    act(() => editorRef?.commands.setTextSelection(2));
+    vi.spyOn(editorRef!.view, "endOfTextblock").mockReturnValue(true);
+    act(() => {
+      const end = editorRef!.state.doc.content.size;
+      editorRef!.view.dispatch(editorRef!.state.tr.delete(collapse.nodeSize, end));
+    });
+
+    fireEvent.keyDown(document.querySelector(".rich-editor")!, { key: "ArrowDown" });
+
+    expect(editorRef!.state.selection.$from.depth).toBe(1);
+    expect(editorRef?.getHTML()).toBe('<record-collapse data-title="折叠" data-summary="" data-default-open="true"><p></p></record-collapse><p></p>');
+  });
+
   it.each(["/zdk ", "/glk ", "/dmk "])("keeps %s as text outside Desktop", async (shortcut) => {
     let editorRef: Editor | undefined;
     render(

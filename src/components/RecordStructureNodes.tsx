@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { Fragment } from "@tiptap/pm/model";
+import { Selection, TextSelection } from "@tiptap/pm/state";
 import { ChevronDown, ChevronRight, Copy, GitBranch, Plus, Trash2, ArrowDown, ArrowUp } from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -756,11 +757,71 @@ const StickyBoardNodeView = (props: NodeViewProps) => {
 const CollapseBlockNodeView = (props: NodeViewProps) => {
   const editable = props.editor.isEditable;
   const defaultOpen = Boolean(props.node.attrs.defaultOpen);
-  const [open, setOpen] = useState(defaultOpen);
+  const autofocusSummary = Boolean(props.node.attrs.autofocusSummary);
+  const [open, setOpen] = useState(defaultOpen || autofocusSummary);
+  const summaryInputRef = useRef<HTMLInputElement | null>(null);
+  const preserveAutofocusOpenRef = useRef(false);
 
   useEffect(() => {
+    if (autofocusSummary) {
+      preserveAutofocusOpenRef.current = true;
+      return;
+    }
+    if (preserveAutofocusOpenRef.current) {
+      preserveAutofocusOpenRef.current = false;
+      return;
+    }
     setOpen(defaultOpen);
-  }, [defaultOpen]);
+  }, [autofocusSummary, defaultOpen]);
+
+  useLayoutEffect(() => {
+    if (!editable || !autofocusSummary) {
+      return;
+    }
+    setOpen(true);
+    const frame = window.requestAnimationFrame(() => {
+      const input = summaryInputRef.current;
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+      if (typeof props.getPos !== "function") {
+        return;
+      }
+      const pos = props.getPos();
+      if (typeof pos !== "number") {
+        return;
+      }
+      const node = props.editor.state.doc.nodeAt(pos);
+      if (!node || node.type.name !== props.node.type.name || !node.attrs.autofocusSummary) {
+        return;
+      }
+      const transaction = props.editor.state.tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        autofocusSummary: false,
+      });
+      transaction.setMeta("addToHistory", false);
+      props.editor.view.dispatch(transaction);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [autofocusSummary, editable, props.editor, props.getPos, props.node.type.name]);
+
+  const focusBody = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Tab" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || typeof props.getPos !== "function") {
+      return;
+    }
+    const pos = props.getPos();
+    if (typeof pos !== "number") {
+      return;
+    }
+    event.preventDefault();
+    setOpen(true);
+    const bodyStart = pos + 1;
+    const selection = Selection.findFrom(props.editor.state.doc.resolve(bodyStart), 1, true);
+    if (!selection) {
+      return;
+    }
+    props.editor.view.dispatch(props.editor.state.tr.setSelection(selection).scrollIntoView());
+    props.editor.view.focus();
+  };
 
   return (
     <NodeViewWrapper className={`structure-block collapse-block${props.selected ? " selected" : ""}`} data-structure-kind="collapse">
@@ -772,7 +833,13 @@ const CollapseBlockNodeView = (props: NodeViewProps) => {
         {editable ? (
           <>
             <input value={textValue(props.node.attrs.title)} placeholder="折叠块标题" onChange={(event) => props.updateAttributes({ title: event.target.value })} />
-            <input value={textValue(props.node.attrs.summary)} placeholder="摘要标签" onChange={(event) => props.updateAttributes({ summary: event.target.value })} />
+            <input
+              ref={summaryInputRef}
+              value={textValue(props.node.attrs.summary)}
+              placeholder="摘要标签"
+              onChange={(event) => props.updateAttributes({ summary: event.target.value })}
+              onKeyDown={focusBody}
+            />
             <label>
               <input
                 type="checkbox"
@@ -910,6 +977,11 @@ export const RecordCollapseBlockNode = Node.create({
         parseHTML: (element) => element.getAttribute("data-default-open") === "true",
         renderHTML: (attributes) => ({ "data-default-open": attributes.defaultOpen ? "true" : "false" }),
       },
+      autofocusSummary: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
     };
   },
 
@@ -923,5 +995,48 @@ export const RecordCollapseBlockNode = Node.create({
 
   addNodeView() {
     return ReactNodeViewRenderer(CollapseBlockNodeView);
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      ArrowDown: () => {
+        const { state, view } = this.editor;
+        const { selection } = state;
+        if (!selection.empty || !view.endOfTextblock("down")) {
+          return false;
+        }
+        const { $from } = selection;
+        let collapseDepth = -1;
+        for (let depth = $from.depth - 1; depth > 0; depth -= 1) {
+          if ($from.node(depth).type === this.type) {
+            collapseDepth = depth;
+            break;
+          }
+        }
+        if (collapseDepth < 0) {
+          return false;
+        }
+        const collapseNode = $from.node(collapseDepth);
+        const childDepth = collapseDepth + 1;
+        if (childDepth > $from.depth || $from.index(collapseDepth) !== collapseNode.childCount - 1) {
+          return false;
+        }
+        const afterCollapse = $from.after(collapseDepth);
+        return this.editor.commands.command(({ tr, dispatch }) => {
+          let target = Selection.findFrom(tr.doc.resolve(afterCollapse), 1, true);
+          if (!target) {
+            const paragraph = state.schema.nodes.paragraph;
+            if (!paragraph) {
+              return false;
+            }
+            tr.insert(afterCollapse, paragraph.create());
+            target = TextSelection.create(tr.doc, afterCollapse + 1);
+          }
+          tr.setSelection(target).scrollIntoView();
+          dispatch?.(tr);
+          return true;
+        });
+      },
+    };
   },
 });

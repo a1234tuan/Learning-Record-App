@@ -75,6 +75,12 @@ export interface RecordDraft {
   updatedAt: ISODateTime;
 }
 
+/** A reusable rich-text fragment that can be copied into a journal record. */
+export interface ContentTemplate extends BaseEntity {
+  title: string;
+  contentHtml: string;
+}
+
 export interface RecordReviewState extends BaseEntity {
   recordId: EntityId;
   status: RecordReviewStatus;
@@ -525,7 +531,7 @@ export interface AppSettings {
 
 export interface BackupManifest {
   format: "408-study-journal" | "study-journal";
-  version: 1 | 2 | 3 | 4;
+  version: 1 | 2 | 3 | 4 | 5;
   exportedAt: ISODateTime;
   appVersion: string;
   counts: {
@@ -539,6 +545,7 @@ export interface BackupManifest {
     recordReviews?: number;
     recordReviewLogs?: number;
     recordReviewDayStats?: number;
+    templates?: number;
   };
 }
 
@@ -546,6 +553,7 @@ export interface BackupPayload {
   manifest: BackupManifest;
   entries: DayEntry[];
   blocks: Block[];
+  templates?: ContentTemplate[];
   recordDrafts?: RecordDraft[];
   mistakes: MistakeCard[];
   tags: Tag[];
@@ -661,6 +669,9 @@ export interface StorageAdapter {
   saveEntry(entry: DayEntry): Promise<DayEntry>;
   listBlocks(date?: ISODate): Promise<Block[]>;
   saveBlock(block: Block): Promise<Block>;
+  listTemplates(): Promise<ContentTemplate[]>;
+  saveTemplate(template: ContentTemplate): Promise<ContentTemplate>;
+  deleteTemplate(templateId: EntityId): Promise<void>;
   getRecordDraft(recordId: EntityId): Promise<RecordDraft | undefined>;
   listRecordDrafts(): Promise<RecordDraft[]>;
   saveRecordDraft(draft: RecordDraft): Promise<RecordDraft>;

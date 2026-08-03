@@ -11,6 +11,7 @@ export type MoreSubRoute =
   | "aiTools"
   | "ocrSettings"
   | "recordings"
+  | "templates"
   | "guide"
   | null;
 export type AiWorkspaceScreen = "chat" | "scope";

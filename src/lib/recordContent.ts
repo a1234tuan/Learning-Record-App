@@ -127,12 +127,11 @@ export const syncRecordRefsFromContent = (record: RecordBlock, options: RecordCo
   };
 };
 
-export const renameRecordAssetTitle = (
-  record: RecordBlock,
+export const renameAssetTitleInContent = (
+  contentHtml: string,
   assetId: string,
   title: string,
-): { record: RecordBlock; changed: boolean } => {
-  const contentHtml = normalizeRecordContent(record);
+): { contentHtml: string; changed: boolean } => {
   const doc = parseElement(contentHtml);
   let changed = false;
 
@@ -142,6 +141,17 @@ export const renameRecordAssetTitle = (
       changed = true;
     }
   }
+
+  return { contentHtml: doc.body.innerHTML, changed };
+};
+
+export const renameRecordAssetTitle = (
+  record: RecordBlock,
+  assetId: string,
+  title: string,
+): { record: RecordBlock; changed: boolean } => {
+  const content = renameAssetTitleInContent(normalizeRecordContent(record), assetId, title);
+  let changed = content.changed;
 
   const renamedAssets = record.assets.map((asset) => {
     if (asset.id !== assetId || asset.title === title) {
@@ -158,7 +168,7 @@ export const renameRecordAssetTitle = (
   return {
     record: syncRecordRefsFromContent({
       ...record,
-      contentHtml: doc.body.innerHTML,
+      contentHtml: content.contentHtml,
       assets: renamedAssets,
     }),
     changed: true,

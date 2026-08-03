@@ -126,6 +126,7 @@ describe("DexieStorageAdapter stream restore", () => {
     const fakeDb = {
       entries: new MemoryTable(),
       blocks: new MemoryTable<StoredRow>([oldRecord]),
+      templates: new MemoryTable(),
       recordDrafts: new MemoryTable(),
       recordReviews: new MemoryTable(),
       recordReviewLogs: new MemoryTable(),
@@ -180,6 +181,7 @@ describe("DexieStorageAdapter stream restore", () => {
     const fakeDb = {
       entries: new MemoryTable(),
       blocks: new MemoryTable<StoredRow>([oldRecord]),
+      templates: new MemoryTable(),
       assets: new MemoryTable<StoredRow>([oldAsset]),
       settings: new MemoryTable<StoredRow>([settings]),
       restoreStagingAssets: new MemoryTable<StoredRow>([], "stagingId"),

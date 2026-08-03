@@ -18,6 +18,7 @@ const richEditorMock = vi.hoisted(() => {
     props: any;
     editor: any;
     insertContentAt: ReturnType<typeof vi.fn>;
+    insertContent: ReturnType<typeof vi.fn>;
     cancelMarkdownPasteConversion: ReturnType<typeof vi.fn>;
     reset: () => void;
   } = {
@@ -25,6 +26,7 @@ const richEditorMock = vi.hoisted(() => {
     props: null,
     editor: null,
     insertContentAt: vi.fn(),
+    insertContent: vi.fn(),
     cancelMarkdownPasteConversion: vi.fn(),
     reset: () => undefined,
   };
@@ -38,6 +40,14 @@ const richEditorMock = vi.hoisted(() => {
       } else {
         state.html = `<${node?.type ?? "unknown"}></${node?.type ?? "unknown"}><p></p>`;
       }
+      state.props?.onChange?.(state.html);
+      return true;
+    },
+  }));
+
+  state.insertContent = vi.fn((html: string) => ({
+    run: () => {
+      state.html = html;
       state.props?.onChange?.(state.html);
       return true;
     },
@@ -60,6 +70,7 @@ const richEditorMock = vi.hoisted(() => {
     chain: () => ({
       focus: () => ({
         insertContentAt: state.insertContentAt,
+        insertContent: state.insertContent,
       }),
     }),
   };
@@ -69,6 +80,7 @@ const richEditorMock = vi.hoisted(() => {
     state.props = null;
     state.editor.isDestroyed = false;
     state.insertContentAt.mockClear();
+    state.insertContent.mockClear();
     state.cancelMarkdownPasteConversion.mockClear();
   };
 
@@ -209,6 +221,39 @@ afterEach(() => {
 });
 
 describe("RecordEditorPage", () => {
+  it("marks a menu-inserted collapse block for one-time summary autofocus", async () => {
+    const { onGetDraft } = renderEditor();
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    fireEvent.click(screen.getByRole("button", { name: "结构块" }));
+    fireEvent.click(await screen.findByRole("button", { name: /折叠块/ }));
+
+    expect(richEditorMock.insertContentAt).toHaveBeenCalledWith(0, [
+      expect.objectContaining({
+        type: "recordCollapseBlock",
+        attrs: expect.objectContaining({ defaultOpen: false, autofocusSummary: true }),
+      }),
+      { type: "paragraph" },
+    ]);
+  });
+
+  it("inserts a template HTML copy at the editor selection", async () => {
+    const template = {
+      id: "template-translation",
+      createdAt: stamp,
+      updatedAt: stamp,
+      title: "翻译复盘",
+      contentHtml: "<blockquote>原句</blockquote><ul><li>我的翻译</li></ul>",
+    };
+    const { onGetDraft } = renderEditor({ templates: [template] });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    fireEvent.click(screen.getByRole("button", { name: "插入模板" }));
+    fireEvent.click(await screen.findByRole("button", { name: /翻译复盘/ }));
+
+    expect(richEditorMock.insertContent).toHaveBeenCalledWith(template.contentHtml);
+  });
+
   it("does not expose subject creation while editing a record", async () => {
     const { onGetDraft } = renderEditor();
 

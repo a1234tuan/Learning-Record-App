@@ -9,6 +9,7 @@ import type {
   Asset,
   BackupAssetMeta,
   Block,
+  ContentTemplate,
   DayEntry,
   MistakeCard,
   RecordDraft,
@@ -46,7 +47,13 @@ import {
 import { addDaysISO, isoDateTimeToLocalDate, nowISO, todayISO } from "../lib/date";
 import { createBaseEntity, newId, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
-import { hasLinearRecordNodes, renameRecordAssetTitle, syncRecordRefsFromContent } from "../lib/recordContent";
+import {
+  extractRecordRefsFromContent,
+  hasLinearRecordNodes,
+  renameAssetTitleInContent,
+  renameRecordAssetTitle,
+  syncRecordRefsFromContent,
+} from "../lib/recordContent";
 import { normalizeRecordTags, sameRecordTags } from "../lib/recordTags";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
@@ -79,7 +86,18 @@ const normalizeSnapshotRecordDrafts = (drafts: RecordDraft[]): RecordDraft[] =>
     draft: syncRecordRefsFromContent({ ...draft.draft, mistakeRefs: [] }),
   }));
 
-const assertSnapshotIntegrity = (blocks: Block[], assets: Array<Pick<Asset, "id">>) => {
+const normalizeSnapshotTemplates = (templates: ContentTemplate[] | undefined): ContentTemplate[] =>
+  (templates ?? []).map((template) => ({
+    ...template,
+    title: template.title?.trim() || "未命名模板",
+    contentHtml: template.contentHtml?.trim() || "<p></p>",
+  }));
+
+const assertSnapshotIntegrity = (
+  blocks: Block[],
+  templates: ContentTemplate[],
+  assets: Array<Pick<Asset, "id">>,
+) => {
   const assetIds = new Set<string>();
   for (const asset of assets) {
     if (assetIds.has(asset.id)) {
@@ -99,6 +117,13 @@ const assertSnapshotIntegrity = (blocks: Block[], assets: Array<Pick<Asset, "id"
     }
     if (synced.formulas.length !== block.formulas.length) {
       throw new Error(`备份数据不一致：记录“${block.title}”的公式索引需要重新同步。`);
+    }
+  }
+  for (const template of templates) {
+    for (const ref of extractRecordRefsFromContent(template.contentHtml).assets) {
+      if (!assetIds.has(ref.id)) {
+        throw new Error(`备份数据不完整：模板“${template.title}”引用的资源 ${ref.id} 缺失。`);
+      }
     }
   }
 };
@@ -503,6 +528,24 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
 
     return saved;
+  }
+
+  async listTemplates(): Promise<ContentTemplate[]> {
+    return db.templates.orderBy("updatedAt").reverse().toArray();
+  }
+
+  async saveTemplate(template: ContentTemplate): Promise<ContentTemplate> {
+    const saved = touch({
+      ...template,
+      title: template.title.trim() || "未命名模板",
+      contentHtml: template.contentHtml.trim() || "<p></p>",
+    });
+    await db.templates.put(saved);
+    return saved;
+  }
+
+  async deleteTemplate(templateId: string): Promise<void> {
+    await db.templates.delete(templateId);
   }
 
   async getRecordDraft(recordId: string): Promise<RecordDraft | undefined> {
@@ -1075,9 +1118,10 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
 
-    const [blocks, drafts] = await Promise.all([db.blocks.toArray(), db.recordDrafts.toArray()]);
+    const [blocks, drafts, templates] = await Promise.all([db.blocks.toArray(), db.recordDrafts.toArray(), db.templates.toArray()]);
     const renamedBlocks: Block[] = [];
     const renamedDrafts: RecordDraft[] = [];
+    const renamedTemplates: ContentTemplate[] = [];
 
     for (const block of blocks) {
       if (block.type !== "record") {
@@ -1100,14 +1144,24 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
     }
 
+    for (const template of templates) {
+      const result = renameAssetTitleInContent(template.contentHtml, assetId, nextTitle);
+      if (result.changed) {
+        renamedTemplates.push(touch({ ...template, contentHtml: result.contentHtml }));
+      }
+    }
+
     const savedAsset = touch({ ...existing, title: nextTitle, data: existing.data });
-    await db.transaction("rw", db.assets, db.blocks, db.recordDrafts, async () => {
+    await db.transaction("rw", db.assets, db.blocks, db.recordDrafts, db.templates, async () => {
       await db.assets.put(savedAsset);
       if (renamedBlocks.length > 0) {
         await db.blocks.bulkPut(renamedBlocks);
       }
       if (renamedDrafts.length > 0) {
         await db.recordDrafts.bulkPut(renamedDrafts);
+      }
+      if (renamedTemplates.length > 0) {
+        await db.templates.bulkPut(renamedTemplates);
       }
     });
   }
@@ -1267,11 +1321,12 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createSnapshot(): Promise<StorageSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
       async () => {
-        const [entries, blocks, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
+          db.templates.toArray(),
           db.tags.toArray(),
           db.studySessions.toArray(),
           db.settings.get("settings"),
@@ -1281,18 +1336,19 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
         ]);
-        return { entries, blocks, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
     const cleanedDrafts = normalizeSnapshotRecordDrafts(snapshot.recordDrafts);
-    assertSnapshotIntegrity(cleanedBlocks, snapshot.assets);
+    const cleanedTemplates = normalizeSnapshotTemplates(snapshot.templates);
+    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, snapshot.assets);
 
     return {
       payload: {
         manifest: {
           format: "study-journal",
-          version: 4,
+          version: 5,
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
@@ -1306,10 +1362,12 @@ export class DexieStorageAdapter implements StorageAdapter {
             recordReviews: snapshot.recordReviews.length,
             recordReviewLogs: snapshot.recordReviewLogs.length,
             recordReviewDayStats: snapshot.recordReviewDayStats.length,
+            templates: cleanedTemplates.length,
           },
         },
         entries: snapshot.entries,
         blocks: cleanedBlocks,
+        templates: cleanedTemplates,
         recordDrafts: cleanedDrafts,
         mistakes: [],
         tags: snapshot.tags,
@@ -1328,11 +1386,12 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats],
       async () => {
-        const [entries, blocks, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
+          db.templates.toArray(),
           db.tags.toArray(),
           db.studySessions.toArray(),
           db.settings.get("settings"),
@@ -1342,19 +1401,20 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
         ]);
-        return { entries, blocks, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
     const cleanedDrafts = normalizeSnapshotRecordDrafts(snapshot.recordDrafts);
-    assertSnapshotIntegrity(cleanedBlocks, snapshot.assets);
+    const cleanedTemplates = normalizeSnapshotTemplates(snapshot.templates);
+    assertSnapshotIntegrity(cleanedBlocks, cleanedTemplates, snapshot.assets);
     const assets = snapshot.assets.map(assetToMeta);
 
     return {
       payload: {
         manifest: {
           format: "study-journal",
-          version: 4,
+          version: 5,
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
@@ -1368,10 +1428,12 @@ export class DexieStorageAdapter implements StorageAdapter {
             recordReviews: snapshot.recordReviews.length,
             recordReviewLogs: snapshot.recordReviewLogs.length,
             recordReviewDayStats: snapshot.recordReviewDayStats.length,
+            templates: cleanedTemplates.length,
           },
         },
         entries: snapshot.entries,
         blocks: cleanedBlocks,
+        templates: cleanedTemplates,
         recordDrafts: cleanedDrafts,
         mistakes: [],
         tags: snapshot.tags,
@@ -1390,12 +1452,14 @@ export class DexieStorageAdapter implements StorageAdapter {
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
-    assertSnapshotIntegrity(restoredBlocks, snapshot.assets);
+    const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
+    assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
     await db.transaction(
       "rw",
       [
         db.entries,
         db.blocks,
+        db.templates,
         db.recordDrafts,
         db.recordReviews,
         db.recordReviewLogs,
@@ -1411,6 +1475,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         await Promise.all([
           db.entries.clear(),
           db.blocks.clear(),
+          db.templates.clear(),
           db.recordDrafts.clear(),
           db.recordReviews.clear(),
           db.recordReviewLogs.clear(),
@@ -1426,6 +1491,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         await Promise.all([
           db.entries.bulkPut(snapshot.payload.entries),
           db.blocks.bulkPut(restoredBlocks),
+          db.templates.bulkPut(restoredTemplates),
           db.recordDrafts.bulkPut(restoredDrafts),
           db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
           db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),
@@ -1447,7 +1513,8 @@ export class DexieStorageAdapter implements StorageAdapter {
   ): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
-    assertSnapshotIntegrity(restoredBlocks, snapshot.assets);
+    const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
+    assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
     const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
     const sessionId = newId();
     const total = snapshot.assets.length;
@@ -1474,16 +1541,17 @@ export class DexieStorageAdapter implements StorageAdapter {
       options.onProgress?.({ stage: "restoring", message: "资源校验完成，正在一次性恢复数据。" });
       await db.transaction(
         "rw",
-        [db.entries, db.blocks, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.restoreStagingAssets],
+        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.restoreStagingAssets],
         async () => {
           await Promise.all([
-            db.entries.clear(), db.blocks.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
+            db.entries.clear(), db.blocks.clear(), db.templates.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
             db.recordReviewDayStats.clear(), db.mistakes.clear(), db.tags.clear(), db.reviews.clear(), db.studySessions.clear(),
             db.settings.clear(), db.assets.clear(),
           ]);
           await Promise.all([
             db.entries.bulkPut(snapshot.payload.entries),
             db.blocks.bulkPut(restoredBlocks),
+            db.templates.bulkPut(restoredTemplates),
             db.recordDrafts.bulkPut(restoredDrafts),
             db.recordReviews.bulkPut(snapshot.payload.recordReviews ?? []),
             db.recordReviewLogs.bulkPut(snapshot.payload.recordReviewLogs ?? []),

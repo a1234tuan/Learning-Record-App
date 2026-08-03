@@ -13,6 +13,7 @@ const renderMorePage = (settings = DEFAULT_SETTINGS) => {
     onOpenStats: vi.fn(),
     onOpenSettings: vi.fn(),
     onOpenTrash: vi.fn(),
+    onOpenTemplates: vi.fn(),
     onOpenGuide: vi.fn(),
     settings,
   };
@@ -30,6 +31,7 @@ describe("MorePage", () => {
     expect(screen.getByText("OCR 设置")).toBeInTheDocument();
     expect(screen.getByText("使用教程")).toBeInTheDocument();
     expect(screen.getByText("回收站")).toBeInTheDocument();
+    expect(screen.getByText("模板")).toBeInTheDocument();
     expect(screen.getByText("统计")).toBeInTheDocument();
     expect(screen.getByText("设置")).toBeInTheDocument();
 
@@ -46,11 +48,13 @@ describe("MorePage", () => {
     fireEvent.click(screen.getByRole("button", { name: /备份与恢复/ }));
     fireEvent.click(screen.getByRole("button", { name: /AI 工具/ }));
     fireEvent.click(screen.getByRole("button", { name: /OCR 设置/ }));
+    fireEvent.click(screen.getByRole("button", { name: /模板/ }));
     fireEvent.click(screen.getByRole("button", { name: /使用教程/ }));
 
     expect(props.onOpenBackup).toHaveBeenCalledTimes(1);
     expect(props.onOpenAiTools).toHaveBeenCalledTimes(1);
     expect(props.onOpenOcrSettings).toHaveBeenCalledTimes(1);
+    expect(props.onOpenTemplates).toHaveBeenCalledTimes(1);
     expect(props.onOpenGuide).toHaveBeenCalledTimes(1);
   });
 

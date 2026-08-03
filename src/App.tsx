@@ -33,6 +33,7 @@ import { OcrSettingsPage } from "./pages/OcrSettingsPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { UsageGuidePage } from "./pages/UsageGuidePage";
+import { TemplateLibraryPage } from "./pages/TemplateLibraryPage";
 import { PageTransition } from "./components/PageTransition";
 import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
@@ -678,6 +679,7 @@ export const App = () => {
       onAssetChanged={app.refresh}
       highlightedAssetId={highlightedAssetId}
       subjects={app.subjects}
+      templates={app.templates}
       referenceRecords={referenceRecords}
       onOpenRecordReference={openRecordReference}
       restoreScrollY={currentRecordState.restoreScrollY}
@@ -708,6 +710,18 @@ export const App = () => {
     }
 
     switch (tabMemory.more.subRoute) {
+      case "templates":
+        return (
+          <TemplateLibraryPage
+            templates={app.templates}
+            onBack={popCurrentTabDepth}
+            onSaveTemplate={app.saveContentTemplate}
+            onDeleteTemplate={app.deleteContentTemplate}
+            onSaveAsset={app.saveAssetFile}
+            onRenameAsset={app.renameAssetTitle}
+            onAssetChanged={app.refresh}
+          />
+        );
       case "stats":
         return <StatsPage blocks={app.blocks} assets={app.assets} subjects={app.subjects} reviewStats={app.recordReviewStats} />;
       case "recordings":
@@ -902,6 +916,7 @@ export const App = () => {
             onOpenSettings={() => openMoreSubRoute("settings")}
             onOpenTrash={() => openMoreSubRoute("trash")}
             onOpenRecordings={() => openMoreSubRoute("recordings")}
+            onOpenTemplates={() => openMoreSubRoute("templates")}
             onOpenGuide={() => openMoreSubRoute("guide")}
             settings={settings}
           />
@@ -920,8 +935,9 @@ export const App = () => {
             blocks={app.todayBlocks}
             examDate={settings.examDate}
             subjects={app.activeSubjects}
+            templates={app.templates}
             onSaveEntry={(entry) => void app.saveEntry(entry)}
-            onCreateRecord={(date: string, subject: Subject) => app.createRecordBlock(date, subject)}
+            onCreateRecord={(date: string, subject: Subject, contentHtml?: string) => app.createRecordBlock(date, subject, contentHtml)}
             onOpenFavorites={() => openMoreSubRoute("favorites")}
             onOpenRecord={(record) => openRecordInTab(record, "today")}
             onOpenReview={() => switchTab("review")}

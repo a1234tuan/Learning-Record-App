@@ -4,6 +4,7 @@ import type {
   AppSettings,
   Asset,
   Block,
+  ContentTemplate,
   DayEntry,
   RecordBlock,
   RecordReviewBulkResult,
@@ -38,6 +39,7 @@ export const useAppData = () => {
   const [entries, setEntries] = useState<DayEntry[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [templates, setTemplates] = useState<ContentTemplate[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [deletedRecords, setDeletedRecords] = useState<RecordBlock[]>([]);
   const [recordReviews, setRecordReviews] = useState<RecordReviewState[]>([]);
@@ -47,9 +49,10 @@ export const useAppData = () => {
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats] = await Promise.all([
+    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
+      storage.listTemplates(),
       storage.getSettings(),
       storage.listAssets(),
       storage.listDeletedBlocks(),
@@ -60,6 +63,7 @@ export const useAppData = () => {
     ]);
     setEntries(entryList);
     setBlocks(blockList);
+    setTemplates(templateList);
     setSettings(currentSettings);
     setAssets(assetList);
     setDeletedRecords(deletedList);
@@ -335,6 +339,35 @@ export const useAppData = () => {
     [refresh],
   );
 
+  const createContentTemplate = useCallback(
+    async (title = "未命名模板", contentHtml = "<p></p>") => {
+      const saved = await storage.saveTemplate({ ...createBaseEntity(), title, contentHtml });
+      await refresh();
+      await markAutoBackupDirty("template-create");
+      return saved;
+    },
+    [refresh],
+  );
+
+  const saveContentTemplate = useCallback(
+    async (template: ContentTemplate) => {
+      const saved = await storage.saveTemplate(template);
+      await refresh();
+      await markAutoBackupDirty("template-save");
+      return saved;
+    },
+    [refresh],
+  );
+
+  const deleteContentTemplate = useCallback(
+    async (templateId: string) => {
+      await storage.deleteTemplate(templateId);
+      await refresh();
+      await markAutoBackupDirty("template-delete");
+    },
+    [refresh],
+  );
+
   const addRichTextBlock = useCallback(
     async (date = todayISO(), content = "<p></p>") => createRecordBlock(date, undefined, content),
     [createRecordBlock],
@@ -519,6 +552,7 @@ export const useAppData = () => {
     entries,
     blocks,
     assets,
+    templates,
     settings,
     deletedRecords,
     recordReviews,
@@ -552,6 +586,9 @@ export const useAppData = () => {
     ensureRecordReviewDay,
     addRichTextBlock,
     createRecordBlock,
+    createContentTemplate,
+    saveContentTemplate,
+    deleteContentTemplate,
     addTemplate,
     addTodoBlock,
     addStudySessionBlock,

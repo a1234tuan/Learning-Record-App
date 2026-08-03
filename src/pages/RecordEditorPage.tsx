@@ -3,12 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Asset, ContentTemplate, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordTagChips, recordTagStyle } from "../components/RecordTagChips";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
 import { StructureInsertMenu } from "../components/StructureInsertMenu";
+import { TemplateInsertMenu } from "../components/TemplateInsertMenu";
 import { newId } from "../lib/entity";
 import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
@@ -44,6 +45,7 @@ interface RecordEditorPageProps {
   onAssetChanged?: () => void;
   highlightedAssetId?: string;
   subjects: SubjectConfig[];
+  templates?: readonly ContentTemplate[];
   referenceRecords?: readonly RecordBlock[];
   onOpenRecordReference?: (recordId: string) => void;
   restoreScrollY?: number;
@@ -95,7 +97,7 @@ const structureBlockNode = (kind: StructureBlockKind): Record<string, unknown> =
     case "collapse":
       return {
         type: "recordCollapseBlock",
-        attrs: { title: "折叠块", summary: "", defaultOpen: false },
+        attrs: { title: "折叠块", summary: "", defaultOpen: false, autofocusSummary: true },
         content: [{ type: "paragraph" }],
       };
   }
@@ -122,6 +124,7 @@ export const RecordEditorPage = ({
   onAssetChanged,
   highlightedAssetId,
   subjects,
+  templates = [],
   referenceRecords = [],
   onOpenRecordReference,
   restoreScrollY,
@@ -972,6 +975,11 @@ export const RecordEditorPage = ({
                 <StructureInsertMenu
                   compact
                   onInsert={(kind) => insertAfterCurrentBlock(editor, structureBlockNode(kind))}
+                />
+                <TemplateInsertMenu
+                  compact
+                  templates={templates}
+                  onInsert={(template) => editor.chain().focus().insertContent(template.contentHtml).run()}
                 />
               </>
               );

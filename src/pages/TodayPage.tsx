@@ -1,7 +1,7 @@
 import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
-import type { Block, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
@@ -14,8 +14,9 @@ interface TodayPageProps {
   blocks: Block[];
   examDate: string;
   subjects: SubjectConfig[];
+  templates?: readonly ContentTemplate[];
   onSaveEntry: (entry: DayEntry) => void;
-  onCreateRecord: (date: string, subject: Subject) => Promise<RecordBlock>;
+  onCreateRecord: (date: string, subject: Subject, contentHtml?: string) => Promise<RecordBlock>;
   onOpenFavorites: () => void;
   onOpenRecord: (record: RecordBlock) => void;
   onOpenReview?: () => void;
@@ -33,6 +34,7 @@ export const TodayPage = ({
   blocks,
   examDate,
   subjects,
+  templates = [],
   onSaveEntry,
   onCreateRecord,
   onOpenFavorites,
@@ -50,12 +52,14 @@ export const TodayPage = ({
     subjects.find((item) => !item.archivedAt)?.name ??
     fallbackSubjectName({ id: "settings", examDate, theme: "system", accentColor: "", backupReminderDays: 7, fontScale: 1, lineHeight: 1.7, subjects }),
   );
+  const [templateId, setTemplateId] = useState("");
   const countdown = daysUntil(examDate);
   const today = todayISO();
   const records = blocks.filter((block): block is RecordBlock => block.type === "record");
   const todayDue = dueReviewStates.filter((review) => review.nextReviewDate === today);
   const overdue = dueReviewStates.filter((review) => review.nextReviewDate && review.nextReviewDate < today);
   const previewDue = dueReviewStates.slice(0, 3).map((review) => reviewTitlesByRecord[review.recordId]).filter(Boolean);
+  const selectedTemplate = templates.find((template) => template.id === templateId);
 
   return (
     <main className="page today-page">
@@ -87,10 +91,19 @@ export const TodayPage = ({
             <p className="helper-text">更多学科可到“分类 / 学科管理”中新建。</p>
           </div>
           <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} />
+          <select
+            className="new-record-template-select"
+            aria-label="新记录模板"
+            value={templateId}
+            onChange={(event) => setTemplateId(event.target.value)}
+          >
+            <option value="">无模板</option>
+            {templates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
+          </select>
           <button
             type="button"
             className="primary-button"
-            onClick={async () => onOpenRecord(await onCreateRecord(today, subject))}
+            onClick={async () => onOpenRecord(await onCreateRecord(today, subject, selectedTemplate?.contentHtml))}
           >
             <Plus size={18} />
             新建 {subject} 记录

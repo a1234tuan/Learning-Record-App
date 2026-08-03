@@ -4828,6 +4828,13 @@ button:disabled {
   color: var(--muted);
 }
 
+.template-insert-empty {
+  margin: 4px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .record-highlight-block {
   position: relative;
   min-width: 0;

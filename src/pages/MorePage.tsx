@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, BrainCircuit, Download, FileText, Mic2, Settings, Trash2 } from "lucide-react";
+import { BarChart3, BookOpen, BrainCircuit, Download, FileText, LayoutTemplate, Mic2, Settings, Trash2 } from "lucide-react";
 
 import type { AppSettings } from "../types";
 import { createDefaultAiPresets } from "../db/defaults";
@@ -15,6 +15,7 @@ interface MorePageProps {
   onOpenSettings: () => void;
   onOpenTrash: () => void;
   onOpenRecordings?: () => void;
+  onOpenTemplates: () => void;
   onOpenGuide: () => void;
   settings: AppSettings;
 }
@@ -57,6 +58,7 @@ export const MorePage = ({
   onOpenSettings,
   onOpenTrash,
   onOpenRecordings = () => undefined,
+  onOpenTemplates,
   onOpenGuide,
   settings,
 }: MorePageProps) => (
@@ -111,6 +113,7 @@ export const MorePage = ({
       <div className="more-list">
         <ListRow icon={<Trash2 size={19} />} title="回收站" description="恢复或永久删除 30 天内的记录" onClick={onOpenTrash} />
         <ListRow icon={<Mic2 size={19} />} title="录音库" description="集中查看、播放和整理录音笔记" onClick={onOpenRecordings} />
+        <ListRow icon={<LayoutTemplate size={19} />} title="模板" description="管理可复用的学习记录内容" onClick={onOpenTemplates} />
         <ListRow icon={<BarChart3 size={19} />} title="统计" description="查看记录趋势和资源数量" onClick={onOpenStats} />
         <ListRow icon={<Settings size={19} />} title="设置" description="目标日期、主题、字号和行距" onClick={onOpenSettings} />
       </div>

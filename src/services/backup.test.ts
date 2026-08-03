@@ -1,8 +1,8 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 
-import type { BackupPayload, RecordBlock } from "../types";
-import { zipToSnapshot } from "./backup";
+import type { BackupPayload, ContentTemplate, RecordBlock, StorageSnapshot } from "../types";
+import { snapshotToZip, zipToSnapshot } from "./backup";
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
@@ -70,5 +70,33 @@ describe("backup import", () => {
     const snapshot = await zipToSnapshot(file);
 
     expect(snapshot.payload.settings.subjects?.map((subject) => subject.name)).toContain("物理");
+    expect(snapshot.payload.templates).toEqual([]);
+  });
+
+  it("round-trips rich templates through a version 5 full backup", async () => {
+    const template: ContentTemplate = {
+      id: "template-translation",
+      createdAt: stamp,
+      updatedAt: stamp,
+      title: "翻译复盘",
+      contentHtml: "<blockquote>原句</blockquote><ul><li>我的翻译</li></ul><record-formula data-formula-id=\"formula-1\" data-title=\"公式\" data-latex=\"x^2\"></record-formula>",
+    };
+    const payloadWithTemplate: BackupPayload = {
+      ...payload([]),
+      manifest: {
+        ...payload([]).manifest,
+        version: 5,
+        counts: { ...payload([]).manifest.counts, templates: 1 },
+      },
+      templates: [template],
+    };
+    const snapshot: StorageSnapshot = { payload: payloadWithTemplate, assets: [] };
+    const zip = await snapshotToZip(snapshot);
+    const file = new File([zip], "backup.zip", { type: "application/zip" });
+
+    const restored = await zipToSnapshot(file);
+
+    expect(restored.payload.manifest.version).toBe(5);
+    expect(restored.payload.templates).toEqual([template]);
   });
 });

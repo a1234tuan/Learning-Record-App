@@ -38,7 +38,7 @@
 
 .new-record-panel {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(220px, 1.4fr) auto;
+  grid-template-columns: minmax(170px, 1fr) minmax(190px, 1.15fr) minmax(132px, 0.75fr) auto;
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -72,6 +72,49 @@
 
 .new-record-panel .primary-button {
   min-width: max-content;
+}
+
+.new-record-template-select {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.template-library-list {
+  display: grid;
+  gap: 10px;
+}
+
+.template-library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.template-library-row .list-row {
+  min-width: 0;
+}
+
+.template-library-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 20px;
+}
+
+.template-library-empty h2,
+.template-library-empty p {
+  margin: 0;
+}
+
+.template-library-empty p {
+  color: var(--color-muted);
 }
 
 .entry-meta-panel {
