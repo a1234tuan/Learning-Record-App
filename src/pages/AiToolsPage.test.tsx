@@ -6,31 +6,20 @@ import { AiToolsPage } from "./AiToolsPage";
 import { PodcastTemplatesPage } from "./PodcastTemplatesPage";
 
 describe("AiToolsPage", () => {
-  it("opens AI chat records and uses a single-layer AI settings toggle", () => {
-    const onOpenAi = vi.fn();
+  it("renders AI settings panel and back button", () => {
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onBack={vi.fn()} />);
 
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /AI 问答与聊天记录/ }));
-    expect(onOpenAi).toHaveBeenCalledTimes(1);
-
-    const settingsToggle = screen.getByRole("button", { name: /AI 设置/ });
-    expect(settingsToggle).toHaveClass("ai-settings-toggle");
-    expect(settingsToggle).not.toHaveClass("more-link-card");
-
-    fireEvent.click(settingsToggle);
-    expect(screen.queryByLabelText("PaddleOCR Token")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /返回/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /AI 问答与聊天记录/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("导出格式")).not.toBeInTheDocument();
   });
 
-  it("keeps AI export collapsed until the user expands it", () => {
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} />);
+  it("calls onBack when back button is clicked", () => {
+    const onBack = vi.fn();
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onBack={onBack} />);
 
-    expect(screen.queryByLabelText("导出格式")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "展开" }));
-
-    expect(screen.getByLabelText("导出格式")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /导出 AI 材料/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /返回/ }));
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("renders the advanced podcast template workbench from its dedicated page", () => {

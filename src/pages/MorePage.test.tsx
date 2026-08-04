@@ -28,7 +28,7 @@ describe("MorePage", () => {
     renderMorePage();
 
     expect(screen.getByText("备份与恢复")).toBeInTheDocument();
-    expect(screen.getByText("AI 工具")).toBeInTheDocument();
+    expect(screen.getByText("AI 问答")).toBeInTheDocument();
     expect(screen.getByText("OCR 设置")).toBeInTheDocument();
     expect(screen.getByText("使用教程")).toBeInTheDocument();
     expect(screen.getByText("回收站")).toBeInTheDocument();
@@ -47,13 +47,13 @@ describe("MorePage", () => {
     const props = renderMorePage();
 
     fireEvent.click(screen.getByRole("button", { name: /备份与恢复/ }));
-    fireEvent.click(screen.getByRole("button", { name: /AI 工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /AI 问答/ }));
     fireEvent.click(screen.getByRole("button", { name: /OCR 设置/ }));
     fireEvent.click(screen.getByRole("button", { name: /模板/ }));
     fireEvent.click(screen.getByRole("button", { name: /使用教程/ }));
 
     expect(props.onOpenBackup).toHaveBeenCalledTimes(1);
-    expect(props.onOpenAiTools).toHaveBeenCalledTimes(1);
+    expect(props.onOpenAi).toHaveBeenCalledTimes(1);
     expect(props.onOpenOcrSettings).toHaveBeenCalledTimes(1);
     expect(props.onOpenTemplates).toHaveBeenCalledTimes(1);
     expect(props.onOpenGuide).toHaveBeenCalledTimes(1);
@@ -75,7 +75,7 @@ describe("MorePage", () => {
 
     renderMorePage(settings);
 
-    const row = screen.getByRole("button", { name: /AI 工具/ });
+    const row = screen.getByRole("button", { name: /AI 问答/ });
     expect(row).toHaveClass("more-summary-row");
     expect(screen.getByText("阿里云百炼 · qwen3.7-plus-2026-05-26")).toBeInTheDocument();
   });
