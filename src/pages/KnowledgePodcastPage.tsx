@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  ChevronDown,
   CircleAlert,
   Headphones,
   Pause,
@@ -481,16 +482,20 @@ const PodcastEditor = ({
   return (
     <main className="page knowledge-podcast-page podcast-editor-page">
       <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<>{onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={17} />设置</button>}<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回列表</button></>} />
-      <section className="podcast-editor-toolbar">
-        <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
-        <label>模式<select value={podcast.mode === "custom" ? `custom:${podcast.customMode?.templateId ?? ""}` : podcast.mode} onChange={(event) => changeMode(event.target.value)}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option>{podcast.mode === "custom" && podcast.customMode && !modeTemplates.some((template) => template.id === podcast.customMode!.templateId) && <option value={`custom:${podcast.customMode.templateId}`}>{podcast.customMode.title}（已保存快照）</option>}{modeTemplates.map((template) => <option key={template.id} value={`custom:${template.id}`}>{template.title}</option>)}</select></label>
-        <label>目标时长<select value={podcast.targetMinutes} onChange={(event) => updatePodcast({ targetMinutes: Number(event.target.value) as KnowledgePodcast["targetMinutes"], scriptStatus: "idle" })}><option value={3}>3 分钟</option><option value={5}>5 分钟</option><option value={10}>10 分钟</option></select></label>
-      </section>
-      <details className="podcast-scope-card podcast-planner-card">
-        <summary className="podcast-planner-header">
-          <div><p className="eyebrow">Podcast Planner</p><h2>节目策划</h2><p>从建议中选择，或直接输入自己的要求。它们会与所选模式一起生成播客脚本。</p></div>
-          {(podcast.mode === "summary" || podcast.mode === "explain") && <button type="button" className="secondary-button" onClick={(e) => { e.stopPropagation(); restoreModeRecommendations(); }}>恢复模式推荐设置</button>}
-        </summary>
+      <section className="podcast-settings-band" aria-label="播客设置">
+        <section className="podcast-editor-toolbar">
+          <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
+          <label>模式<select value={podcast.mode === "custom" ? `custom:${podcast.customMode?.templateId ?? ""}` : podcast.mode} onChange={(event) => changeMode(event.target.value)}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option>{podcast.mode === "custom" && podcast.customMode && !modeTemplates.some((template) => template.id === podcast.customMode!.templateId) && <option value={`custom:${podcast.customMode.templateId}`}>{podcast.customMode.title}（已保存快照）</option>}{modeTemplates.map((template) => <option key={template.id} value={`custom:${template.id}`}>{template.title}</option>)}</select></label>
+          <label>目标时长<select value={podcast.targetMinutes} onChange={(event) => updatePodcast({ targetMinutes: Number(event.target.value) as KnowledgePodcast["targetMinutes"], scriptStatus: "idle" })}><option value={3}>3 分钟</option><option value={5}>5 分钟</option><option value={10}>10 分钟</option></select></label>
+        </section>
+        <details className="podcast-settings-row podcast-planner-card">
+          <summary className="podcast-settings-row-summary">
+            <span className="podcast-settings-row-title">节目策划</span>
+            <span className="podcast-settings-row-value">{modeLabel(podcast)} · {podcast.mode === "custom" ? "自定义要求" : "使用模式推荐"}</span>
+            <ChevronDown className="podcast-settings-row-chevron" size={17} aria-hidden="true" />
+          </summary>
+          <div className="podcast-planner-content">
+            {(podcast.mode === "summary" || podcast.mode === "explain") && <div className="podcast-planner-tools"><button type="button" className="secondary-button" onClick={restoreModeRecommendations}>恢复模式推荐设置</button></div>}
         <details className="podcast-planner-group" open>
           <summary>节目定位</summary>
           <div className="podcast-planner-grid">
@@ -500,7 +505,7 @@ const PodcastEditor = ({
             <PlannerInput label="讲述风格" value={creativeBrief.tone} onChange={(value) => updateCreativeBrief({ tone: value })} suggestions={PLANNER_SUGGESTIONS.tone} placeholder="例如：自然口语化、清晰严谨" />
           </div>
         </details>
-        <details className="podcast-planner-group" open>
+        <details className="podcast-planner-group">
           <summary>内容组织</summary>
           <div className="podcast-planner-grid">
             <PlannerInput label="组织结构" value={creativeBrief.organization} onChange={(value) => updateCreativeBrief({ organization: value })} suggestions={PLANNER_SUGGESTIONS.organization} placeholder="例如：按难度递进" />
@@ -522,9 +527,13 @@ const PodcastEditor = ({
           <summary>查看本期生成指令预览</summary>
           {promptPreview.error ? <p className="error-text">{promptPreview.error}</p> : <><p>预览不包含完整本地日志正文；生成时会将当前范围的 RAG 上下文作为独立附件发送。</p><pre>{promptPreview.value}</pre></>}
         </details>
-      </details>
-      <section className="podcast-scope-card">
-        <header><div><p className="eyebrow">Knowledge Scope</p><h2>知识范围</h2><p>{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {scopeRecordCount} 条日志</p></div><button type="button" className="secondary-button" onClick={onOpenScope}>选择知识范围</button></header>
+          </div>
+        </details>
+        <section className="podcast-settings-row podcast-scope-row">
+          <span className="podcast-settings-row-title">知识范围</span>
+          <span className="podcast-settings-row-value">{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {scopeRecordCount} 条日志</span>
+          <button type="button" className="podcast-scope-edit" onClick={onOpenScope}>修改知识范围</button>
+        </section>
       </section>
       {message && <p className="status-message">{message}</p>}
       {podcast.generation && (

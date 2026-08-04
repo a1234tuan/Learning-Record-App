@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KnowledgePodcast, RecordBlock } from "../types";
 import { KnowledgePodcastPage } from "./KnowledgePodcastPage";
@@ -52,6 +52,10 @@ const props = {
 };
 
 describe("KnowledgePodcastPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders the mobile-safe two-row player control structure", () => {
     const { container } = render(<KnowledgePodcastPage {...props} />);
     expect(container.querySelector(".podcast-player-actions")?.children).toHaveLength(4);
@@ -69,11 +73,33 @@ describe("KnowledgePodcastPage", () => {
     expect(screen.getByRole("tab", { name: "选择日志" })).toBeInTheDocument();
   });
 
-  it("shows the structured planner and a compact prompt preview for existing podcasts", () => {
-    render(<KnowledgePodcastPage {...props} />);
-    expect(screen.getByRole("heading", { name: "节目策划" })).toBeInTheDocument();
+  it("uses a compact settings band while keeping planner and scope controls available", () => {
+    const { container } = render(<KnowledgePodcastPage {...props} />);
+    const planner = container.querySelector<HTMLDetailsElement>("details.podcast-planner-card");
+
+    expect(container.querySelector(".podcast-settings-band")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "标题" })).toHaveValue("本周复习");
+    expect(screen.getByRole("combobox", { name: "模式" })).toHaveValue("explain");
+    expect(screen.getByRole("combobox", { name: "目标时长" })).toHaveValue("5");
+    expect(screen.getByText("节目策划")).toBeInTheDocument();
+    expect(screen.getByText("复习讲解 · 使用模式推荐")).toBeInTheDocument();
+    expect(screen.queryByText("Podcast Planner")).not.toBeInTheDocument();
+    expect(planner).not.toBeNull();
+    expect(planner).not.toHaveAttribute("open");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "标题" }), { target: { value: "期末复习" } });
+    expect(screen.getByRole("textbox", { name: "标题" })).toHaveValue("期末复习");
+
+    fireEvent.click(planner!.querySelector("summary")!);
+    expect(planner).toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "恢复模式推荐设置" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("像老师一样讲清重点、联系和易错点，并帮助复习")).toBeInTheDocument();
     expect(screen.getByText("查看本期生成指令预览")).toBeInTheDocument();
+    expect(planner!.querySelectorAll(".podcast-planner-group")[1]).not.toHaveAttribute("open");
+
+    expect(screen.getByText(/命中 1 条日志/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "修改知识范围" }));
+    expect(props.onOpenScope).toHaveBeenCalledTimes(1);
   });
 
   it("marks legacy podcast audio as requiring a full regeneration and does not render its old player", () => {
