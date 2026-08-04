@@ -110,13 +110,13 @@
 .action-button-secondary:hover:not(:disabled),
 .secondary-button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
-  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface));
+  background: var(--color-interaction-hover);
 }
 
 .action-button-ghost,
 .subtle-button {
   border-color: transparent;
-  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  background: var(--color-interaction-hover);
   color: var(--color-primary-strong);
 }
 
@@ -133,34 +133,21 @@
     color var(--motion-fast) ease;
 }
 
-.action-button,
-.primary-button,
-.secondary-button,
-.subtle-button,
-.icon-button,
-.player-play-button,
-.play-mode-button,
-.bottom-nav button,
-.sidebar nav button,
-.subject-picker button,
-.editor-toolbar button,
-.quick-insert button,
-.quick-insert label,
-.editor-file-button,
-.surface-card-interactive,
-.record-card,
-.day-log-card,
-.more-link-card,
-.category-entry-card,
-.recording-folder-card,
-.recording-row-main,
-.list-row,
-.ai-settings-toggle,
-.record-ai-button,
-.attachment-link,
-.image-preview-button,
-.compact-image-button {
+:is(button, [role="button"], .quick-insert label) {
   -webkit-tap-highlight-color: transparent;
+}
+
+:is(button, [role="button"]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+:is(button, [role="button"]):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--color-interaction-hover);
 }
 
 :is(
@@ -245,12 +232,42 @@
   .image-preview-button,
   .compact-image-button
 ):active:not(:disabled) {
-  --press-y: -1px;
-  --press-scale: 1.015;
+  --press-y: 1px;
+  --press-scale: 0.985;
 }
 
 .sidebar nav button:active:not(:disabled) {
-  transform: translateX(2px) translateY(-1px) scale(1.015);
+  transform: translateX(1px) translateY(1px) scale(0.985);
+}
+
+:is(
+  .action-button-secondary,
+  .secondary-button,
+  .action-button-ghost,
+  .subtle-button,
+  .icon-button,
+  .player-play-button,
+  .play-mode-button,
+  .bottom-nav button,
+  .sidebar nav button,
+  .subject-picker button,
+  .editor-toolbar button,
+  .quick-insert button,
+  .quick-insert label,
+  .editor-file-button,
+  .list-row,
+  .record-card-main,
+  .record-ai-button,
+  .record-favorite-button,
+  .ai-settings-toggle,
+  .ai-session-list button,
+  .ai-preset-row button,
+  .month-grid button,
+  .attachment-link,
+  .image-preview-button,
+  .compact-image-button
+):active:not(:disabled) {
+  background: var(--color-interaction-pressed);
 }
 
 .list-row {
@@ -270,7 +287,7 @@
 
 .list-row:hover {
   border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
-  background: color-mix(in srgb, var(--color-primary) 4%, var(--color-surface));
+  background: var(--color-interaction-hover);
 }
 
 .list-row-icon {

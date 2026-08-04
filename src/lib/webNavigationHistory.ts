@@ -7,6 +7,7 @@ import {
   type ReviewCardSort,
   type ReviewDeckScope,
   type ReviewLibraryState,
+  type ReviewSessionProgress,
   type TabKey,
   type TabMemory,
 } from "./tabNavigation";
@@ -62,6 +63,26 @@ const optionalBoolean = (value: unknown): boolean | undefined =>
 
 const optionalScrollY = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+const restoreReviewSessionProgress = (value: unknown): ReviewSessionProgress | undefined => {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const total = value.total;
+  const completed = value.completed;
+  if (
+    typeof total !== "number" ||
+    typeof completed !== "number" ||
+    !Number.isInteger(total) ||
+    !Number.isInteger(completed) ||
+    total < 0 ||
+    completed < 0 ||
+    completed > total
+  ) {
+    return undefined;
+  }
+  return { total, completed };
+};
 
 const restoreReviewDeckScope = (value: unknown, fallback: ReviewDeckScope): ReviewDeckScope => {
   if (!isObject(value)) {
@@ -211,6 +232,7 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
       mode: reviewMode,
       queueIds,
       currentRecordId: optionalString(value.review.currentRecordId),
+      reviewProgress: restoreReviewSessionProgress(value.review.reviewProgress),
       library: restoreReviewLibraryState(value.review.library),
     },
     more: {

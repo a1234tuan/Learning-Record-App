@@ -274,6 +274,62 @@ describe("ReviewPage", () => {
     });
   });
 
+  it("keeps progress after a rating refresh removes the card from due reviews", async () => {
+    const sessionReviews = [
+      review("active"),
+      review("second", { nextReviewDate: "2026-07-03" }),
+      review("new", { nextReviewDate: "2026-07-03" }),
+    ];
+    const ProgressRefreshHarness = () => {
+      const [dueReviews, setDueReviews] = useState(sessionReviews);
+      const [queueIds, setQueueIds] = useState(sessionReviews.map((item) => item.recordId));
+      const [currentRecordId, setCurrentRecordId] = useState<string | undefined>("active");
+
+      return (
+        <ReviewPage
+          records={records}
+          dueReviews={dueReviews}
+          reviewStates={dueReviews}
+          stats={stats}
+          mode="queue"
+          queueIds={queueIds}
+          currentRecordId={currentRecordId}
+          libraryState={createInitialReviewLibraryState()}
+          onModeChange={vi.fn()}
+          onQueueChange={setQueueIds}
+          onCurrentRecordChange={setCurrentRecordId}
+          onLibraryStateChange={vi.fn()}
+          onEnsureDay={vi.fn().mockResolvedValue(undefined)}
+          onRate={async (recordId) => {
+            setDueReviews((current) => current.filter((item) => item.recordId !== recordId));
+            return undefined;
+          }}
+          onUndo={vi.fn().mockResolvedValue(undefined)}
+          onRefresh={vi.fn().mockResolvedValue(undefined)}
+          onOpenRecord={vi.fn()}
+          onEditRecord={vi.fn()}
+          onAddToReview={vi.fn()}
+          onRemoveReview={vi.fn()}
+          onResetReview={vi.fn()}
+        />
+      );
+    };
+
+    render(<ProgressRefreshHarness />);
+    expect(screen.getByRole("progressbar", { name: "复习进度，第 1 条，共 3 条" })).toBeInTheDocument();
+
+    clickRating(/良好/);
+    await waitFor(() => expect(screen.getByRole("progressbar", { name: "复习进度，第 2 条，共 3 条" })).toBeInTheDocument());
+
+    clickRating(/良好/);
+    await waitFor(() => {
+      const progress = screen.getByRole("progressbar", { name: "复习进度，第 3 条，共 3 条" });
+      expect(progress).toHaveAttribute("aria-valuemax", "3");
+      expect(progress).toHaveAttribute("aria-valuenow", "3");
+      expect(progress.querySelector("span")).toHaveStyle({ width: "100%" });
+    });
+  });
+
   it("moves undo, refresh and statistics into the review overflow menu", async () => {
     const { handlers } = renderReviewPage({
       mode: "queue",

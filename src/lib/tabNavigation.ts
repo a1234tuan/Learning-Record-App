@@ -21,6 +21,11 @@ export type AiWorkspaceScreen = "chat" | "scope";
 export type PodcastWorkspaceScreen = "editor" | "scope";
 export type ReviewMode = "queue" | "manage";
 
+export type ReviewSessionProgress = {
+  total: number;
+  completed: number;
+};
+
 export type ReviewDeckScope =
   | { kind: "all" }
   | { kind: "subject"; subject: Subject }
@@ -86,6 +91,7 @@ export type TabMemory = {
     mode: ReviewMode;
     queueIds: EntityId[];
     currentRecordId?: EntityId;
+    reviewProgress?: ReviewSessionProgress;
     library: ReviewLibraryState;
   };
   more: RecordTabState & {
@@ -116,6 +122,7 @@ export const createInitialTabMemory = (): TabMemory => ({
   review: {
     mode: "queue",
     queueIds: [],
+    reviewProgress: undefined,
     library: createInitialReviewLibraryState(),
   },
   more: {

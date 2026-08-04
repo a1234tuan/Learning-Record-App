@@ -1153,6 +1153,7 @@ export const App = () => {
             mode={tabMemory.review.mode}
             queueIds={tabMemory.review.queueIds}
             currentRecordId={tabMemory.review.currentRecordId}
+            reviewProgress={tabMemory.review.reviewProgress}
             libraryState={tabMemory.review.library}
             onModeChange={(mode) =>
               updateNavigationState((current) =>
@@ -1183,6 +1184,21 @@ export const App = () => {
                     tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, currentRecordId } },
                   },
               )
+            }
+            onReviewProgressChange={(reviewProgress) =>
+              updateNavigationState((current) => {
+                const currentProgress = current.tabMemory.review.reviewProgress;
+                if (
+                  currentProgress?.total === reviewProgress?.total &&
+                  currentProgress?.completed === reviewProgress?.completed
+                ) {
+                  return current;
+                }
+                return {
+                  ...current,
+                  tabMemory: { ...current.tabMemory, review: { ...current.tabMemory.review, reviewProgress } },
+                };
+              })
             }
             onLibraryStateChange={(library) =>
               updateNavigationState((current) => ({

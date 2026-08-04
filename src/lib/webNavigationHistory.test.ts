@@ -52,10 +52,12 @@ describe("web navigation history snapshots", () => {
       query: "最短路",
       sort: "reviewed",
     };
+    memory.review.reviewProgress = { total: 14, completed: 6 };
 
     const snapshot = createWebNavigationSnapshot("session-1", "review", memory, null, 0);
     const restored = restoreWebNavigationSnapshot(JSON.parse(JSON.stringify(snapshot)));
     expect(restored?.tabMemory.review.library).toEqual(memory.review.library);
+    expect(restored?.tabMemory.review.reviewProgress).toEqual({ total: 14, completed: 6 });
 
     const legacySnapshot = JSON.parse(JSON.stringify(snapshot));
     delete legacySnapshot.tabMemory.review.library;

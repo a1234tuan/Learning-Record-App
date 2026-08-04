@@ -29,7 +29,7 @@ import {
   ratingLabel,
   reviewKindLabel,
 } from "../lib/reviewScheduler";
-import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode } from "../lib/tabNavigation";
+import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode, ReviewSessionProgress } from "../lib/tabNavigation";
 
 interface ReviewPageProps {
   records: RecordBlock[];
@@ -40,10 +40,12 @@ interface ReviewPageProps {
   mode: ReviewMode;
   queueIds: string[];
   currentRecordId?: string;
+  reviewProgress?: ReviewSessionProgress;
   libraryState: ReviewLibraryState;
   onModeChange: (mode: ReviewMode) => void;
   onQueueChange: (ids: string[]) => void;
   onCurrentRecordChange: (id?: string) => void;
+  onReviewProgressChange?: (progress?: ReviewSessionProgress) => void;
   onLibraryStateChange: (state: ReviewLibraryState) => void;
   onEnsureDay: (date: string, dueCountAtFirstOpen: number) => Promise<unknown>;
   onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<RecordReviewUndoToken | undefined>;
@@ -83,6 +85,7 @@ interface ReviewUndoEntry {
   evaluationText: string;
   dailyLimitIds: string[];
   showAllDue: boolean;
+  reviewProgress: ReviewSessionProgress;
 }
 
 const ratingConfig: Array<{ rating: RecordReviewRating; label: string; className: string }> = [
@@ -131,6 +134,16 @@ const intervalLabel = (days: number) => days <= 1 ? "明天" : `${days}天后`;
 
 const sameIds = (left: string[], right: string[]) =>
   left.length === right.length && left.every((id, index) => id === right[index]);
+
+const normalizeReviewSessionProgress = (progress: ReviewSessionProgress | undefined): ReviewSessionProgress | undefined => {
+  if (!progress || !Number.isInteger(progress.total) || !Number.isInteger(progress.completed)) {
+    return undefined;
+  }
+  if (progress.total < 0 || progress.completed < 0 || progress.completed > progress.total) {
+    return undefined;
+  }
+  return progress;
+};
 
 const EMPTY_REVIEW_LOGS: RecordReviewLog[] = [];
 const REVIEW_EVALUATION_DRAFT_PREFIX = "study-journal-review-evaluation-draft:";
@@ -222,10 +235,12 @@ export const ReviewPage = ({
   mode,
   queueIds,
   currentRecordId,
+  reviewProgress,
   libraryState,
   onModeChange,
   onQueueChange,
   onCurrentRecordChange,
+  onReviewProgressChange,
   onLibraryStateChange,
   onEnsureDay,
   onRate,
@@ -259,6 +274,20 @@ export const ReviewPage = ({
   const [evaluationDraftRecordId, setEvaluationDraftRecordId] = useState<string | undefined>();
   const today = todayISO();
   const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
+  const [sessionProgress, setSessionProgress] = useState<ReviewSessionProgress | undefined>(
+    () => normalizeReviewSessionProgress(reviewProgress),
+  );
+  const sessionDayRef = useRef(today);
+
+  const updateSessionProgress = useCallback((next: ReviewSessionProgress | undefined) => {
+    const normalized = normalizeReviewSessionProgress(next);
+    setSessionProgress(normalized);
+    onReviewProgressChange?.(normalized);
+  }, [onReviewProgressChange]);
+
+  useEffect(() => {
+    setSessionProgress(normalizeReviewSessionProgress(reviewProgress));
+  }, [reviewProgress?.completed, reviewProgress?.total]);
 
   useEffect(() => {
     if (!headerMenuOpen) {
@@ -312,9 +341,19 @@ export const ReviewPage = ({
     () => currentReviewLogs.filter(hasEvaluationText),
     [currentReviewLogs],
   );
-  const completedReviewCount = ratedRecordIds.size;
-  const reviewTotal = effectiveQueue.length + completedReviewCount;
-  const currentIndex = currentId ? completedReviewCount + 1 : 0;
+  const fallbackProgress: ReviewSessionProgress = {
+    total: effectiveQueue.length + ratedRecordIds.size,
+    completed: ratedRecordIds.size,
+  };
+  const activeSessionProgress = sessionProgress
+    ? {
+      ...sessionProgress,
+      total: Math.max(sessionProgress.total, sessionProgress.completed + effectiveQueue.length),
+    }
+    : fallbackProgress;
+  const completedReviewCount = activeSessionProgress.completed;
+  const reviewTotal = Math.max(activeSessionProgress.total, completedReviewCount + effectiveQueue.length);
+  const currentIndex = currentId ? Math.min(reviewTotal, completedReviewCount + 1) : 0;
   const progressPercent = reviewTotal > 0
     ? Math.min(100, Math.round((currentIndex / reviewTotal) * 100))
     : 0;
@@ -434,6 +473,9 @@ export const ReviewPage = ({
       return;
     }
     const nextQueue = effectiveQueue.length > 0 ? effectiveQueue : queuedDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
+    if (nextQueue.length > 0 && !sessionProgress) {
+      updateSessionProgress({ total: nextQueue.length, completed: 0 });
+    }
     if (nextQueue.join("|") !== queueIds.join("|")) {
       onQueueChange(nextQueue);
     }
@@ -443,13 +485,21 @@ export const ReviewPage = ({
     if (nextQueue.length === 0 && currentRecordId) {
       onCurrentRecordChange(undefined);
     }
-  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, pendingUndoRestore, queueIds, queueReady, queuedDueReviews, recordMap]);
+  }, [currentRecordId, effectiveQueue, onCurrentRecordChange, onQueueChange, pendingUndoRestore, queueIds, queueReady, queuedDueReviews, recordMap, sessionProgress, updateSessionProgress]);
 
   useEffect(() => {
     setRatedRecordIds(new Set());
     setUndoHistory([]);
     setPendingUndoRestore(null);
   }, [today]);
+
+  useEffect(() => {
+    if (sessionDayRef.current === today) {
+      return;
+    }
+    sessionDayRef.current = today;
+    updateSessionProgress(undefined);
+  }, [today, updateSessionProgress]);
 
   useEffect(() => {
     const savedDraft = currentId ? readReviewEvaluationDraft(currentId) : "";
@@ -464,20 +514,6 @@ export const ReviewPage = ({
     }
     writeReviewEvaluationDraft(currentId, evaluationDraft);
   }, [currentId, evaluationDraft, evaluationDraftRecordId]);
-
-  useEffect(() => {
-    setRatedRecordIds((current) => {
-      const next = new Set(
-        Array.from(current).filter((id) =>
-          dueReviews.some((review) => review.recordId === id && isReviewDueOn(review, today)),
-        ),
-      );
-      if (next.size === current.size && Array.from(next).every((id) => current.has(id))) {
-        return current;
-      }
-      return next;
-    });
-  }, [dueReviews, today]);
 
   useEffect(() => {
     if (!pendingUndoRestore) {
@@ -501,6 +537,11 @@ export const ReviewPage = ({
     const ratedId = currentId;
     const previousQueue = effectiveQueue;
     const previousCurrentId = currentId;
+    const previousProgress = activeSessionProgress;
+    const nextProgress: ReviewSessionProgress = {
+      total: previousProgress.total,
+      completed: Math.min(previousProgress.total, previousProgress.completed + 1),
+    };
     const nextQueue = effectiveQueue.filter((id) => id !== currentId);
     const evaluationText = evaluationDraftRecordId === ratedId
       ? evaluationDraft.trim()
@@ -511,6 +552,7 @@ export const ReviewPage = ({
     setRatingError("");
     setRatingRecordId(ratedId);
     setRatedRecordIds((current) => new Set(current).add(ratedId));
+    updateSessionProgress(nextProgress);
     onQueueChange(nextQueue);
     onCurrentRecordChange(nextQueue[0]);
     try {
@@ -526,6 +568,7 @@ export const ReviewPage = ({
               evaluationText,
               dailyLimitIds,
               showAllDue,
+              reviewProgress: previousProgress,
             },
           ]);
         }
@@ -541,6 +584,7 @@ export const ReviewPage = ({
               evaluationText,
               dailyLimitIds,
               showAllDue,
+              reviewProgress: previousProgress,
             },
           ]);
         }
@@ -553,6 +597,7 @@ export const ReviewPage = ({
         next.delete(ratedId);
         return next;
       });
+      updateSessionProgress(previousProgress);
       onQueueChange(previousQueue);
       onCurrentRecordChange(previousCurrentId);
       setRatingError(`复习评分失败：${message}`);
@@ -578,6 +623,7 @@ export const ReviewPage = ({
         next.delete(entry.currentRecordId);
         return next;
       });
+      updateSessionProgress(entry.reviewProgress);
       if (entry.evaluationText) {
         writeReviewEvaluationDraft(entry.currentRecordId, entry.evaluationText);
       } else {
@@ -598,7 +644,7 @@ export const ReviewPage = ({
     } finally {
       setUndoing(false);
     }
-  }, [onCurrentRecordChange, onModeChange, onQueueChange, onUndo, pendingUndoRestore, ratingRecordId, undoHistory, undoing]);
+  }, [onCurrentRecordChange, onModeChange, onQueueChange, onUndo, pendingUndoRestore, ratingRecordId, undoHistory, undoing, updateSessionProgress]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -628,6 +674,10 @@ export const ReviewPage = ({
 
   const continueRemainingDue = () => {
     const nextQueue = availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
+    updateSessionProgress({
+      total: Math.max(activeSessionProgress.total, activeSessionProgress.completed + nextQueue.length),
+      completed: activeSessionProgress.completed,
+    });
     setShowAllDue(true);
     onQueueChange(nextQueue);
     onCurrentRecordChange(nextQueue[0]);
