@@ -1,5 +1,6 @@
 import {
   ArrowDown,
+  ArrowLeft,
   BookOpen,
   Camera,
   Bot,
@@ -7,6 +8,7 @@ import {
   CircleAlert,
   Clock3,
   Copy,
+  Download,
   Ellipsis,
   History,
   Headphones,
@@ -48,9 +50,11 @@ interface AiChatPageProps {
   settings: AppSettings;
   blocks: Block[];
   assets: Asset[];
+  onBack: () => void;
   onOpenSession: (sessionId: string) => void;
   onDeletedSession: () => void;
   onOpenSettings: () => void;
+  onOpenAiExport: () => void;
   onOpenScopeScreen: () => void;
   onBackFromScopeScreen: () => void;
   onOpenPodcastForScope: (scope: AiKnowledgeScope) => void;
@@ -137,9 +141,11 @@ export const AiChatPage = ({
   settings,
   blocks,
   assets,
+  onBack,
   onOpenSession,
   onDeletedSession,
   onOpenSettings,
+  onOpenAiExport,
   onOpenScopeScreen,
   onBackFromScopeScreen,
   onOpenPodcastForScope,
@@ -599,6 +605,9 @@ export const AiChatPage = ({
     <main className="page ai-chat-page immersive">
       <section className="ai-chat-shell">
         <header className="ai-topbar">
+          <button type="button" className="icon-button" onClick={onBack} aria-label="返回" title="返回">
+            <ArrowLeft size={18} />
+          </button>
           <div className="ai-topbar-title">
             <p>{session ? scopeLabel : "学习助手"}</p>
             <h1>{session?.title ?? "AI 问答"}</h1>
@@ -892,6 +901,13 @@ export const AiChatPage = ({
               }}>
                 <Settings size={18} />
                 <span><strong>AI 设置</strong><small>模型、预设与图片方式</small></span>
+              </button>
+              <button type="button" onClick={() => {
+                setMoreActionsOpen(false);
+                onOpenAiExport();
+              }}>
+                <Download size={18} />
+                <span><strong>AI 材料导出</strong><small>导出为 Markdown / JSON / TXT</small></span>
               </button>
             </div>
           </section>

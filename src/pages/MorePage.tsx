@@ -9,7 +9,7 @@ import { ListRow, PageHeader } from "../components/ui";
 
 interface MorePageProps {
   onOpenBackup: () => void;
-  onOpenAiTools: () => void;
+  onOpenAi: () => void;
   onOpenOcrSettings: () => void;
   onOpenPodcasts: () => void;
   onOpenStats: () => void;
@@ -53,7 +53,7 @@ const buildAiMeta = (settings: AppSettings): string => {
 
 export const MorePage = ({
   onOpenBackup,
-  onOpenAiTools,
+  onOpenAi,
   onOpenOcrSettings,
   onOpenPodcasts,
   onOpenStats,
@@ -78,10 +78,10 @@ export const MorePage = ({
         <ListRow
           className="more-summary-row"
           icon={<BrainCircuit size={19} />}
-          title="AI 工具"
-          description="AI 设置、聊天记录和材料导出"
+          title="AI 问答"
+          description="直接进入 AI 问答界面"
           meta={buildAiMeta(settings)}
-          onClick={onOpenAiTools}
+          onClick={onOpenAi}
         />
         <ListRow
           className="more-summary-row"

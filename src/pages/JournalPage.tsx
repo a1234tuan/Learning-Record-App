@@ -91,17 +91,6 @@ export const JournalPage = ({
         )}
       />
 
-      <MonthlyHeatmap
-        month={month}
-        blocks={blocks}
-        selectedDate={selectedDate}
-        onMonthChange={onMonthChange}
-        onSelectDate={(date) => {
-          onSelectedDateChange(date);
-          onSelectedSubjectChange(undefined);
-        }}
-      />
-
       {selectedDate && selectedSubject ? (
         <section className="record-list-panel page-section-transition">
           <div className="record-list-panel-header">
@@ -190,6 +179,17 @@ export const JournalPage = ({
           </section>
         </>
       )}
+
+      <MonthlyHeatmap
+        month={month}
+        blocks={blocks}
+        selectedDate={selectedDate}
+        onMonthChange={onMonthChange}
+        onSelectDate={(date) => {
+          onSelectedDateChange(date);
+          onSelectedSubjectChange(undefined);
+        }}
+      />
     </main>
   );
 };

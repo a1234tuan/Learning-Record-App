@@ -28,6 +28,7 @@ import { RecordEditorPage } from "./pages/RecordEditorPage";
 import { MorePage } from "./pages/MorePage";
 import { BackupPage } from "./pages/BackupPage";
 import { AiToolsPage } from "./pages/AiToolsPage";
+import { AiExportPage } from "./pages/AiExportPage";
 import { AiChatPage } from "./pages/AiChatPage";
 import { KnowledgePodcastPage } from "./pages/KnowledgePodcastPage";
 import { OcrSettingsPage } from "./pages/OcrSettingsPage";
@@ -283,8 +284,8 @@ export const App = () => {
           recordEditing: undefined,
           referenceStack: [],
           restoreScrollY: undefined,
-          podcastId: subRoute === "podcasts" ? current.tabMemory.more.podcastId : undefined,
-          podcastScreen: subRoute === "podcasts" ? current.tabMemory.more.podcastScreen : "editor",
+          podcastId: (subRoute === "podcasts" || subRoute === "ttsSettings" || subRoute === "podcastTemplates") ? current.tabMemory.more.podcastId : undefined,
+          podcastScreen: (subRoute === "podcasts" || subRoute === "ttsSettings" || subRoute === "podcastTemplates") ? current.tabMemory.more.podcastScreen : "editor",
         },
       };
       commitNavigation({ ...current, activeTab: "more", tabMemory: nextMemory });
@@ -341,15 +342,16 @@ export const App = () => {
 
   const popCurrentTabDepth = useCallback(() => {
     const current = navigationStateRef.current;
-    const sessionId = webNavigationSessionRef.current;
-    if (!Capacitor.isNativePlatform() && !isDesktopPlatform() && sessionId && isCurrentWebNavigationSession(window.history.state, sessionId)) {
-      window.history.back();
+    const nextMemory = popTabDepth(current.tabMemory, current.activeTab);
+    if (nextMemory === current.tabMemory) {
       return;
     }
-    const nextMemory = popTabDepth(current.tabMemory, current.activeTab);
-    if (nextMemory !== current.tabMemory) {
-      commitNavigation({ ...current, tabMemory: nextMemory }, { history: "none" });
-    }
+    const sessionId = webNavigationSessionRef.current;
+    const webNavigationEnabled = !Capacitor.isNativePlatform()
+      && !isDesktopPlatform()
+      && Boolean(sessionId)
+      && isCurrentWebNavigationSession(window.history.state, sessionId);
+    commitNavigation({ ...current, tabMemory: nextMemory }, { history: webNavigationEnabled ? "replace" : "none" });
   }, [commitNavigation]);
 
   const closeRecordInCurrentTab = popCurrentTabDepth;
@@ -864,12 +866,14 @@ export const App = () => {
         );
       case "backup":
         return <BackupPage settings={settings} onRestored={app.refresh} />;
+      case "aiExport":
+        return <AiExportPage onBack={popCurrentTabDepth} />;
       case "aiTools":
         return (
           <AiToolsPage
             settings={settings}
             onChanged={app.refresh}
-            onOpenAi={() => openMoreSubRoute("ai")}
+            onBack={popCurrentTabDepth}
           />
         );
       case "podcasts":
@@ -920,6 +924,7 @@ export const App = () => {
             settings={settings}
             blocks={app.blocks}
             assets={app.assets}
+            onBack={popCurrentTabDepth}
             onOpenSession={(sessionId) => {
               updateNavigationState((current) => ({
                 ...current,
@@ -941,6 +946,7 @@ export const App = () => {
               }));
             }}
             onOpenSettings={() => openMoreSubRoute("aiTools")}
+            onOpenAiExport={() => openMoreSubRoute("aiExport")}
             onOpenScopeScreen={() => setAiWorkspaceScreen("scope")}
             onBackFromScopeScreen={popCurrentTabDepth}
             onOpenPodcastForScope={(scope) => {
@@ -958,7 +964,7 @@ export const App = () => {
         return (
           <MorePage
             onOpenBackup={() => openMoreSubRoute("backup")}
-            onOpenAiTools={() => openMoreSubRoute("aiTools")}
+            onOpenAi={() => openMoreSubRoute("ai")}
             onOpenOcrSettings={() => openMoreSubRoute("ocrSettings")}
             onOpenPodcasts={() => openMoreSubRoute("podcasts")}
             onOpenStats={() => openMoreSubRoute("stats")}
@@ -1253,7 +1259,7 @@ export const App = () => {
     && !(activeTab === "journal" && tabMemory.journal.searchOpen)
     && !(activeTab === "journal" && tabMemory.journal.selectedSubject)
     && !(activeTab === "categories" && (tabMemory.categories.activeSubject || tabMemory.categories.managing))
-    && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai" || tabMemory.more.subRoute === "podcasts"));
+    && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai" || tabMemory.more.subRoute === "podcasts" || tabMemory.more.subRoute === "aiTools" || tabMemory.more.subRoute === "aiExport"));
 
   return (
     <div className={shellClassName}>

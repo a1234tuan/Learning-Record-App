@@ -9,6 +9,7 @@ export type MoreSubRoute =
   | "trash"
   | "backup"
   | "aiTools"
+  | "aiExport"
   | "ocrSettings"
   | "recordings"
   | "podcasts"
@@ -219,6 +220,9 @@ export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
       if (memory.more.subRoute === "podcasts" && memory.more.podcastId) {
         return memory.more.podcastScreen === "scope" ? 3 : 2;
       }
+      if ((memory.more.subRoute === "ttsSettings" || memory.more.subRoute === "podcastTemplates") && memory.more.podcastId) {
+        return 2;
+      }
       if (memory.more.subRoute !== "recordings") {
         return memory.more.subRoute ? 1 : 0;
       }
@@ -383,6 +387,12 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
           return { ...memory, more: { ...memory.more, podcastScreen: "editor" } };
         }
         return { ...memory, more: { ...memory.more, podcastId: undefined, podcastScreen: "editor" } };
+      }
+      if (memory.more.subRoute === "aiTools" || memory.more.subRoute === "aiExport") {
+        return { ...memory, more: { ...memory.more, subRoute: "ai" } };
+      }
+      if (memory.more.subRoute === "ttsSettings" || memory.more.subRoute === "podcastTemplates") {
+        return { ...memory, more: { ...memory.more, subRoute: "podcasts" } };
       }
       return {
         ...memory,
