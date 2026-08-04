@@ -1,4 +1,4 @@
-import { BrainCircuit, ChevronDown, ChevronUp, Copy, FileJson, FileText, Headphones, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
+import { BrainCircuit, ChevronDown, ChevronUp, Copy, FileJson, FileText, MessageSquare, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { AppSettings, ExportKind, KnowledgePodcastModeTemplate } from "../types";
@@ -14,7 +14,6 @@ interface AiToolsPageProps {
   settings: AppSettings;
   onChanged: () => Promise<void> | void;
   onOpenAi: () => void;
-  onOpenPodcasts: () => void;
 }
 
 type AiExportKind = Exclude<ExportKind, "full-backup">;
@@ -37,7 +36,7 @@ const AI_EXPORT_OPTIONS: Array<{ kind: AiExportKind; label: string; helper: stri
   },
 ];
 
-export const AiToolsPage = ({ settings, onChanged, onOpenAi, onOpenPodcasts }: AiToolsPageProps) => {
+export const AiToolsPage = ({ settings, onChanged, onOpenAi }: AiToolsPageProps) => {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<AiExportKind | null>(null);
   const [aiKind, setAiKind] = useState<AiExportKind>("subject-markdown");
@@ -175,7 +174,6 @@ export const AiToolsPage = ({ settings, onChanged, onOpenAi, onOpenPodcasts }: A
             description="继续问答，或查看、删除本机保存的 AI 对话"
             onClick={onOpenAi}
           />
-          <ListRow icon={<Headphones size={19} />} title="知识播客" description="把本地记录整理成可编辑、可回溯的知识音频" onClick={onOpenPodcasts} />
         </div>
       </section>
 

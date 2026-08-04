@@ -7,6 +7,7 @@ import {
   Plus,
   RotateCcw,
   Save,
+  Settings,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -48,6 +49,7 @@ interface KnowledgePodcastPageProps {
   onSavePodcast: (podcast: KnowledgePodcast) => Promise<KnowledgePodcast>;
   onDeletePodcast: (id: string) => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
+  onOpenSettings?: () => void;
 }
 
 const recordsOf = (blocks: Block[]) => blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
@@ -119,6 +121,7 @@ export const KnowledgePodcastPage = ({
   onSavePodcast,
   onDeletePodcast,
   onOpenRecord,
+  onOpenSettings,
 }: KnowledgePodcastPageProps) => {
   const records = useMemo(() => recordsOf(blocks), [blocks]);
   const selected = podcasts.find((item) => item.id === podcastId);
@@ -128,6 +131,7 @@ export const KnowledgePodcastPage = ({
         podcasts={podcasts}
         onBack={onBack}
         onOpenPodcast={onOpenPodcast}
+        onOpenSettings={onOpenSettings}
         onCreate={() => {
           const next = createEmptyPodcast({ kind: "recent", days: 7 });
           void onSavePodcast(next).then((saved) => onOpenPodcast(saved.id));
@@ -172,6 +176,7 @@ export const KnowledgePodcastPage = ({
       onSavePodcast={onSavePodcast}
       onDeletePodcast={onDeletePodcast}
       onOpenRecord={onOpenRecord}
+      onOpenSettings={onOpenSettings}
     />
   );
 };
@@ -180,11 +185,13 @@ const PodcastList = ({
   podcasts,
   onBack,
   onOpenPodcast,
+  onOpenSettings,
   onCreate,
 }: {
   podcasts: KnowledgePodcast[];
   onBack: () => void;
   onOpenPodcast: (id: string) => void;
+  onOpenSettings?: () => void;
   onCreate: () => void;
 }) => (
   <main className="page knowledge-podcast-page">
@@ -192,7 +199,12 @@ const PodcastList = ({
       eyebrow="Knowledge Podcast"
       title="知识播客"
       subtitle="把本地学习记录整理成可收听、可回溯的知识回顾。"
-      actions={<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回</button>}
+      actions={
+        <>
+          {onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={17} />TTS 设置</button>}
+          <button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回</button>
+        </>
+      }
     />
     <section className="podcast-intro-card">
       <Headphones size={30} />
@@ -221,6 +233,7 @@ const PodcastEditor = ({
   onSavePodcast,
   onDeletePodcast,
   onOpenRecord,
+  onOpenSettings,
 }: {
   podcast: KnowledgePodcast;
   settings?: AppSettings;
@@ -231,6 +244,7 @@ const PodcastEditor = ({
   onSavePodcast: (podcast: KnowledgePodcast) => Promise<KnowledgePodcast>;
   onDeletePodcast: (id: string) => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
+  onOpenSettings?: () => void;
 }) => {
   const [podcast, setPodcast] = useState(initialPodcast);
   const [message, setMessage] = useState("");
@@ -253,6 +267,7 @@ const PodcastEditor = ({
   const sourceChanged = Boolean(podcast.contextHash && currentContextHash && podcast.contextHash !== currentContextHash);
   const legacyAudioLayout = podcast.audioLayoutVersion !== 2;
   const audioUnits = podcast.audioUnits ?? [];
+  const failedUnits = audioUnits.filter((unit) => unit.audioStatus === "failed");
   const openingUnit = audioUnits.find((unit) => unit.kind === "opening");
   const closingUnit = audioUnits.find((unit) => unit.kind === "closing");
   const unitForSegment = (segmentId: string) => audioUnits.find((unit) => unit.kind === "segment" && unit.segmentId === segmentId);
@@ -267,6 +282,10 @@ const PodcastEditor = ({
     [podcast.creativeBrief, podcast.focusInstruction, podcast.mode],
   );
   const scriptNeedsRegeneration = podcast.scriptStatus === "idle" && Boolean(podcast.opening?.trim() || podcast.closing?.trim() || podcast.segments.length);
+  const scopeRecordCount = useMemo(
+    () => getAiKnowledgeScopeRecords(podcast.scope, records, new Date().toISOString().slice(0, 10)).length,
+    [podcast.scope, records],
+  );
   const promptPreview = useMemo(() => {
     try {
       return {
@@ -338,6 +357,11 @@ const PodcastEditor = ({
   };
 
   const generateAudio = async (onlyUnitId?: string) => {
+    const ttsProvider = getCurrentTtsProvider(normalizeTtsConfig(settings?.tts));
+    if (!ttsProvider) {
+      setMessage("请先在 AI 工具设置中配置 TTS 语音服务。");
+      return;
+    }
     if (!onlyUnitId && voiceHasChanged) {
       setVoiceChangeChoiceOpen(true);
       return;
@@ -453,7 +477,7 @@ const PodcastEditor = ({
 
   return (
     <main className="page knowledge-podcast-page podcast-editor-page">
-      <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回列表</button>} />
+      <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<>{onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={17} />设置</button>}<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回列表</button></>} />
       <section className="podcast-editor-toolbar">
         <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
         <label>模式<select value={podcast.mode === "custom" ? `custom:${podcast.customMode?.templateId ?? ""}` : podcast.mode} onChange={(event) => changeMode(event.target.value)}><option value="summary">精炼回顾</option><option value="explain">复习讲解</option>{podcast.mode === "custom" && podcast.customMode && !modeTemplates.some((template) => template.id === podcast.customMode!.templateId) && <option value={`custom:${podcast.customMode.templateId}`}>{podcast.customMode.title}（已保存快照）</option>}{modeTemplates.map((template) => <option key={template.id} value={`custom:${template.id}`}>{template.title}</option>)}</select></label>
@@ -497,7 +521,7 @@ const PodcastEditor = ({
         </details>
       </details>
       <section className="podcast-scope-card">
-        <header><div><p className="eyebrow">Knowledge Scope</p><h2>知识范围</h2><p>{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {getAiKnowledgeScopeRecords(podcast.scope, records, new Date().toISOString().slice(0, 10)).length} 条日志</p></div><button type="button" className="secondary-button" onClick={onOpenScope}>选择知识范围</button></header>
+        <header><div><p className="eyebrow">Knowledge Scope</p><h2>知识范围</h2><p>{aiKnowledgeScopeTitle(podcast.scope)} · 命中 {scopeRecordCount} 条日志</p></div><button type="button" className="secondary-button" onClick={onOpenScope}>选择知识范围</button></header>
       </section>
       {message && <p className="status-message">{message}</p>}
       {podcast.generation && (
@@ -535,6 +559,7 @@ const PodcastEditor = ({
         <button type="button" className="secondary-button" onClick={() => void saveDraft()}><Save size={17} />保存草稿</button>
         <button type="button" className="primary-button" onClick={() => void generateScript()} disabled={scriptRunning || audioRunning}><Sparkles size={17} />{scriptRunning ? "生成脚本中…" : "生成脚本"}</button>
         <button type="button" className="primary-button" onClick={() => void generateAudio(undefined)} disabled={scriptRunning || audioRunning || podcast.scriptStatus !== "ready"}><Headphones size={17} />{audioRunning ? "生成音频中…" : legacyAudioLayout ? "重新生成整期音频" : "生成音频"}</button>
+        {failedUnits.length > 0 && !audioRunning && <button type="button" className="secondary-button" onClick={() => void generateAudio(undefined)} disabled={scriptRunning}><RotateCcw size={17} />重试全部失败（{failedUnits.length}）</button>}
       </section>
       <section className="podcast-script-card">
         <article className="podcast-segment-card">

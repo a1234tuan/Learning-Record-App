@@ -10,6 +10,7 @@ const renderMorePage = (settings = DEFAULT_SETTINGS) => {
     onOpenBackup: vi.fn(),
     onOpenAiTools: vi.fn(),
     onOpenOcrSettings: vi.fn(),
+    onOpenPodcasts: vi.fn(),
     onOpenStats: vi.fn(),
     onOpenSettings: vi.fn(),
     onOpenTrash: vi.fn(),
@@ -79,11 +80,10 @@ describe("MorePage", () => {
     expect(screen.getByText("阿里云百炼 · qwen3.7-plus-2026-05-26")).toBeInTheDocument();
   });
 
-  it("places the guide entry at the top of the tool list", () => {
+  it("places the AI tools entry at the top of the tool list", () => {
     renderMorePage();
 
     const toolRows = screen.getAllByRole("button");
-    expect(toolRows[0]).toHaveTextContent("使用教程");
-    expect(toolRows[0]).toHaveTextContent("Guide");
+    expect(toolRows[0]).toHaveTextContent("AI 工具");
   });
 });

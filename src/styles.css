@@ -1590,7 +1590,7 @@ button:disabled {
 
 .subject-manager-list {
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .subject-manager-row {
@@ -1599,7 +1599,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px;
+  padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-2);
@@ -4090,6 +4090,11 @@ button:disabled {
   overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.ai-scope-page-records .ai-scope-page-content {
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow-y: hidden;
 }
 
 .ai-scope-mode-control {

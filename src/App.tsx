@@ -872,7 +872,6 @@ export const App = () => {
             settings={settings}
             onChanged={app.refresh}
             onOpenAi={() => openMoreSubRoute("ai")}
-            onOpenPodcasts={() => openMoreSubRoute("podcasts")}
           />
         );
       case "podcasts":
@@ -903,6 +902,7 @@ export const App = () => {
             onSavePodcast={app.saveKnowledgePodcast}
             onDeletePodcast={app.deleteKnowledgePodcast}
             onOpenRecord={(record) => openRecordInTab(record, "more")}
+            onOpenSettings={() => openMoreSubRoute("aiTools")}
           />
         );
       case "ocrSettings":
@@ -957,6 +957,7 @@ export const App = () => {
             onOpenBackup={() => openMoreSubRoute("backup")}
             onOpenAiTools={() => openMoreSubRoute("aiTools")}
             onOpenOcrSettings={() => openMoreSubRoute("ocrSettings")}
+            onOpenPodcasts={() => openMoreSubRoute("podcasts")}
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenSettings={() => openMoreSubRoute("settings")}
             onOpenTrash={() => openMoreSubRoute("trash")}

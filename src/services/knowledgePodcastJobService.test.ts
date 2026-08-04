@@ -3,6 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, KnowledgePodcast } from "../types";
 
 const { generatePodcastScriptMock, synthesizeMock } = vi.hoisted(() => ({ generatePodcastScriptMock: vi.fn(), synthesizeMock: vi.fn() }));
+const { isNativePodcastTtsAvailableMock, getNativePodcastTtsStateMock, takeNativePodcastTtsArtifactMock } = vi.hoisted(() => ({
+  isNativePodcastTtsAvailableMock: vi.fn(() => false),
+  getNativePodcastTtsStateMock: vi.fn(),
+  takeNativePodcastTtsArtifactMock: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock("./knowledgePodcastService", async (importOriginal) => {
   const original = await importOriginal<typeof import("./knowledgePodcastService")>();
@@ -13,7 +18,18 @@ vi.mock("./knowledgePodcastService", async (importOriginal) => {
   };
 });
 
-import { cancelKnowledgePodcastJob, isKnowledgePodcastJobRunning, startKnowledgePodcastAudioJob, startKnowledgePodcastScriptJob } from "./knowledgePodcastJobService";
+vi.mock("./nativePodcastTts", () => ({
+  isNativePodcastTtsAvailable: isNativePodcastTtsAvailableMock,
+  getNativePodcastTtsState: getNativePodcastTtsStateMock,
+  takeNativePodcastTtsArtifact: takeNativePodcastTtsArtifactMock,
+  acknowledgeNativePodcastTtsArtifact: vi.fn(),
+  base64ToPodcastAudioBlob: vi.fn(),
+  cancelNativePodcastTts: vi.fn(),
+  requestNativePodcastTtsNotificationPermission: vi.fn(),
+  startNativePodcastTts: vi.fn(),
+}));
+
+import { cancelKnowledgePodcastJob, isKnowledgePodcastJobRunning, startKnowledgePodcastAudioJob, startKnowledgePodcastScriptJob, syncNativeKnowledgePodcastTtsJobs } from "./knowledgePodcastJobService";
 import { storage } from "./storageAdapter";
 import { DEFAULT_SETTINGS } from "../db/defaults";
 
@@ -63,6 +79,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   generatePodcastScriptMock.mockReset();
   synthesizeMock.mockReset();
+  isNativePodcastTtsAvailableMock.mockReturnValue(false);
+  getNativePodcastTtsStateMock.mockReset();
+  takeNativePodcastTtsArtifactMock.mockResolvedValue(null);
 });
 
 describe("knowledgePodcastJobService", () => {
@@ -178,5 +197,56 @@ describe("knowledgePodcastJobService", () => {
 
     expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(current.ttsConfig.voiceId).toBe("global-voice");
+  });
+});
+
+describe("syncNativeKnowledgePodcastTtsJobs", () => {
+  const nativeState = (overrides: object = {}) => ({
+    podcastId: "podcast-job",
+    jobId: "job-1",
+    status: "completed",
+    runnerActive: false,
+    units: [{ unitId: "unit-seg", status: "generating" }],
+    diagnostics: [],
+    message: "全部章节音频已生成，正在等待导入。",
+    current: 2,
+    total: 2,
+    ...overrides,
+  });
+
+  const podcastWithUnits = (): KnowledgePodcast => ({
+    ...podcast(),
+    scriptStatus: "ready",
+    audioStatus: "generating",
+    audioUnits: [
+      { id: "unit-opening", kind: "opening", order: 0, title: "开场", textHash: "h1", audioStatus: "ready", audioAssetId: "asset-1" },
+      { id: "unit-seg", kind: "segment", order: 1, title: "第一章", segmentId: "seg-1", textHash: "h2", audioStatus: "generating", audioAssetId: undefined },
+    ],
+  });
+
+  it("resets a stranded generating unit to pending when the service ends without producing an artifact", async () => {
+    let current = podcastWithUnits();
+    vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
+    vi.spyOn(storage, "saveKnowledgePodcast").mockImplementation(async (next) => { current = next; return next; });
+    isNativePodcastTtsAvailableMock.mockReturnValue(true);
+    getNativePodcastTtsStateMock.mockResolvedValue(nativeState());
+
+    await syncNativeKnowledgePodcastTtsJobs();
+
+    expect(current.audioUnits?.find((u) => u.id === "unit-seg")?.audioStatus).toBe("pending");
+    expect(current.audioUnits?.find((u) => u.id === "unit-opening")?.audioStatus).toBe("ready");
+  });
+
+  it("shows a partial-failure message when native reports completed but not all units are ready", async () => {
+    let current = podcastWithUnits();
+    vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
+    vi.spyOn(storage, "saveKnowledgePodcast").mockImplementation(async (next) => { current = next; return next; });
+    isNativePodcastTtsAvailableMock.mockReturnValue(true);
+    getNativePodcastTtsStateMock.mockResolvedValue(nativeState());
+
+    await syncNativeKnowledgePodcastTtsJobs();
+
+    expect(current.generation?.message).toBe("音频生成完成，部分章节未能生成，请点击重试缺失章节。");
+    expect(current.audioStatus).not.toBe("ready");
   });
 });

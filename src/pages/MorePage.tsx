@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, BrainCircuit, Download, FileText, LayoutTemplate, Mic2, Settings, Trash2 } from "lucide-react";
+import { BarChart3, BookOpen, BrainCircuit, Download, FileText, Headphones, LayoutTemplate, Mic2, Settings, Trash2 } from "lucide-react";
 
 import type { AppSettings } from "../types";
 import { createDefaultAiPresets } from "../db/defaults";
@@ -11,6 +11,7 @@ interface MorePageProps {
   onOpenBackup: () => void;
   onOpenAiTools: () => void;
   onOpenOcrSettings: () => void;
+  onOpenPodcasts: () => void;
   onOpenStats: () => void;
   onOpenSettings: () => void;
   onOpenTrash: () => void;
@@ -54,6 +55,7 @@ export const MorePage = ({
   onOpenBackup,
   onOpenAiTools,
   onOpenOcrSettings,
+  onOpenPodcasts,
   onOpenStats,
   onOpenSettings,
   onOpenTrash,
@@ -75,27 +77,18 @@ export const MorePage = ({
       <div className="more-list">
         <ListRow
           className="more-summary-row"
-          icon={<BookOpen size={19} />}
-          title="使用教程"
-          description="从记录、复习、AI 问答到备份恢复的基本指南"
-          meta="Guide"
-          onClick={onOpenGuide}
-        />
-        <ListRow
-          className="more-summary-row"
-          icon={<Download size={19} />}
-          title="备份与恢复"
-          description={buildBackupDescription(settings)}
-          meta={buildBackupMeta(settings)}
-          onClick={onOpenBackup}
-        />
-        <ListRow
-          className="more-summary-row"
           icon={<BrainCircuit size={19} />}
           title="AI 工具"
           description="AI 设置、聊天记录和材料导出"
           meta={buildAiMeta(settings)}
           onClick={onOpenAiTools}
+        />
+        <ListRow
+          className="more-summary-row"
+          icon={<Headphones size={19} />}
+          title="知识播客"
+          description="把本地记录整理成可编辑、可回溯的知识音频"
+          onClick={onOpenPodcasts}
         />
         <ListRow
           className="more-summary-row"
@@ -111,10 +104,32 @@ export const MorePage = ({
     <section className="more-section more-hub-section">
       <h2>应用</h2>
       <div className="more-list">
-        <ListRow icon={<Trash2 size={19} />} title="回收站" description="恢复或永久删除 30 天内的记录" onClick={onOpenTrash} />
         <ListRow icon={<Mic2 size={19} />} title="录音库" description="集中查看、播放和整理录音笔记" onClick={onOpenRecordings} />
         <ListRow icon={<LayoutTemplate size={19} />} title="模板" description="管理可复用的学习记录内容" onClick={onOpenTemplates} />
         <ListRow icon={<BarChart3 size={19} />} title="统计" description="查看记录趋势和资源数量" onClick={onOpenStats} />
+      </div>
+    </section>
+
+    <section className="more-section more-hub-section">
+      <h2>系统</h2>
+      <div className="more-list">
+        <ListRow
+          className="more-summary-row"
+          icon={<BookOpen size={19} />}
+          title="使用教程"
+          description="从记录、复习、AI 问答到备份恢复的基本指南"
+          meta="Guide"
+          onClick={onOpenGuide}
+        />
+        <ListRow
+          className="more-summary-row"
+          icon={<Download size={19} />}
+          title="备份与恢复"
+          description={buildBackupDescription(settings)}
+          meta={buildBackupMeta(settings)}
+          onClick={onOpenBackup}
+        />
+        <ListRow icon={<Trash2 size={19} />} title="回收站" description="恢复或永久删除 30 天内的记录" onClick={onOpenTrash} />
         <ListRow icon={<Settings size={19} />} title="设置" description="目标日期、主题、字号和行距" onClick={onOpenSettings} />
       </div>
     </section>

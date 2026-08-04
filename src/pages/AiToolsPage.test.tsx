@@ -8,7 +8,7 @@ describe("AiToolsPage", () => {
   it("opens AI chat records and uses a single-layer AI settings toggle", () => {
     const onOpenAi = vi.fn();
 
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={onOpenAi} onOpenPodcasts={vi.fn()} />);
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={onOpenAi} />);
 
     fireEvent.click(screen.getByRole("button", { name: /AI 问答与聊天记录/ }));
     expect(onOpenAi).toHaveBeenCalledTimes(1);
@@ -22,7 +22,7 @@ describe("AiToolsPage", () => {
   });
 
   it("keeps AI export collapsed until the user expands it", () => {
-    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={vi.fn()} onOpenPodcasts={vi.fn()} />);
+    render(<AiToolsPage settings={DEFAULT_SETTINGS} onChanged={vi.fn()} onOpenAi={vi.fn()} />);
 
     expect(screen.queryByLabelText("导出格式")).not.toBeInTheDocument();
 
@@ -43,7 +43,7 @@ describe("AiToolsPage", () => {
         prompt: "你是一位 {{讲述角色}}。重点讲 {{必须覆盖}}。",
         order: 0,
       }],
-    }} onChanged={vi.fn()} onOpenAi={vi.fn()} onOpenPodcasts={vi.fn()} />);
+    }} onChanged={vi.fn()} onOpenAi={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "知识播客高级模板工作台" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("你是一位 {{讲述角色}}。重点讲 {{必须覆盖}}。")).toBeInTheDocument();

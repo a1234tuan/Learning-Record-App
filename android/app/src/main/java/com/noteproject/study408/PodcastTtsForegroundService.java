@@ -329,7 +329,7 @@ public final class PodcastTtsForegroundService extends Service {
                         activeConnection = connection;
                         connection.setRequestMethod("POST");
                         connection.setConnectTimeout(30_000);
-                        connection.setReadTimeout(120_000);
+                        connection.setReadTimeout(30_000);
                         connection.setRequestProperty("Authorization", "Bearer " + apiKey);
                         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                         connection.setRequestProperty("Accept", "audio/mpeg");
@@ -406,7 +406,7 @@ public final class PodcastTtsForegroundService extends Service {
         HttpURLConnection audioConn = (HttpURLConnection) new URL(audioUrl).openConnection();
         activeConnection = audioConn;
         audioConn.setConnectTimeout(30_000);
-        audioConn.setReadTimeout(120_000);
+        audioConn.setReadTimeout(30_000);
         int audioCode = audioConn.getResponseCode();
         byte[] audioBytes = readAll(audioCode >= 400 ? audioConn.getErrorStream() : audioConn.getInputStream());
         audioConn.disconnect();
@@ -496,7 +496,7 @@ public final class PodcastTtsForegroundService extends Service {
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(120_000);
+        conn.setReadTimeout(30_000);
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         conn.setDoOutput(true);
         return conn;
