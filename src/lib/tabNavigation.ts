@@ -14,6 +14,8 @@ export type MoreSubRoute =
   | "podcasts"
   | "templates"
   | "guide"
+  | "ttsSettings"
+  | "podcastTemplates"
   | null;
 export type AiWorkspaceScreen = "chat" | "scope";
 export type PodcastWorkspaceScreen = "editor" | "scope";

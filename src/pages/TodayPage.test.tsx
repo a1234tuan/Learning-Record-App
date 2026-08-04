@@ -41,7 +41,7 @@ describe("TodayPage", () => {
 
     expect(screen.queryByLabelText("新增学科")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /新建 .* 记录/ })).toBeInTheDocument();
-    expect(screen.getByText("更多学科可到“分类 / 学科管理”中新建。")).toBeInTheDocument();
+    expect(screen.queryByText(/更多学科可到/)).not.toBeInTheDocument();
   });
 
   it("shows a stable daily motto in the page header", () => {

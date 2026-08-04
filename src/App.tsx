@@ -31,6 +31,8 @@ import { AiToolsPage } from "./pages/AiToolsPage";
 import { AiChatPage } from "./pages/AiChatPage";
 import { KnowledgePodcastPage } from "./pages/KnowledgePodcastPage";
 import { OcrSettingsPage } from "./pages/OcrSettingsPage";
+import { TtsSettingsPage } from "./pages/TtsSettingsPage";
+import { PodcastTemplatesPage } from "./pages/PodcastTemplatesPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { TrashPage } from "./pages/TrashPage";
 import { UsageGuidePage } from "./pages/UsageGuidePage";
@@ -821,10 +823,6 @@ export const App = () => {
           <SettingsPage
             settings={settings}
             onSaveSettings={(nextSettings) => void app.persistSettings(nextSettings)}
-            onRestored={app.refresh}
-            onOpenBackup={() => openMoreSubRoute("backup")}
-            onOpenAiTools={() => openMoreSubRoute("aiTools")}
-            onOpenOcrSettings={() => openMoreSubRoute("ocrSettings")}
           />
         );
       case "favorites":
@@ -902,11 +900,16 @@ export const App = () => {
             onSavePodcast={app.saveKnowledgePodcast}
             onDeletePodcast={app.deleteKnowledgePodcast}
             onOpenRecord={(record) => openRecordInTab(record, "more")}
-            onOpenSettings={() => openMoreSubRoute("aiTools")}
+            onOpenSettings={() => openMoreSubRoute("ttsSettings")}
+            onOpenTemplates={() => openMoreSubRoute("podcastTemplates")}
           />
         );
       case "ocrSettings":
         return <OcrSettingsPage onChanged={app.refresh} />;
+      case "ttsSettings":
+        return <TtsSettingsPage settings={settings} onChanged={app.refresh} />;
+      case "podcastTemplates":
+        return <PodcastTemplatesPage settings={settings} onChanged={app.refresh} />;
       case "guide":
         return <UsageGuidePage />;
       case "ai":

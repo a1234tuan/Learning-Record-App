@@ -8,6 +8,7 @@ import {
   RotateCcw,
   Save,
   Settings,
+  Sliders,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -50,6 +51,7 @@ interface KnowledgePodcastPageProps {
   onDeletePodcast: (id: string) => Promise<void>;
   onOpenRecord: (record: RecordBlock) => void;
   onOpenSettings?: () => void;
+  onOpenTemplates?: () => void;
 }
 
 const recordsOf = (blocks: Block[]) => blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt);
@@ -122,6 +124,7 @@ export const KnowledgePodcastPage = ({
   onDeletePodcast,
   onOpenRecord,
   onOpenSettings,
+  onOpenTemplates,
 }: KnowledgePodcastPageProps) => {
   const records = useMemo(() => recordsOf(blocks), [blocks]);
   const selected = podcasts.find((item) => item.id === podcastId);
@@ -132,6 +135,7 @@ export const KnowledgePodcastPage = ({
         onBack={onBack}
         onOpenPodcast={onOpenPodcast}
         onOpenSettings={onOpenSettings}
+        onOpenTemplates={onOpenTemplates}
         onCreate={() => {
           const next = createEmptyPodcast({ kind: "recent", days: 7 });
           void onSavePodcast(next).then((saved) => onOpenPodcast(saved.id));
@@ -186,31 +190,30 @@ const PodcastList = ({
   onBack,
   onOpenPodcast,
   onOpenSettings,
+  onOpenTemplates,
   onCreate,
 }: {
   podcasts: KnowledgePodcast[];
   onBack: () => void;
   onOpenPodcast: (id: string) => void;
   onOpenSettings?: () => void;
+  onOpenTemplates?: () => void;
   onCreate: () => void;
 }) => (
   <main className="page knowledge-podcast-page">
     <PageHeader
       eyebrow="Knowledge Podcast"
       title="知识播客"
-      subtitle="把本地学习记录整理成可收听、可回溯的知识回顾。"
+      subtitle="把本地学习记录整理成可收听、可回溯的知识回顾。先生成文字稿，再按章节合成语音。"
       actions={
         <>
           {onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={17} />TTS 设置</button>}
+          {onOpenTemplates && <button type="button" className="secondary-button" onClick={onOpenTemplates}><Sliders size={17} />高级模板</button>}
+          <button type="button" className="primary-button" onClick={onCreate}><Plus size={17} />新建播客</button>
           <button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回</button>
         </>
       }
     />
-    <section className="podcast-intro-card">
-      <Headphones size={30} />
-      <div><strong>一次性知识回顾</strong><p>先生成并编辑文字稿，再按章节生成语音。音频只是可重建缓存，文字稿会一直保留。</p></div>
-      <button type="button" className="primary-button" onClick={onCreate}><Plus size={17} />新建播客</button>
-    </section>
     <section className="podcast-list">
       {podcasts.length === 0 ? <div className="empty-state"><h2>还没有知识播客</h2><p>从最近记录开始生成你的第一期知识回顾。</p></div> : podcasts.map((podcast) => (
         <button type="button" className="podcast-list-row" key={podcast.id} onClick={() => onOpenPodcast(podcast.id)}>

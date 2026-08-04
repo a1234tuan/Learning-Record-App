@@ -15,7 +15,7 @@
   --amber: #d29045;
   --blue: #5e6f9f;
   --danger: #a85858;
-  --shadow: 0 12px 34px rgba(49, 43, 31, 0.08);
+  --shadow: 0 12px 34px rgba(49, 43, 31, 0.056);
 }
 
 :root[data-theme="dark"] {
@@ -31,7 +31,7 @@
   --amber: #e0aa68;
   --blue: #93a4db;
   --danger: #d48686;
-  --shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+  --shadow: 0 12px 34px rgba(0, 0, 0, 0.15);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -48,7 +48,7 @@
     --amber: #e0aa68;
     --blue: #93a4db;
     --danger: #d48686;
-    --shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+    --shadow: 0 12px 34px rgba(0, 0, 0, 0.15);
   }
 }
 
@@ -175,7 +175,7 @@ button:disabled {
   border-radius: 8px;
   background: var(--primary);
   color: var(--surface);
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .brand strong,
@@ -193,8 +193,8 @@ button:disabled {
 .eyebrow {
   margin: 0 0 5px;
   font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -328,9 +328,9 @@ button:disabled {
 .today-hero h1,
 .section-header h1 {
   margin: 0;
-  font-size: clamp(2rem, 5vw, 4.1rem);
+  font-size: clamp(1.45rem, 3.5vw, 2rem);
   line-height: 1;
-  letter-spacing: 0;
+  letter-spacing: -0.015em;
 }
 
 .today-hero p {
@@ -371,12 +371,15 @@ button:disabled {
   gap: 12px;
   margin-bottom: 18px;
   padding: 14px;
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
+  background: color-mix(in srgb, var(--primary) 4%, var(--surface));
 }
 
 .new-record-panel h2,
 .record-list-panel h2,
 .record-mistake-refs h2 {
   margin: 0;
+  font-size: 1.1rem;
   letter-spacing: 0;
 }
 
@@ -404,7 +407,7 @@ button:disabled {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 15%, transparent);
   color: var(--primary-strong);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .subject-add-row {
@@ -433,9 +436,12 @@ button:disabled {
   background: var(--surface-2);
 }
 
-.hero-stats strong,
-.metric-grid strong {
+.hero-stats strong {
   font-size: 1.6rem;
+}
+
+.metric-grid strong {
+  font-size: 1.1rem;
 }
 
 .entry-meta-panel,
@@ -1171,6 +1177,7 @@ button:disabled {
 
 .empty-state h2 {
   margin: 0 0 8px;
+  font-size: 1.1rem;
   color: var(--text);
 }
 
@@ -1300,7 +1307,7 @@ button:disabled {
 .category-grid,
 .subject-record-timeline {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .category-entry-card,
@@ -1309,9 +1316,9 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
-  padding: 16px;
+  gap: 10px;
+  margin-bottom: 0;
+  padding: 11px 14px;
   color: var(--text);
   text-align: left;
 }
@@ -1323,7 +1330,7 @@ button:disabled {
 .category-entry-card strong,
 .category-card span {
   font-size: 1.05rem;
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .category-card {
@@ -1363,7 +1370,7 @@ button:disabled {
 }
 
 .subject-month-toggle span {
-  font-weight: 800;
+  font-weight: 650;
 }
 
 .subject-month-toggle small {
@@ -1378,6 +1385,18 @@ button:disabled {
 .subject-month-more {
   width: fit-content;
   justify-self: center;
+}
+
+.subject-date-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subject-date-label {
+  color: var(--color-muted);
+  font-size: 12px;
+  padding: 4px 2px 2px;
 }
 
 .record-grouping-control {
@@ -1821,8 +1840,8 @@ button:disabled {
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: clamp(1.6rem, 4vw, 2.8rem);
-  font-weight: 850;
+  font-size: clamp(1.45rem, 4vw, 2.1rem);
+  font-weight: 700;
   letter-spacing: 0;
 }
 
@@ -2331,7 +2350,11 @@ button:disabled {
 
 .recording-list {
   display: grid;
-  gap: 10px;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  overflow: hidden;
 }
 
 .recording-row {
@@ -2340,9 +2363,14 @@ button:disabled {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.recording-row:last-child {
+  border-bottom: none;
 }
 
 .recording-row-main {
@@ -2484,9 +2512,9 @@ button:disabled {
 
 .record-view-header h1 {
   margin: 0;
-  font-size: clamp(2rem, 5vw, 4rem);
+  font-size: clamp(1.5rem, 4vw, 2.4rem);
   line-height: 1.05;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 
@@ -2712,6 +2740,11 @@ button:disabled {
 .chart-panel {
   min-width: 0;
   padding: 14px;
+}
+
+.chart-panel,
+.more-action-card {
+  box-shadow: none;
 }
 
 .chart-panel h2 {

@@ -13,6 +13,7 @@ interface RecordCardProps {
   reviewState?: RecordReviewState;
   reviewLogs?: RecordReviewLog[];
   onAddReview?: () => void;
+  onEvaluate?: () => void;
 }
 
 const reviewLabel = (review?: RecordReviewState): string => {
@@ -29,9 +30,7 @@ const compactReviewLabel = (review?: RecordReviewState): string => {
   return review.reviewKind === "memory" ? "记忆" : "回看";
 };
 
-export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewState, reviewLogs = [], onAddReview }: RecordCardProps) => {
-  const assetText = record.assets.length > 0 ? `${record.assets.length} 个资源` : "无资源";
-  const formulaText = record.formulas.length > 0 ? `${record.formulas.length} 个公式` : "无公式";
+export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewState, reviewLogs = [], onAddReview, onEvaluate }: RecordCardProps) => {
   const canAddReview = onAddReview && (!reviewState || reviewState.status === "removed" || reviewState.status === "mastered");
   const reviewActive = reviewState?.status === "active";
   const reviewDue = isReviewDueOn(reviewState, todayISO());
@@ -80,7 +79,18 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
               <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
             </button>
           )}
-          {hasReviewEvaluation && (
+          {onEvaluate && (
+            <button
+              type="button"
+              className={`record-evaluate-button ${hasReviewEvaluation ? "active" : ""}`}
+              onClick={() => onEvaluate()}
+              aria-label={hasReviewEvaluation ? "查看复习评价" : "评论评价"}
+              title="评论评价"
+            >
+              <MessageSquare size={15} />
+            </button>
+          )}
+          {!onEvaluate && hasReviewEvaluation && (
             <span className="record-evaluation-indicator" title="有复习评价" aria-label="有复习评价" role="img">
               <MessageSquare size={15} />
             </span>
@@ -94,9 +104,6 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
         <div className="record-card-copy">
           <strong>{record.title}</strong>
           <RecordTagChips subject={record.subject} tags={record.tags} />
-          <small>
-            {record.date} · {assetText} · {formulaText}
-          </small>
         </div>
       </button>
     </article>

@@ -87,8 +87,6 @@ export const TodayPage = ({
           <div className="new-record-copy">
             <p className="eyebrow">New Record</p>
             <h2>新建学习记录</h2>
-            <p>先选择学科，再进入像笔记页一样的线性编辑器。</p>
-            <p className="helper-text">更多学科可到“分类 / 学科管理”中新建。</p>
           </div>
           <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} />
           <select

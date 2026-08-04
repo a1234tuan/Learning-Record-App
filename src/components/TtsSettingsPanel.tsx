@@ -19,7 +19,7 @@ interface TtsSettingsPanelProps {
 const PROVIDER_TEMPLATES: TtsProviderId[] = ["fish-audio", "aliyun", "tencent", "google"];
 
 export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps) => {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [config, setConfig] = useState<TtsProviderConfig>(() => normalizeTtsConfig(settings.tts));
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [secondaryKeys, setSecondaryKeys] = useState<Record<string, string>>({});

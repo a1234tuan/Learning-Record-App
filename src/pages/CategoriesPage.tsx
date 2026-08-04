@@ -44,6 +44,20 @@ type TagRecordGroup = {
   records: RecordBlock[];
 };
 
+type DateRecordGroup = {
+  date: string;
+  records: RecordBlock[];
+};
+
+const groupRecordsByDate = (records: RecordBlock[]): DateRecordGroup[] => {
+  const groups = new Map<string, RecordBlock[]>();
+  for (const record of records) {
+    groups.set(record.date, [...(groups.get(record.date) ?? []), record]);
+  }
+  return Array.from(groups, ([date, dateRecords]) => ({ date, records: dateRecords }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+};
+
 const monthKey = (date: string) => date.slice(0, 7);
 
 const monthLabel = (month: string) => {
@@ -456,18 +470,21 @@ export const CategoriesPage = ({
                     </button>
                     {expanded && (
                       <div className="subject-month-records">
-                        {visibleRecords.map((record) => (
-                          <div key={record.id} className="dated-record-row">
-                            <small>{formatChineseDate(record.date)}</small>
-                            <RecordCard
-                              record={record}
-                              onOpen={onOpenRecord}
-                              onAskAi={onAskAi}
-                              onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
-                              reviewState={reviewStatesByRecord[record.id]}
-                              reviewLogs={reviewLogsByRecord[record.id]}
-                              onAddReview={() => onAddToReview(record.id)}
-                            />
+                        {groupRecordsByDate(visibleRecords).map(({ date, records: dateRecords }) => (
+                          <div key={date} className="subject-date-group">
+                            <small className="subject-date-label">{formatChineseDate(date)}</small>
+                            {dateRecords.map((record) => (
+                              <RecordCard
+                                key={record.id}
+                                record={record}
+                                onOpen={onOpenRecord}
+                                onAskAi={onAskAi}
+                                onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                                reviewState={reviewStatesByRecord[record.id]}
+                                reviewLogs={reviewLogsByRecord[record.id]}
+                                onAddReview={() => onAddToReview(record.id)}
+                              />
+                            ))}
                           </div>
                         ))}
                         {hiddenCount > 0 && (
@@ -523,18 +540,21 @@ export const CategoriesPage = ({
                         </div>
                         {expanded && (
                           <div className="subject-tag-records">
-                            {visibleRecords.map((record) => (
-                              <div key={record.id} className="dated-record-row">
-                                <small>{formatChineseDate(record.date)}</small>
-                                <RecordCard
-                                  record={record}
-                                  onOpen={onOpenRecord}
-                                  onAskAi={onAskAi}
-                                  onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
-                                  reviewState={reviewStatesByRecord[record.id]}
-                                  reviewLogs={reviewLogsByRecord[record.id]}
-                                  onAddReview={() => onAddToReview(record.id)}
-                                />
+                            {groupRecordsByDate(visibleRecords).map(({ date, records: dateRecords }) => (
+                              <div key={date} className="subject-date-group">
+                                <small className="subject-date-label">{formatChineseDate(date)}</small>
+                                {dateRecords.map((record) => (
+                                  <RecordCard
+                                    key={record.id}
+                                    record={record}
+                                    onOpen={onOpenRecord}
+                                    onAskAi={onAskAi}
+                                    onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)}
+                                    reviewState={reviewStatesByRecord[record.id]}
+                                    reviewLogs={reviewLogsByRecord[record.id]}
+                                    onAddReview={() => onAddToReview(record.id)}
+                                  />
+                                ))}
                               </div>
                             ))}
                             {hiddenCount > 0 && (

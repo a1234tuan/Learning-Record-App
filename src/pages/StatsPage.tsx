@@ -5,6 +5,7 @@ import type { Asset, Block, RecordReviewStats, SubjectConfig } from "../types";
 import { Heatmap } from "../components/Heatmap";
 import { weekRangeLabel } from "../lib/date";
 import { getRecordBlocks, getSubjectCounts } from "../lib/journalSelectors";
+import { PageHeader } from "../components/ui";
 
 interface StatsPageProps {
   blocks: Block[];
@@ -37,13 +38,12 @@ export const StatsPage = ({ blocks, assets, subjects, reviewStats }: StatsPagePr
 
   return (
     <main className="page stats-page">
-      <section className="section-header">
-        <div>
-          <p className="eyebrow">Stats</p>
-          <h1>努力看得见</h1>
-        </div>
-        <span className="counter-pill">{weekRangeLabel()}</span>
-      </section>
+      <PageHeader
+        eyebrow="Stats"
+        title="努力看得见"
+        density="compact"
+        actions={<span className="counter-pill">{weekRangeLabel()}</span>}
+      />
       <Heatmap blocks={blocks} />
       <section className="metric-grid">
         <article>

@@ -118,7 +118,7 @@
 }
 
 .entry-meta-panel {
-  margin-bottom: var(--space-section);
+  margin-bottom: 8px;
   padding: 12px;
 }
 
@@ -132,7 +132,7 @@
 .day-log-list,
 .more-list {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .record-card {
@@ -150,7 +150,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 12px 14px 0;
+  padding: 8px 12px 0;
   flex-shrink: 0;
 }
 
@@ -158,12 +158,12 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
-  padding: 8px 14px 14px;
+  padding: 5px 12px 10px;
   flex-shrink: 0;
 }
 
@@ -187,11 +187,11 @@
 }
 
 .record-card-icon {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--color-primary-soft);
   color: var(--color-primary-strong);
   flex-shrink: 0;
@@ -220,15 +220,25 @@
 }
 
 .record-ai-button,
-.record-favorite-button {
-  width: 36px;
-  height: 36px;
+.record-favorite-button,
+.record-evaluate-button {
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--color-muted);
+}
+
+.record-evaluate-button {
+  color: var(--color-muted);
+}
+
+.record-evaluate-button.active {
+  color: var(--color-accent-strong);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 
 .record-ai-button {
@@ -302,8 +312,8 @@
 .review-due-banner {
   display: grid;
   gap: 10px;
-  margin: var(--space-section) 0;
-  padding: 14px;
+  margin: 8px 0;
+  padding: 12px 14px;
 }
 
 .review-due-banner > div,
@@ -1543,6 +1553,25 @@
   color: var(--color-primary-strong);
 }
 
+.more-list {
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.more-list .list-row {
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  border-radius: 0;
+  background: transparent;
+}
+
+.more-list .list-row:last-child {
+  border-bottom: none;
+}
+
 .usage-guide-page {
   display: grid;
   gap: 16px;
@@ -1570,6 +1599,7 @@
 .guide-contact-card {
   padding: 14px;
   border-radius: 8px;
+  box-shadow: none;
 }
 
 .guide-step-card h3,
@@ -1856,8 +1886,8 @@
 .record-editor-head > input {
   border: 0;
   background: transparent;
-  font-size: clamp(1.8rem, 5vw, 3.2rem);
-  font-weight: 850;
+  font-size: clamp(1.45rem, 4vw, 2.1rem);
+  font-weight: 700;
   line-height: 1.1;
 }
 
@@ -1876,7 +1906,7 @@
 }
 
 .record-view-header h1 {
-  font-size: clamp(2rem, 6vw, 3.35rem);
+  font-size: clamp(1.5rem, 4vw, 2.4rem);
 }
 
 .editor-shell {

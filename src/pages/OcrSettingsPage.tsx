@@ -56,13 +56,6 @@ export const OcrSettingsPage = ({ onChanged }: OcrSettingsPageProps) => {
       />
 
       <section className="settings-panel ocr-settings-panel">
-        <header className="inline-section-header">
-          <div>
-            <h2>PaddleOCR</h2>
-            <p>请填写你自己的 PaddleOCR / AI Studio Token。应用不会内置公共 Token，也不会写入 Android 或 Windows 安装包。</p>
-          </div>
-        </header>
-
         <label>
           PaddleOCR Token
           <span className="secret-input">
@@ -77,12 +70,7 @@ export const OcrSettingsPage = ({ onChanged }: OcrSettingsPageProps) => {
             </button>
           </span>
         </label>
-
-        <p className="helper-text">
-          配置后，Android 和 Windows 桌面版都可识别图片，OCR 文本会进入本地全文检索；AI 图片问答选择“本地 OCR 后转文字”时也会复用这里的配置。
-          未配置时，新图片 OCR 会提示先配置 Token，已识别出的历史 OCR 文本仍可继续搜索。
-        </p>
-
+        <p className="helper-text">Token 只存本机，不进入完整备份。配置后可用于图片 OCR 检索和 AI 图片问答。</p>
         <button type="button" className="primary-button" onClick={() => void save()} disabled={saving}>
           <Save size={18} />
           {saving ? "保存中..." : "保存 OCR 设置"}
