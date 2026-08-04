@@ -2541,7 +2541,7 @@ summary.podcast-planner-header::-webkit-details-marker { display: none; }
 .review-record-card .record-view-header {
   display: grid;
   gap: 10px;
-  margin-bottom: clamp(24px, 4vh, 42px);
+  margin-bottom: clamp(12px, 2vh, 20px);
   border: 0;
 }
 
