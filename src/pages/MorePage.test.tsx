@@ -84,6 +84,6 @@ describe("MorePage", () => {
     renderMorePage();
 
     const toolRows = screen.getAllByRole("button");
-    expect(toolRows[0]).toHaveTextContent("AI 工具");
+    expect(toolRows[0]).toHaveTextContent("AI 问答");
   });
 });
