@@ -8,7 +8,7 @@ import { MorePage } from "./MorePage";
 const renderMorePage = (settings = DEFAULT_SETTINGS) => {
   const props = {
     onOpenBackup: vi.fn(),
-    onOpenAiTools: vi.fn(),
+    onOpenAi: vi.fn(),
     onOpenOcrSettings: vi.fn(),
     onOpenPodcasts: vi.fn(),
     onOpenStats: vi.fn(),

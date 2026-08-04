@@ -350,7 +350,7 @@ export const App = () => {
     const webNavigationEnabled = !Capacitor.isNativePlatform()
       && !isDesktopPlatform()
       && Boolean(sessionId)
-      && isCurrentWebNavigationSession(window.history.state, sessionId);
+      && isCurrentWebNavigationSession(window.history.state, sessionId!);
     commitNavigation({ ...current, tabMemory: nextMemory }, { history: webNavigationEnabled ? "replace" : "none" });
   }, [commitNavigation]);
 
