@@ -584,11 +584,6 @@
   padding: 3px 2px;
 }
 
-.review-rating-bar button svg {
-  width: 15px;
-  height: 15px;
-}
-
 .review-rating-bar button > span {
   font-size: 0.76rem;
   font-weight: 800;
@@ -596,25 +591,10 @@
 }
 
 .review-rating-bar button > small {
-  color: color-mix(in srgb, var(--color-muted) 82%, transparent);
+  color: var(--color-text);
+  opacity: 0.72;
   font-size: 0.64rem;
   line-height: 1;
-}
-
-.review-rating-bar .good {
-  color: var(--color-primary-strong);
-}
-
-.review-rating-bar .fuzzy {
-  color: var(--color-accent-strong);
-}
-
-.review-rating-bar .forgot {
-  color: var(--color-danger);
-}
-
-.review-rating-bar .easy {
-  color: var(--color-success);
 }
 
 .review-manager {
@@ -2337,4 +2317,426 @@ summary.podcast-planner-header::-webkit-details-marker { display: none; }
   .podcast-player-options > span { justify-self: start; text-align: left; }
   .podcast-list-row { align-items: flex-start; flex-wrap: wrap; }
   .podcast-list-row .podcast-status { width: 100%; padding-left: 53px; }
+}
+
+/* Immersive review queue */
+.review-page {
+  width: min(920px, 100%);
+}
+
+.review-page-header {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.review-page-header h1 {
+  font-size: clamp(1.25rem, 2.6vw, 1.65rem);
+}
+
+.review-page-header .page-header-subtitle {
+  margin-top: 5px;
+  font-size: 0.82rem;
+}
+
+.review-header-menu {
+  position: relative;
+}
+
+.review-header-menu-trigger {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.review-header-menu-trigger:hover,
+.review-header-menu-trigger:focus-visible,
+.review-header-menu-trigger[aria-expanded="true"] {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.review-header-menu-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(240px, calc(100vw - 32px));
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-floating);
+}
+
+.review-header-menu-popover button {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.review-header-menu-popover button:hover,
+.review-header-menu-popover button:focus-visible {
+  background: var(--color-primary-soft);
+}
+
+.review-header-menu-popover button:disabled {
+  color: color-mix(in srgb, var(--color-muted) 58%, transparent);
+  cursor: not-allowed;
+}
+
+.review-header-menu-popover button small {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.review-mode-tabs {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.review-mode-tabs button {
+  min-height: 36px;
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.review-mode-tabs button.active {
+  background: transparent;
+  color: var(--color-primary-strong);
+}
+
+.review-mode-tabs button.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--color-primary);
+}
+
+.review-library-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 16px;
+  padding: 4px 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.review-library-summary button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: inherit;
+}
+
+.review-library-summary button:hover,
+.review-library-summary button:focus-visible,
+.review-library-summary button.active {
+  border-bottom-color: var(--color-primary);
+  background: transparent;
+  color: var(--color-primary-strong);
+}
+
+.review-library-summary button strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.review-session {
+  min-height: min(760px, calc(100dvh - var(--bottom-nav-height, 78px) - 170px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.review-session-progress {
+  width: min(760px, 100%);
+  justify-self: center;
+  display: grid;
+  gap: 8px;
+  margin: 4px auto 0;
+}
+
+.review-progress-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+}
+
+.review-progress-meta strong {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.review-progress-track {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border) 72%, transparent);
+}
+
+.review-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width var(--motion-normal) ease;
+}
+
+.review-record-card {
+  width: min(760px, 100%);
+  min-width: 0;
+  justify-self: center;
+  align-self: start;
+  padding: clamp(20px, 4vh, 44px) clamp(2px, 2vw, 16px) 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.review-record-card .record-view-header {
+  display: grid;
+  gap: 10px;
+  margin-bottom: clamp(24px, 4vh, 42px);
+  border: 0;
+}
+
+.review-record-card .record-view-header h1 {
+  max-width: 34ch;
+  margin: 0;
+  font-size: clamp(1.65rem, 4vw, 2.65rem);
+  line-height: 1.14;
+  letter-spacing: 0;
+}
+
+.review-record-card .record-view-header .eyebrow {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+}
+
+.review-record-meta {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.review-record-card .editor-shell.read-only {
+  width: 100%;
+  max-width: 72ch;
+  margin: 0;
+}
+
+.review-record-card .rich-editor {
+  font-size: clamp(1rem, 1.3vw, 1.12rem);
+  line-height: 1.82;
+}
+
+.review-evaluation-panel {
+  margin-top: clamp(26px, 5vh, 52px);
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.review-evaluation-toggle {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  color: var(--color-muted);
+}
+
+.review-evaluation-toggle:hover,
+.review-evaluation-toggle:focus-visible {
+  color: var(--color-text);
+}
+
+.review-evaluation-toggle strong {
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.review-evaluation-toggle small {
+  font-size: 0.72rem;
+}
+
+.review-evaluation-panel.open .review-evaluation-toggle > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.review-evaluation-body {
+  padding: 0 0 8px;
+}
+
+.review-evaluation-body textarea {
+  min-height: 92px;
+  border-radius: 6px;
+  background: var(--color-surface);
+}
+
+.review-bottom-controls {
+  width: min(760px, 100%);
+  justify-self: center;
+  position: sticky;
+  bottom: calc(var(--bottom-nav-height, 78px) + max(10px, env(safe-area-inset-bottom)));
+  z-index: 6;
+  margin: 4px auto 0;
+  padding: 6px 0 max(0px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  background: var(--color-bg);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.review-rating-bar {
+  gap: 0;
+}
+
+.review-rating-bar button {
+  min-height: 48px;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 6px;
+  background: var(--review-rating-tint, var(--color-surface));
+  color: var(--color-text);
+  padding: 4px 6px;
+}
+
+.review-rating-bar button:hover,
+.review-rating-bar button:focus-visible {
+  background: color-mix(in srgb, var(--color-text) 4%, var(--review-rating-tint, var(--color-surface)));
+  color: var(--color-text);
+}
+
+.review-rating-bar button > span {
+  color: var(--color-text);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.review-rating-bar button > small {
+  color: var(--color-text);
+  font-size: 0.68rem;
+}
+
+.review-rating-bar button:disabled {
+  opacity: 0.62;
+}
+
+.review-rating-bar .forgot {
+  --review-rating-tint: color-mix(in srgb, var(--color-danger) 11%, var(--color-surface));
+}
+
+.review-rating-bar .fuzzy {
+  --review-rating-tint: color-mix(in srgb, #41464d 9%, var(--color-surface));
+}
+
+.review-rating-bar .good {
+  --review-rating-tint: color-mix(in srgb, var(--color-success) 11%, var(--color-surface));
+}
+
+.review-rating-bar .easy {
+  --review-rating-tint: color-mix(in srgb, #5b8dd8 11%, var(--color-surface));
+}
+
+.review-empty-state {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (max-width: 920px) {
+  .review-page-header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .review-page-header .page-header-actions {
+    align-self: center;
+  }
+
+  .review-session {
+    min-height: min(700px, calc(100dvh - var(--bottom-nav-height, 78px) - 132px));
+  }
+
+  .review-record-card {
+    padding-top: clamp(18px, 4vh, 34px);
+  }
+
+  .review-record-card .record-view-header h1 {
+    font-size: clamp(1.5rem, 7vw, 2.1rem);
+  }
+
+  .review-bottom-controls {
+    bottom: calc(var(--bottom-nav-height, 78px) + max(8px, env(safe-area-inset-bottom)));
+  }
+}
+
+@media (max-width: 480px) {
+  .review-mode-tabs {
+    gap: 14px;
+  }
+
+  .review-session-progress {
+    margin-top: 2px;
+  }
+
+  .review-rating-bar button {
+    min-height: 44px;
+  }
+
+  .review-rating-bar button > span {
+    font-size: 0.78rem;
+  }
 }

@@ -1,6 +1,6 @@
 ﻿import {
+  BarChart3,
   ChevronDown,
-  CheckCircle2,
   Edit3,
   Eye,
   MessageSquare,
@@ -10,17 +10,14 @@
   RefreshCw,
   RotateCcw,
   Search,
-  Sparkles,
-  Star,
   Undo2,
-  XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { RecordTagChips } from "../components/RecordTagChips";
-import { PageHeader, SurfaceCard } from "../components/ui";
+import { PageHeader } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
 import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
 import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
@@ -52,6 +49,7 @@ interface ReviewPageProps {
   onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<RecordReviewUndoToken | undefined>;
   onUndo: (token: RecordReviewUndoToken) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onOpenStats?: () => void;
   onOpenRecord: (record: RecordBlock) => void;
   onEditRecord: (record: RecordBlock) => void;
   referenceRecords?: readonly RecordBlock[];
@@ -87,11 +85,11 @@ interface ReviewUndoEntry {
   showAllDue: boolean;
 }
 
-const ratingConfig: Array<{ rating: RecordReviewRating; label: string; icon: typeof CheckCircle2; className: string }> = [
-  { rating: "forgot", label: "忘记了", icon: XCircle, className: "forgot" },
-  { rating: "fuzzy", label: "模糊", icon: Sparkles, className: "fuzzy" },
-  { rating: "good", label: "良好", icon: CheckCircle2, className: "good" },
-  { rating: "easy", label: "轻松", icon: Star, className: "easy" },
+const ratingConfig: Array<{ rating: RecordReviewRating; label: string; className: string }> = [
+  { rating: "forgot", label: "忘记了", className: "forgot" },
+  { rating: "fuzzy", label: "模糊", className: "fuzzy" },
+  { rating: "good", label: "良好", className: "good" },
+  { rating: "easy", label: "轻松", className: "easy" },
 ];
 
 const isDueReview = (review: RecordReviewState | undefined, today: string) => isReviewDueOn(review, today);
@@ -233,6 +231,7 @@ export const ReviewPage = ({
   onRate,
   onUndo,
   onRefresh,
+  onOpenStats,
   onOpenRecord,
   onEditRecord,
   referenceRecords = [],
@@ -244,7 +243,9 @@ export const ReviewPage = ({
   onResetReview,
 }: ReviewPageProps) => {
   const touchStartYRef = useRef<number | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const [pullReady, setPullReady] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [openActionRecordId, setOpenActionRecordId] = useState<string>();
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
@@ -258,6 +259,28 @@ export const ReviewPage = ({
   const [evaluationDraftRecordId, setEvaluationDraftRecordId] = useState<string | undefined>();
   const today = todayISO();
   const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
+
+  useEffect(() => {
+    if (!headerMenuOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(event.target as Node)) {
+        setHeaderMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setHeaderMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [headerMenuOpen]);
 
   useEffect(() => {
     if (restoreScrollY === undefined) {
@@ -289,7 +312,12 @@ export const ReviewPage = ({
     () => currentReviewLogs.filter(hasEvaluationText),
     [currentReviewLogs],
   );
-  const currentIndex = currentId ? effectiveQueue.indexOf(currentId) + 1 : 0;
+  const completedReviewCount = ratedRecordIds.size;
+  const reviewTotal = effectiveQueue.length + completedReviewCount;
+  const currentIndex = currentId ? completedReviewCount + 1 : 0;
+  const progressPercent = reviewTotal > 0
+    ? Math.min(100, Math.round((currentIndex / reviewTotal) * 100))
+    : 0;
   const overdueCount = availableDueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < today).length;
   const todayCount = availableDueReviews.filter((review) => review.nextReviewDate === today).length;
   const hiddenDueCount = showAllDue ? 0 : availableDueReviews.filter((review) => !dailyLimitIds.includes(review.recordId)).length;
@@ -331,8 +359,6 @@ export const ReviewPage = ({
     () => reviewDeckSummary(selectedScopeRecords, reviewMap, today),
     [reviewMap, selectedScopeRecords, today],
   );
-  const newCount = records.filter((record) => reviewCardStatus(reviewMap.get(record.id), today) === "new").length;
-
   const managedRecords = useMemo(() => {
     const normalizedQuery = libraryState.query.trim().toLocaleLowerCase();
     const filtered = selectedScopeRecords
@@ -636,27 +662,56 @@ export const ReviewPage = ({
       onTouchEnd={touchEnd}
     >
       <PageHeader
-        eyebrow="Review"
         title="间隔复习"
         subtitle={`今日到期 ${todayCount} 条，已过期 ${overdueCount} 条`}
+        density="compact"
+        className="review-page-header"
         actions={(
-          <>
+          <div className="review-header-menu" ref={headerMenuRef}>
             <button
               type="button"
-              className="secondary-button review-undo-button"
-              onClick={() => void undoLastRating()}
-              disabled={undoHistory.length === 0 || Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
-              aria-keyshortcuts="Control+Z Meta+Z"
-              title="撤回上次评分（Ctrl+Z）"
+              className="review-header-menu-trigger"
+              onClick={() => setHeaderMenuOpen((open) => !open)}
+              aria-expanded={headerMenuOpen}
+              aria-haspopup="menu"
+              aria-label="打开复习更多菜单"
+              title="更多复习操作"
             >
-              <Undo2 size={17} />
-              撤回
+              <MoreHorizontal size={19} />
             </button>
-            <button type="button" className="secondary-button" onClick={() => void onRefresh()}>
-              <RefreshCw size={17} />
-              刷新
-            </button>
-          </>
+            {headerMenuOpen && (
+              <div className="review-header-menu-popover" role="menu" aria-label="复习操作">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { setHeaderMenuOpen(false); void undoLastRating(); }}
+                  disabled={undoHistory.length === 0 || Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
+                  aria-keyshortcuts="Control+Z Meta+Z"
+                >
+                  <Undo2 size={16} />
+                  <span>撤回上次评分</span>
+                  <small>Ctrl+Z</small>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { setHeaderMenuOpen(false); void onRefresh(); }}
+                >
+                  <RefreshCw size={16} />
+                  <span>刷新复习列表</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { setHeaderMenuOpen(false); onOpenStats?.(); }}
+                  disabled={!onOpenStats}
+                >
+                  <BarChart3 size={16} />
+                  <span>学习统计</span>
+                </button>
+              </div>
+            )}
+          </div>
         )}
       />
       {pullReady && <p className="status-message">松手刷新复习列表</p>}
@@ -671,16 +726,15 @@ export const ReviewPage = ({
         </button>
       </div>
 
-      {mode === "manage" ? (
-        <section className="review-summary-grid review-library-summary" aria-label="当前牌组摘要">
+      {mode === "manage" && (
+        <section className="review-library-summary" aria-label="当前牌组摘要">
           <button
             type="button"
             className={libraryState.filter === "due" ? "active" : ""}
             onClick={() => updateLibraryState({ filter: libraryState.filter === "due" ? "all" : "due" })}
             aria-pressed={libraryState.filter === "due"}
           >
-            <span>到期</span>
-            <strong>{selectedScopeSummary.due}</strong>
+            到期 <strong>{selectedScopeSummary.due}</strong>
           </button>
           <button
             type="button"
@@ -688,8 +742,7 @@ export const ReviewPage = ({
             onClick={() => updateLibraryState({ filter: libraryState.filter === "new" ? "all" : "new" })}
             aria-pressed={libraryState.filter === "new"}
           >
-            <span>新卡</span>
-            <strong>{selectedScopeSummary.newCards}</strong>
+            新卡 <strong>{selectedScopeSummary.newCards}</strong>
           </button>
           <button
             type="button"
@@ -697,24 +750,8 @@ export const ReviewPage = ({
             onClick={() => updateLibraryState({ filter: libraryState.filter === "learning" ? "all" : "learning" })}
             aria-pressed={libraryState.filter === "learning"}
           >
-            <span>复习中</span>
-            <strong>{selectedScopeSummary.learning}</strong>
+            复习中 <strong>{selectedScopeSummary.learning}</strong>
           </button>
-        </section>
-      ) : (
-        <section className="review-summary-grid">
-          <SurfaceCard variant="raised">
-            <span>复习中</span>
-            <strong>{stats?.activeCount ?? 0}</strong>
-          </SurfaceCard>
-          <SurfaceCard variant="raised">
-            <span>新卡</span>
-            <strong>{newCount}</strong>
-          </SurfaceCard>
-          <SurfaceCard variant="raised">
-            <span>已掌握</span>
-            <strong>{stats?.masteredCount ?? 0}</strong>
-          </SurfaceCard>
         </section>
       )}
 
@@ -735,18 +772,29 @@ export const ReviewPage = ({
             )}
           </section>
         ) : (
-          <>
-            <section className="review-progress-panel">
-              <span>第 {currentIndex}/{effectiveQueue.length} 条</span>
-              <strong>{currentReview?.nextReviewDate && currentReview.nextReviewDate < today ? "已过期" : "今日到期"}</strong>
-              <small>{reviewKindLabel(currentReview?.reviewKind)} · 累计 {currentReview?.totalReviews ?? 0} 次</small>
+          <section className="review-session">
+            <section className="review-session-progress" aria-label="复习进度">
+              <div className="review-progress-meta">
+                <span>第 {currentIndex}/{reviewTotal} 条</span>
+                <strong>{currentReview?.nextReviewDate && currentReview.nextReviewDate < today ? "已过期" : "今日到期"}</strong>
+              </div>
+              <div
+                className="review-progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={reviewTotal}
+                aria-valuenow={currentIndex}
+                aria-label={`复习进度，第 ${currentIndex} 条，共 ${reviewTotal} 条`}
+              >
+                <span style={{ width: `${progressPercent}%` }} />
+              </div>
             </section>
             <article className="review-record-card">
               <header className="record-view-header">
                 <p className="eyebrow">{currentRecord.date}</p>
                 <h1>{currentRecord.title}</h1>
                 <RecordTagChips subject={currentRecord.subject} tags={currentRecord.tags} className="review-record-tags" />
-                <span>{currentRecord.subject} · {reviewKindLabel(currentReview?.reviewKind)}</span>
+                <span className="review-record-meta">{currentRecord.subject} · {reviewKindLabel(currentReview?.reviewKind)}</span>
               </header>
               <RichTextEditor
                 value={normalizeRecordContent(currentRecord)}
@@ -758,9 +806,7 @@ export const ReviewPage = ({
                 referenceSubjects={referenceSubjects}
                 onOpenRecordReference={onOpenRecordReference ? (targetRecordId) => onOpenRecordReference(currentRecord.id, targetRecordId) : undefined}
               />
-            </article>
-            <section className={`review-bottom-controls ${evaluationOpen ? "open" : ""}`}>
-              <section className="review-evaluation-panel" aria-label="复习评价">
+              <section className={`review-evaluation-panel ${evaluationOpen ? "open" : ""}`} aria-label="复习笔记">
                 <button
                   type="button"
                   className="review-evaluation-toggle"
@@ -769,7 +815,7 @@ export const ReviewPage = ({
                 >
                   <MessageSquare size={17} />
                   <span>
-                    <strong>本次评价</strong>
+                    <strong>添加本次复习笔记</strong>
                     <small>
                       {evaluationDraft.trim()
                         ? "草稿已保存"
@@ -806,9 +852,10 @@ export const ReviewPage = ({
                   </div>
                 )}
               </section>
+            </article>
+            <section className="review-bottom-controls">
               <section className="review-rating-bar">
                 {ratingConfig.map((item) => {
-                  const Icon = item.icon;
                   const preview = ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]);
                   const intervalText = preview ? intervalLabel(preview.intervalDays) : undefined;
                   return (
@@ -821,7 +868,6 @@ export const ReviewPage = ({
                       aria-label={intervalText ? `${item.label}，${intervalText}` : item.label}
                       title={intervalText ? `${item.label} · ${intervalText}` : item.label}
                     >
-                      <Icon size={18} />
                       <span>{item.label}</span>
                       {intervalText && <small>{intervalText}</small>}
                     </button>
@@ -829,7 +875,7 @@ export const ReviewPage = ({
                 })}
               </section>
             </section>
-          </>
+          </section>
         )
       ) : (
         <section className="review-library">

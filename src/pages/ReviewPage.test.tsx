@@ -131,6 +131,7 @@ const renderReviewPage = (options: RenderOptions = {}) => {
     onRate: vi.fn().mockResolvedValue(undefined),
     onUndo: vi.fn().mockResolvedValue(undefined),
     onRefresh: vi.fn().mockResolvedValue(undefined),
+    onOpenStats: vi.fn(),
     onOpenRecord: vi.fn(),
     onEditRecord: vi.fn(),
     onAddToReview: vi.fn(),
@@ -191,6 +192,109 @@ describe("ReviewPage", () => {
 
     expect(screen.getByRole("button", { name: "良好，21天后" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "轻松，60天后" })).toBeInTheDocument();
+  });
+
+  it("uses a progress bar instead of queue statistics in the review workspace", () => {
+    renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
+      reviewStates: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
+      queueIds: ["active", "second"],
+      currentRecordId: "active",
+    });
+
+    const progress = screen.getByRole("progressbar", { name: "复习进度，第 1 条，共 2 条" });
+    expect(progress).toHaveAttribute("aria-valuemin", "0");
+    expect(progress).toHaveAttribute("aria-valuemax", "2");
+    expect(progress).toHaveAttribute("aria-valuenow", "1");
+    expect(screen.queryByText("已掌握")).not.toBeInTheDocument();
+  });
+
+  it("keeps the review total fixed while advancing through the session", async () => {
+    const sessionReviews = [
+      review("active"),
+      review("second", { nextReviewDate: "2026-07-03" }),
+      review("new", { nextReviewDate: "2026-07-03" }),
+    ];
+    const ProgressHarness = () => {
+      const [queueIds, setQueueIds] = useState(sessionReviews.map((item) => item.recordId));
+      const [currentRecordId, setCurrentRecordId] = useState<string | undefined>("active");
+      const [libraryState, setLibraryState] = useState(createInitialReviewLibraryState());
+
+      return (
+        <ReviewPage
+          records={records}
+          dueReviews={sessionReviews}
+          reviewStates={sessionReviews}
+          stats={stats}
+          mode="queue"
+          queueIds={queueIds}
+          currentRecordId={currentRecordId}
+          libraryState={libraryState}
+          onModeChange={vi.fn()}
+          onQueueChange={setQueueIds}
+          onCurrentRecordChange={setCurrentRecordId}
+          onLibraryStateChange={setLibraryState}
+          onEnsureDay={vi.fn().mockResolvedValue(undefined)}
+          onRate={vi.fn().mockResolvedValue(undefined)}
+          onUndo={vi.fn().mockResolvedValue(undefined)}
+          onRefresh={vi.fn().mockResolvedValue(undefined)}
+          onOpenRecord={vi.fn()}
+          onEditRecord={vi.fn()}
+          onAddToReview={vi.fn()}
+          onRemoveReview={vi.fn()}
+          onResetReview={vi.fn()}
+        />
+      );
+    };
+
+    render(<ProgressHarness />);
+
+    const initialProgress = screen.getByRole("progressbar", { name: "复习进度，第 1 条，共 3 条" });
+    expect(initialProgress).toHaveAttribute("aria-valuemax", "3");
+    expect(initialProgress).toHaveAttribute("aria-valuenow", "1");
+    expect(initialProgress.querySelector("span")).toHaveStyle({ width: "33%" });
+    expect(screen.getByRole("button", { name: /忘记了/ }).querySelector("svg")).toBeNull();
+    expect(screen.getByRole("button", { name: /模糊/ }).querySelector("svg")).toBeNull();
+
+    clickRating(/良好/);
+    await waitFor(() => {
+      const progress = screen.getByRole("progressbar", { name: "复习进度，第 2 条，共 3 条" });
+      expect(progress).toHaveAttribute("aria-valuemax", "3");
+      expect(progress).toHaveAttribute("aria-valuenow", "2");
+      expect(progress.querySelector("span")).toHaveStyle({ width: "67%" });
+    });
+
+    clickRating(/良好/);
+    await waitFor(() => {
+      const progress = screen.getByRole("progressbar", { name: "复习进度，第 3 条，共 3 条" });
+      expect(progress).toHaveAttribute("aria-valuemax", "3");
+      expect(progress).toHaveAttribute("aria-valuenow", "3");
+      expect(progress.querySelector("span")).toHaveStyle({ width: "100%" });
+    });
+  });
+
+  it("moves undo, refresh and statistics into the review overflow menu", async () => {
+    const { handlers } = renderReviewPage({
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      queueIds: ["active"],
+      currentRecordId: "active",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    expect(screen.getByRole("menuitem", { name: /撤回上次评分/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "刷新复习列表" }));
+    await waitFor(() => expect(handlers.onRefresh).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "学习统计" }));
+    expect(handlers.onOpenStats).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "复习操作" })).not.toBeInTheDocument();
   });
 
   it("shows record tags on a review card", () => {
@@ -470,7 +574,7 @@ describe("ReviewPage", () => {
       onRate,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
     fireEvent.change(screen.getByLabelText("本次复习评价"), {
       target: { value: "- 新理解\n1. 掌握更稳" },
     });
@@ -491,7 +595,7 @@ describe("ReviewPage", () => {
       onRate,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
     fireEvent.change(screen.getByLabelText("本次复习评价"), {
       target: { value: "这次还是容易混淆" },
     });
@@ -513,7 +617,7 @@ describe("ReviewPage", () => {
       currentRecordId: "active",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
 
     expect(screen.getByText("- 上次把页表和 TLB 关系理顺了")).toBeInTheDocument();
   });
@@ -582,10 +686,12 @@ describe("ReviewPage", () => {
       onCurrentRecordChange,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /本次评价/ }));
+    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
     fireEvent.change(screen.getByLabelText("本次复习评价"), { target: { value: "要重新理解 BFS 层序边界" } });
     clickRating(/良好/);
-    await waitFor(() => expect(screen.getByRole("button", { name: "撤回" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: /撤回上次评分/ })).toBeEnabled());
+    fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
 
     clickRating(/良好/);
@@ -595,7 +701,8 @@ describe("ReviewPage", () => {
     await waitFor(() => expect(onUndo).toHaveBeenCalledWith(expect.objectContaining({ recordId: "second" })));
     await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /撤回上次评分/ }));
     await waitFor(() => expect(onUndo).toHaveBeenCalledWith(expect.objectContaining({ recordId: "active" })));
     await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByLabelText("本次复习评价")).toHaveValue("要重新理解 BFS 层序边界"));
@@ -653,7 +760,8 @@ describe("ReviewPage", () => {
 
     clickRating(/良好/);
     await waitFor(() => expect(screen.getByText("页表缓存")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "撤回" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /撤回上次评分/ }));
     await waitFor(() => expect(screen.getByTestId("review-queue")).toHaveTextContent("second"));
 
     undoRefresh.resolve(undefined);

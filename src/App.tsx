@@ -1203,6 +1203,7 @@ export const App = () => {
               await app.undoRecordReview(token);
             }}
             onRefresh={app.refresh}
+            onOpenStats={() => openMoreSubRoute("stats")}
             onOpenRecord={(record) => openRecordInTab(record, "review")}
             onEditRecord={(record) => openRecordInTab(record, "review", undefined, true)}
             onAddToReview={async (recordId) => {

@@ -57,7 +57,7 @@ describe("KnowledgePodcastPage", () => {
     expect(container.querySelector(".podcast-player-actions")?.children).toHaveLength(4);
     expect(container.querySelector(".podcast-player-options")).toBeInTheDocument();
     expect(screen.getByRole("slider")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("尚未配置，请前往 AI 工具设置")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "播放速度" })).toBeInTheDocument();
   });
 
   it("uses the shared scope picker for podcast date, tag, recent and record scopes", () => {
