@@ -696,6 +696,8 @@ const restoreRemote = async (uid: string, options: CloudSyncOptions) => {
   return { state: remote.state, ...all };
 };
 
+export const getCurrentCloudUser = (): User | null => firebaseAuth.currentUser;
+
 export const listenToCloudUser = (listener: (user: User | null) => void) => onAuthStateChanged(firebaseAuth, listener);
 
 export const completeGoogleRedirect = async (): Promise<User | null> => {

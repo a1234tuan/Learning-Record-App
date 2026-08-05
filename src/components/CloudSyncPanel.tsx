@@ -4,6 +4,7 @@ import type { User } from "firebase/auth";
 
 import {
   completeGoogleRedirect,
+  getCurrentCloudUser,
   getCloudSyncStatus,
   listCloudRecoverySnapshots,
   listenToCloudUser,
@@ -30,7 +31,7 @@ const formatDateTime = (value: string) =>
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "云同步操作失败。";
 
 export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => getCurrentCloudUser());
   const [status, setStatus] = useState<CloudSyncStatus>();
   const [snapshots, setSnapshots] = useState<CloudRecoverySnapshot[]>([]);
   const [conflict, setConflict] = useState<CloudSyncConflict>();
@@ -79,7 +80,12 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
       setConflict(undefined);
       setMessage(`已登录 ${signedInUser.email ?? "Google 账号"}。`);
       try {
-        await refresh(signedInUser);
+        await Promise.race([
+          refresh(signedInUser),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("读取云端状态超时，可点击「同步更改」重试。")), 15_000)
+          ),
+        ]);
       } catch (error) {
         setMessage(`已登录 ${signedInUser.email ?? "Google 账号"}，但暂时无法读取云端状态：${errorMessage(error)}`);
       }
