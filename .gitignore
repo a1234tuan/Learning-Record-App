@@ -14,6 +14,7 @@ android/capacitor-cordova-android-plugins/build/
 android/local.properties
 android/keystore.properties
 android/keystores/
+desktop/oauth-config.cjs
 *.log
 *.apk
 *.aab
