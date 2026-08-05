@@ -798,7 +798,6 @@ export type CloudSyncEntityType =
   | "tag"
   | "study-session"
   | "settings"
-  | "podcast"
   | "asset"
   | "review-state"
   | "review-day-stat";

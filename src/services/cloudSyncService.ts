@@ -671,7 +671,7 @@ const replaceCloudWithLocal = async (user: User, state: CloudSyncStateRecord, op
     await makeRemoteSnapshot(user.uid, "冲突前的云端版本", allRemote.entities, allRemote.reviewEvents, remote.state.headRevision, options);
     const localKeys = new Set(exported.entities.map((entity) => entity.key));
     const tombstones = allRemote.entities
-      .filter((entity) => !localKeys.has(entity.key) && !entity.deleted)
+      .filter((entity) => !localKeys.has(entity.key) && !entity.deleted && entity.entityType !== "review-state" && entity.entityType !== "review-day-stat")
       .map((entity) => ({ ...entity, contentHash: `deleted:${entity.contentHash}`, payload: {}, deleted: true }));
     const result = await publish(user, state, exported, { entities: [...exported.entities, ...tombstones], events: exported.reviewEvents }, options, lock);
     lockReleased = true;

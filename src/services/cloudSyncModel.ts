@@ -6,7 +6,6 @@ import type {
   CloudSyncEntityType,
   ContentTemplate,
   DayEntry,
-  KnowledgePodcast,
   RecordDraft,
   RecordReviewDayStat,
   RecordReviewLog,
@@ -166,7 +165,6 @@ export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudS
     mapEntities("draft", snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []),
     mapEntities("tag", snapshot.payload.tags),
     mapEntities("study-session", snapshot.payload.studySessions),
-    mapEntities("podcast", snapshot.payload.podcasts ?? []),
     mapEntities("review-state", snapshot.payload.recordReviews ?? []),
     mapEntities("review-day-stat", snapshot.payload.recordReviewDayStats ?? []),
   ]);
@@ -246,7 +244,6 @@ export const materializeCloudSyncSnapshot = (
       recordReviewDayStats: values<RecordReviewDayStat>(entities, "review-day-stat"),
       studySessions: values<StudySession>(entities, "study-session"),
       settings,
-      podcasts: values<KnowledgePodcast>(entities, "podcast"),
     },
     assets: assetValues,
     recordDrafts,
