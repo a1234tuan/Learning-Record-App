@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import type { WriteBatch } from "firebase/firestore";
 import { deleteObject, getBlob, getMetadata, listAll, ref, uploadBytesResumable } from "firebase/storage";
+import type { StorageReference } from "firebase/storage";
 
 import type { CloudSyncEntityType, CloudSyncLedgerRecord, CloudSyncStateRecord, ImportOptions } from "../types";
 import { db } from "../db/database";
@@ -119,6 +120,16 @@ const documentRef = (uid: string, hash: string) => ref(firebaseStorage, `users/$
 const documentsRootRef = (uid: string) => ref(firebaseStorage, `users/${uid}/documents`);
 const legacyMetadataRef = (uid: string) => doc(firestore, "users", uid, "cloudSync", LEGACY_METADATA_DOCUMENT);
 const legacySnapshotRef = (uid: string) => ref(firebaseStorage, `users/${uid}/${LEGACY_SNAPSHOT_FILE}`);
+
+const getCloudStorageBlob = async (uid: string, storageRef: StorageReference): Promise<Blob> => {
+  const desktopStorage = isDesktopPlatform() ? window.studyJournalDesktop?.firebaseStorage : undefined;
+  const user = firebaseAuth.currentUser;
+  if (!desktopStorage || !user || user.uid !== uid) {
+    return getBlob(storageRef);
+  }
+  const { data, contentType } = await desktopStorage.download(uid, storageRef.fullPath, await user.getIdToken());
+  return new Blob([data], { type: contentType });
+};
 
 const progress = (options: CloudSyncOptions, stage: CloudSyncProgress["stage"], message: string, current?: number, total?: number) =>
   options.onProgress?.({ stage, message, current, total });
@@ -257,7 +268,7 @@ const hydratePayloadDocuments = async <T extends CloudSyncEntity>(uid: string, e
     if (entity.deleted || !documentHash) return entity;
     const index = documents.findIndex((item) => item.key === entity.key) + 1;
     progress(options, "downloading", `正在下载大文本 ${index}/${documents.length}。`, index, documents.length);
-    const content = await (await getBlob(documentRef(uid, documentHash))).text();
+    const content = await (await getCloudStorageBlob(uid, documentRef(uid, documentHash))).text();
     let payload: unknown;
     try {
       payload = JSON.parse(content);
@@ -275,7 +286,7 @@ const hydratePayloadDocuments = async <T extends CloudSyncEntity>(uid: string, e
   }));
 };
 
-const ASSET_DOWNLOAD_TIMEOUT_MS = 60_000;
+const ASSET_DOWNLOAD_TIMEOUT_MS = 120_000;
 const ASSET_DOWNLOAD_CONCURRENCY = 5;
 
 const downloadRemoteAssets = async (uid: string, entities: CloudSyncEntity[], existing: Map<string, Blob>, options: CloudSyncOptions) => {
@@ -294,10 +305,15 @@ const downloadRemoteAssets = async (uid: string, entities: CloudSyncEntity[], ex
       pending.slice(i, i + ASSET_DOWNLOAD_CONCURRENCY).map(async (hash) => {
         if (existing.has(hash)) return;
         try {
-          const timeout = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("下载超时，请检查网络连接后重试。")), ASSET_DOWNLOAD_TIMEOUT_MS),
-          );
-          existing.set(hash, await Promise.race([getBlob(assetRef(uid, hash)), timeout]));
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("下载超时，请检查网络连接、代理设置后重试。")), ASSET_DOWNLOAD_TIMEOUT_MS);
+          });
+          try {
+            existing.set(hash, await Promise.race([getCloudStorageBlob(uid, assetRef(uid, hash)), timeout]));
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
+          }
           completed++;
           progress(options, "downloading", `正在下载资源 ${completed}/${total}。`, completed, total);
         } catch (err) {
@@ -791,7 +807,7 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
 
     if (!initialRemote.exists && legacy && firstEmptyDevice) {
       progress(options, "downloading", "正在迁移旧版云端备份。", 0, 1);
-      const archive = await getBlob(legacySnapshotRef(user.uid));
+      const archive = await getCloudStorageBlob(user.uid, legacySnapshotRef(user.uid));
       const snapshot = await zipToSnapshot(new File([archive], "study-journal-cloud-sync.zip", { type: "application/zip" }));
       await storage.restoreCloudSyncSnapshot(snapshot);
       restored = true;
@@ -856,7 +872,7 @@ export const resolveCloudSyncConflict = async (
     const restored = await restoreRemote(user.uid, options).catch(async (error: unknown) => {
       const legacy = await getCloudSnapshotInfo(user.uid);
       if (!legacy) throw error;
-      const archive = await getBlob(legacySnapshotRef(user.uid));
+      const archive = await getCloudStorageBlob(user.uid, legacySnapshotRef(user.uid));
       const snapshot = await zipToSnapshot(new File([archive], "study-journal-cloud-sync.zip", { type: "application/zip" }));
       await storage.restoreCloudSyncSnapshot(snapshot);
       return undefined;

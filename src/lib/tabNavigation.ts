@@ -388,9 +388,6 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
         }
         return { ...memory, more: { ...memory.more, podcastId: undefined, podcastScreen: "editor" } };
       }
-      if (memory.more.subRoute === "aiTools" || memory.more.subRoute === "aiExport") {
-        return { ...memory, more: { ...memory.more, subRoute: "ai" } };
-      }
       if (memory.more.subRoute === "ttsSettings" || memory.more.subRoute === "podcastTemplates") {
         return { ...memory, more: { ...memory.more, subRoute: "podcasts" } };
       }

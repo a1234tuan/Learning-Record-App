@@ -30,6 +30,18 @@ export const SettingsPage = ({ settings, onSaveSettings }: SettingsPageProps) =>
     statusTimer.current = setTimeout(() => setProxyStatus(""), 3000);
   };
 
+  const testFirebaseStorage = async () => {
+    try {
+      const { proxy, status } = await window.studyJournalDesktop!.proxy.testFirebaseStorage();
+      setProxyStatus(`Firebase Storage 可连接（HTTP ${status}，${proxy}）。`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProxyStatus(`Firebase Storage 不可连接：${message}`);
+    }
+    clearTimeout(statusTimer.current);
+    statusTimer.current = setTimeout(() => setProxyStatus(""), 10_000);
+  };
+
   return (
     <main className="page settings-page">
       <PageHeader eyebrow="Settings" title="设置" density="compact" />
@@ -94,6 +106,7 @@ export const SettingsPage = ({ settings, onSaveSettings }: SettingsPageProps) =>
           </label>
           <div className="settings-row">
             <button onClick={() => void saveProxy()}>保存代理</button>
+            <button className="secondary-button" onClick={() => void testFirebaseStorage()}>测试 Firebase 连接</button>
             {proxyStatus && <span className="settings-status">{proxyStatus}</span>}
           </div>
         </section>

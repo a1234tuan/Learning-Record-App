@@ -1,5 +1,6 @@
 ﻿import {
   BarChart3,
+  Bot,
   ChevronDown,
   Edit3,
   Eye,
@@ -54,6 +55,7 @@ interface ReviewPageProps {
   onOpenStats?: () => void;
   onOpenRecord: (record: RecordBlock) => void;
   onEditRecord: (record: RecordBlock) => void;
+  onAskAiRecord?: (record: RecordBlock) => void;
   referenceRecords?: readonly RecordBlock[];
   referenceSubjects?: readonly SubjectConfig[];
   onOpenRecordReference?: (sourceRecordId: string, targetRecordId: string) => void;
@@ -249,6 +251,7 @@ export const ReviewPage = ({
   onOpenStats,
   onOpenRecord,
   onEditRecord,
+  onAskAiRecord,
   referenceRecords = [],
   referenceSubjects = [],
   onOpenRecordReference,
@@ -759,6 +762,28 @@ export const ReviewPage = ({
                   <BarChart3 size={16} />
                   <span>学习统计</span>
                 </button>
+                {mode === "queue" && currentRecord && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setHeaderMenuOpen(false); onEditRecord(currentRecord); }}
+                    >
+                      <Edit3 size={16} />
+                      <span>编辑</span>
+                    </button>
+                    {onAskAiRecord && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { setHeaderMenuOpen(false); onAskAiRecord(currentRecord); }}
+                      >
+                        <Bot size={16} />
+                        <span>AI 问答</span>
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>

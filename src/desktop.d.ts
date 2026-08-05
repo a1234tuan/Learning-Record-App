@@ -51,6 +51,10 @@ declare global {
       proxy: Readonly<{
         getProxy: () => Promise<{ proxyUrl: string }>;
         setProxy: (proxyUrl: string) => Promise<{ proxyUrl: string }>;
+        testFirebaseStorage: () => Promise<{ proxy: string; status: number }>;
+      }>;
+      firebaseStorage: Readonly<{
+        download: (uid: string, objectPath: string, idToken: string) => Promise<{ data: ArrayBuffer; contentType: string }>;
       }>;
       onBackupFlushRequested: (listener: (reason: "minimize" | "close") => Promise<void> | void) => () => void;
     }>;

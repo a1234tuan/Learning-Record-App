@@ -188,6 +188,7 @@ export const App = () => {
   const [activeTab, setActiveTab] = useState<TabKey>("today");
   const [tabMemory, setTabMemory] = useState<TabMemory>(() => createInitialTabMemory());
   const [activeAiSessionId, setActiveAiSessionId] = useState<string | null>(null);
+  const [aiReturnTab, setAiReturnTab] = useState<TabKey | null>(null);
   const [backToast, setBackToast] = useState("");
   const [reviewToast, setReviewToast] = useState("");
   const [desktopMigrationOpen, setDesktopMigrationOpen] = useState(false);
@@ -353,6 +354,15 @@ export const App = () => {
       && isCurrentWebNavigationSession(window.history.state, sessionId!);
     commitNavigation({ ...current, tabMemory: nextMemory }, { history: webNavigationEnabled ? "replace" : "none" });
   }, [commitNavigation]);
+
+  const aiWorkspaceOnBack = useCallback(() => {
+    if (aiReturnTab) {
+      setAiReturnTab(null);
+      switchTab(aiReturnTab);
+    } else {
+      popCurrentTabDepth();
+    }
+  }, [aiReturnTab, popCurrentTabDepth, switchTab]);
 
   const closeRecordInCurrentTab = popCurrentTabDepth;
 
@@ -660,6 +670,7 @@ export const App = () => {
   };
 
   const openAiForScope = async (scope: AiKnowledgeScope) => {
+    setAiReturnTab(null);
     const attachment = await buildAiKnowledgeContextPackAsync(scope, app.blocks, app.assets);
     const session = await createAiSessionForScope(scope, attachment);
     if (session) {
@@ -669,6 +680,28 @@ export const App = () => {
   };
 
   const openAiForDate = async (date: string) => openAiForScope({ kind: "date", date });
+
+  const openAiForRecord = async (record: RecordBlock) => {
+    const originTab = navigationStateRef.current.activeTab;
+    const scope: AiKnowledgeScope = { kind: "records", recordIds: [record.id] };
+    const attachment = await buildAiKnowledgeContextPackAsync(scope, app.blocks, app.assets);
+    const sessions = await storage.listAiSessions();
+    const existing = sessions
+      .filter((s) => !s.deletedAt && s.scope?.kind === "records" && s.scope.recordIds.length === 1 && s.scope.recordIds[0] === record.id)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (existing && existing.lastContextHash === attachment.contextHash) {
+      updateNavigationState((current) => ({ ...current, activeAiSessionId: existing.id }));
+      setAiReturnTab(originTab !== "more" ? originTab : null);
+      openMoreSubRoute("ai");
+    } else {
+      const session = await createAiSessionForScope(scope, attachment);
+      if (session) {
+        updateNavigationState((current) => ({ ...current, activeAiSessionId: session.id }));
+        setAiReturnTab(originTab !== "more" ? originTab : null);
+        openMoreSubRoute("ai");
+      }
+    }
+  };
 
   const renderRecordPage = (record: RecordBlock, highlightedAssetId?: string) => (
     <RecordEditorPage
@@ -924,7 +957,7 @@ export const App = () => {
             settings={settings}
             blocks={app.blocks}
             assets={app.assets}
-            onBack={popCurrentTabDepth}
+            onBack={aiWorkspaceOnBack}
             onOpenSession={(sessionId) => {
               updateNavigationState((current) => ({
                 ...current,
@@ -1228,6 +1261,7 @@ export const App = () => {
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenRecord={(record) => openRecordInTab(record, "review")}
             onEditRecord={(record) => openRecordInTab(record, "review", undefined, true)}
+            onAskAiRecord={openAiForRecord}
             onAddToReview={async (recordId) => {
               await app.addRecordToReview(recordId);
             }}

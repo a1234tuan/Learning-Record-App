@@ -117,7 +117,7 @@ export const MorePage = ({
           className="more-summary-row"
           icon={<BookOpen size={19} />}
           title="使用教程"
-          description="从记录、复习、AI 问答到备份恢复的基本指南"
+          description="从记录、复习、AI 功能到备份恢复的基本指南"
           meta="Guide"
           onClick={onOpenGuide}
         />

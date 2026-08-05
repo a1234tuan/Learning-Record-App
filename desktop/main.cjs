@@ -10,6 +10,9 @@ const { recognizePaddleOcr } = require("./ocr.cjs");
 const APP_SCHEME = "study-journal";
 const APP_HOST = "app";
 const FIREBASE_AUTH_HOST = "study-journal-408-9f31.firebaseapp.com";
+const FIREBASE_STORAGE_BUCKET = "study-journal-408-9f31.firebasestorage.app";
+const FIREBASE_STORAGE_TEST_URL = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o?maxResults=1`;
+const FIREBASE_STORAGE_REQUEST_TIMEOUT_MS = 120_000;
 const _oauth = require("./oauth-config.cjs");
 const DESKTOP_GOOGLE_CLIENT_ID = _oauth.clientId;
 const DESKTOP_GOOGLE_CLIENT_SECRET = _oauth.clientSecret;
@@ -47,13 +50,85 @@ const writeProxyUrl = (url) => {
 const applyProxy = async (proxyUrl) => {
   if (!proxyUrl) {
     await session.defaultSession.setProxy({ mode: "system" });
-    return;
+  } else {
+    // Chromium proxyRules: bare "host:port" applies to ALL schemes including HTTPS.
+    // With the "http://" prefix it would only proxy http:// traffic, leaving HTTPS
+    // (e.g. Firebase Storage) unproxied. Strip the http:// prefix; keep socks5://.
+    const rules = proxyUrl.replace(/^http:\/\//i, "");
+    await session.defaultSession.setProxy({ proxyRules: rules });
   }
-  // Chromium proxyRules: bare "host:port" applies to ALL schemes including HTTPS.
-  // With the "http://" prefix it would only proxy http:// traffic, leaving HTTPS
-  // (e.g. Firebase Storage) unproxied. Strip the http:// prefix; keep socks5://.
-  const rules = proxyUrl.replace(/^http:\/\//i, "");
-  await session.defaultSession.setProxy({ proxyRules: rules });
+  // Existing HTTP/2 and direct connections may otherwise be reused after a
+  // proxy change, making a retry appear to ignore the newly saved setting.
+  await session.defaultSession.closeAllConnections();
+};
+
+const requireMainWindowSender = (event, message) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error(message);
+  }
+};
+
+const isAllowedFirebaseStoragePath = (uid, objectPath) => {
+  if (typeof uid !== "string" || typeof objectPath !== "string" || !uid || objectPath.length > 1024) {
+    return false;
+  }
+  const currentUserPrefix = `users/${uid}/`;
+  return objectPath.startsWith(currentUserPrefix) || objectPath === `${uid}/snapshots/current.zip`;
+};
+
+const firebaseStorageObjectUrl = (objectPath) =>
+  `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o/${encodeURIComponent(objectPath)}?alt=media`;
+
+const fetchFirebaseStorageObject = async (uid, objectPath, idToken) => {
+  if (!isAllowedFirebaseStoragePath(uid, objectPath) || typeof idToken !== "string" || !idToken) {
+    throw new Error("Firebase Storage 下载请求无效。");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FIREBASE_STORAGE_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await session.defaultSession.fetch(firebaseStorageObjectUrl(objectPath), {
+      headers: { Authorization: `Firebase ${idToken}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+      throw new Error(`Firebase Storage 返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+    }
+    return {
+      data: await response.arrayBuffer(),
+      contentType: response.headers.get("content-type") || "application/octet-stream",
+    };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Firebase Storage 在 ${FIREBASE_STORAGE_REQUEST_TIMEOUT_MS / 1000} 秒内未响应。`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const testFirebaseStorageConnection = async () => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const proxy = await session.defaultSession.resolveProxy(FIREBASE_STORAGE_TEST_URL);
+    const response = await session.defaultSession.fetch(FIREBASE_STORAGE_TEST_URL, { signal: controller.signal });
+    if (response.status === 407) {
+      throw new Error("代理服务器要求认证，当前桌面端不支持需要用户名和密码的代理。");
+    }
+    if (![200, 401, 403].includes(response.status)) {
+      throw new Error(`Firebase Storage 返回 HTTP ${response.status}。`);
+    }
+    return { proxy, status: response.status };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("15 秒内未能连接 Firebase Storage。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 // Firebase Storage (*.firebasestorage.app) prefers QUIC (HTTP/3 over UDP).
@@ -594,20 +669,26 @@ ipcMain.handle("study-journal:google-sign-in", (event) => {
 });
 
 ipcMain.handle("study-journal:get-proxy", (event) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
-    throw new Error("代理设置请求来源无效。");
-  }
+  requireMainWindowSender(event, "代理设置请求来源无效。");
   return { proxyUrl: readProxyUrl() };
 });
 
 ipcMain.handle("study-journal:set-proxy", async (event, proxyUrl) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
-    throw new Error("代理设置请求来源无效。");
-  }
+  requireMainWindowSender(event, "代理设置请求来源无效。");
   const url = typeof proxyUrl === "string" ? proxyUrl.trim() : "";
   await applyProxy(url);
   writeProxyUrl(url);
   return { proxyUrl: url };
+});
+
+ipcMain.handle("study-journal:test-firebase-storage", async (event) => {
+  requireMainWindowSender(event, "Firebase 连通性测试请求来源无效。");
+  return testFirebaseStorageConnection();
+});
+
+ipcMain.handle("study-journal:firebase-storage-download", async (event, uid, objectPath, idToken) => {
+  requireMainWindowSender(event, "Firebase Storage 下载请求来源无效。");
+  return fetchFirebaseStorageObject(uid, objectPath, idToken);
 });
 
 const isInsideDist = (filePath) => filePath === DIST_ROOT || filePath.startsWith(`${DIST_ROOT}${path.sep}`);

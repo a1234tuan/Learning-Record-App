@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
   proxy: Object.freeze({
     getProxy: () => ipcRenderer.invoke("study-journal:get-proxy"),
     setProxy: (proxyUrl) => ipcRenderer.invoke("study-journal:set-proxy", proxyUrl),
+    testFirebaseStorage: () => ipcRenderer.invoke("study-journal:test-firebase-storage"),
+  }),
+  firebaseStorage: Object.freeze({
+    download: (uid, objectPath, idToken) => ipcRenderer.invoke("study-journal:firebase-storage-download", uid, objectPath, idToken),
   }),
   onBackupFlushRequested: (listener) => {
     backupFlushListeners.add(listener);

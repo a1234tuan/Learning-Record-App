@@ -38,7 +38,7 @@ export interface ReviewRatingPreview {
 const fsrsScheduler = fsrs({
   request_retention: 0.9,
   maximum_interval: FSRS_MAX_INTERVAL_DAYS,
-  enable_fuzz: false,
+  enable_fuzz: true,
   enable_short_term: false,
   learning_steps: [],
   relearning_steps: [],
@@ -280,10 +280,15 @@ export const applyRecordReview = (
   rating: RecordReviewRating,
   reviewedDate: ISODate,
   reviewedAt: ISODateTime,
-): ReviewScheduleResult =>
-  reviewKindForState(state) === "memory"
+): ReviewScheduleResult => {
+  const result = reviewKindForState(state) === "memory"
     ? applyFsrsReview(state, rating, reviewedDate, reviewedAt)
     : applyOverviewReview(state, rating, reviewedDate, reviewedAt);
+  if (result.state.consecutiveRemembered >= REVIEW_MASTERY_TARGET) {
+    return { nextReviewDate: undefined, state: { ...result.state, status: "mastered", nextReviewDate: undefined } };
+  }
+  return result;
+};
 
 export const previewReviewRatings = (
   state: RecordReviewState,
