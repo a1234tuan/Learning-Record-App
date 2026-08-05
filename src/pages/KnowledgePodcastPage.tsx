@@ -108,7 +108,7 @@ const PlannerInput = ({
   placeholder: string;
 }) => {
   const listId = `podcast-planner-${label}`;
-  return <label className="podcast-planner-field">{label}<input list={listId} value={value ?? ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><datalist id={listId}>{suggestions.map((item) => <option key={item} value={item} />)}</datalist></label>;
+  return <label className="podcast-planner-field"><span>{label}</span><input list={listId} value={value ?? ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><datalist id={listId}>{suggestions.map((item) => <option key={item} value={item} />)}</datalist></label>;
 };
 
 export const KnowledgePodcastPage = ({
@@ -481,7 +481,7 @@ const PodcastEditor = ({
 
   return (
     <main className="page knowledge-podcast-page podcast-editor-page">
-      <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<>{onOpenSettings && <button type="button" className="secondary-button" onClick={onOpenSettings}><Settings size={17} />设置</button>}<button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={17} />返回列表</button></>} />
+      <PageHeader eyebrow="Knowledge Podcast" title={podcast.title || "未命名知识播客"} subtitle="编辑脚本、生成章节音频并回到来源记录。" actions={<button type="button" className="secondary-button" onClick={onBack} aria-label="返回列表"><ArrowLeft size={17} /></button>} />
       <section className="podcast-settings-band" aria-label="播客设置">
         <section className="podcast-editor-toolbar">
           <label>标题<input value={podcast.title} onChange={(event) => updatePodcast({ title: event.target.value })} /></label>
@@ -495,8 +495,8 @@ const PodcastEditor = ({
             <ChevronDown className="podcast-settings-row-chevron" size={17} aria-hidden="true" />
           </summary>
           <div className="podcast-planner-content">
-            {(podcast.mode === "summary" || podcast.mode === "explain") && <div className="podcast-planner-tools"><button type="button" className="secondary-button" onClick={restoreModeRecommendations}>恢复模式推荐设置</button></div>}
-        <details className="podcast-planner-group" open>
+            {(podcast.mode === "summary" || podcast.mode === "explain") && <div className="podcast-planner-tools"><button type="button" className="subtle-button" onClick={restoreModeRecommendations}>恢复模式推荐设置</button></div>}
+        <details className="podcast-planner-group">
           <summary>节目定位</summary>
           <div className="podcast-planner-grid">
             <PlannerInput label="节目目标" value={creativeBrief.objective} onChange={(value) => updateCreativeBrief({ objective: value })} suggestions={PLANNER_SUGGESTIONS.objective} placeholder="例如：错题抽测" />
@@ -509,17 +509,17 @@ const PodcastEditor = ({
           <summary>内容组织</summary>
           <div className="podcast-planner-grid">
             <PlannerInput label="组织结构" value={creativeBrief.organization} onChange={(value) => updateCreativeBrief({ organization: value })} suggestions={PLANNER_SUGGESTIONS.organization} placeholder="例如：按难度递进" />
-            <label className="podcast-planner-field">必须覆盖<textarea value={creativeBrief.mustCover ?? ""} onChange={(event) => updateCreativeBrief({ mustCover: event.target.value })} rows={3} placeholder="例如：并查集的适用条件、路径压缩和复杂度" /></label>
-            <label className="podcast-planner-field">避免内容<textarea value={creativeBrief.avoid ?? ""} onChange={(event) => updateCreativeBrief({ avoid: event.target.value })} rows={3} placeholder="例如：不要逐条复述日志；不要延伸到范围外的算法" /></label>
+            <label className="podcast-planner-field"><span>必须覆盖</span><textarea value={creativeBrief.mustCover ?? ""} onChange={(event) => updateCreativeBrief({ mustCover: event.target.value })} rows={2} placeholder="例如：并查集的适用条件、路径压缩和复杂度" /></label>
+            <label className="podcast-planner-field"><span>避免内容</span><textarea value={creativeBrief.avoid ?? ""} onChange={(event) => updateCreativeBrief({ avoid: event.target.value })} rows={2} placeholder="例如：不要逐条复述日志；不要延伸到范围外的算法" /></label>
           </div>
         </details>
         <details className="podcast-planner-group">
           <summary>脚本结构与本期补充</summary>
           <div className="podcast-planner-grid">
-            <label className="podcast-planner-field">每章固定要素<textarea value={creativeBrief.chapterRequirements ?? ""} onChange={(event) => updateCreativeBrief({ chapterRequirements: event.target.value })} rows={3} placeholder="例如：每章包含概念、例子、易错点和一个自测问题" /></label>
-            <label className="podcast-planner-field">开场要求<textarea value={creativeBrief.openingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ openingRequirements: event.target.value })} rows={3} placeholder="例如：直接提出本期要解决的问题，不要寒暄" /></label>
-            <label className="podcast-planner-field">结尾要求<textarea value={creativeBrief.closingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ closingRequirements: event.target.value })} rows={3} placeholder="例如：用三个复习问题收尾" /></label>
-            <label className="podcast-planner-field podcast-planner-field-full">本期补充要求<textarea value={creativeBrief.supplementaryRequirements ?? ""} onChange={(event) => updateCreativeBrief({ supplementaryRequirements: event.target.value })} rows={3} placeholder="例如：只讲并查集的易错点和适用条件；不需要逐条复述所有日志。" /></label>
+            <label className="podcast-planner-field"><span>每章固定要素</span><textarea value={creativeBrief.chapterRequirements ?? ""} onChange={(event) => updateCreativeBrief({ chapterRequirements: event.target.value })} rows={2} placeholder="例如：每章包含概念、例子、易错点和一个自测问题" /></label>
+            <label className="podcast-planner-field"><span>开场要求</span><textarea value={creativeBrief.openingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ openingRequirements: event.target.value })} rows={2} placeholder="例如：直接提出本期要解决的问题，不要寒暄" /></label>
+            <label className="podcast-planner-field"><span>结尾要求</span><textarea value={creativeBrief.closingRequirements ?? ""} onChange={(event) => updateCreativeBrief({ closingRequirements: event.target.value })} rows={2} placeholder="例如：用三个复习问题收尾" /></label>
+            <label className="podcast-planner-field podcast-planner-field-full"><span>本期补充要求</span><textarea value={creativeBrief.supplementaryRequirements ?? ""} onChange={(event) => updateCreativeBrief({ supplementaryRequirements: event.target.value })} rows={2} placeholder="例如：只讲并查集的易错点和适用条件；不需要逐条复述所有日志。" /></label>
           </div>
         </details>
         {podcast.mode === "custom" && <p className="helper-text">当前高级模板：{podcast.customMode?.title || "自定义模式"}。模板 Prompt 已为本期保存快照，之后修改全局模板不会改写它。</p>}
