@@ -142,8 +142,19 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
         return;
       }
       setConflict(undefined);
-      setMessage(`同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`);
-      if (choice === "cloud") await onRestored();
+      if (choice === "cloud") {
+        await onRestored();
+        setMessage("正在上传本机剩余更改。");
+        const finalResult = await synchronizeCloudChanges(user, { onProgress: (event) => setMessage(event.message) });
+        if (finalResult.kind === "synced") {
+          setMessage(`同步完成：上传 ${result.uploaded + finalResult.uploaded} 项，下载 ${result.downloaded + finalResult.downloaded} 项。`);
+        } else {
+          setConflict(finalResult.conflict);
+          setMessage("已恢复云端数据，但上传本机数据时再次遇到冲突，请重新选择策略。");
+        }
+      } else {
+        setMessage(`同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`);
+      }
       await refresh(user);
     } catch (error) {
       setMessage(errorMessage(error));
