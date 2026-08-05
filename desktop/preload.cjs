@@ -9,6 +9,9 @@ ipcRenderer.on("study-journal:backup-flush-request", async (_event, payload) => 
 
 contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
   isDesktop: true,
+  auth: Object.freeze({
+    signInWithGoogle: () => ipcRenderer.invoke("study-journal:google-sign-in"),
+  }),
   ocr: Object.freeze({
     recognize: (options) => ipcRenderer.invoke("study-journal:desktop-ocr-recognize", options),
   }),
@@ -27,6 +30,10 @@ contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
   }),
   tts: Object.freeze({
     synthesize: (options) => ipcRenderer.invoke("study-journal:tts-synthesize", options),
+  }),
+  proxy: Object.freeze({
+    getProxy: () => ipcRenderer.invoke("study-journal:get-proxy"),
+    setProxy: (proxyUrl) => ipcRenderer.invoke("study-journal:set-proxy", proxyUrl),
   }),
   onBackupFlushRequested: (listener) => {
     backupFlushListeners.add(listener);

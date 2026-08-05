@@ -209,6 +209,43 @@ const reviewStateBeforeLog = (current: RecordReviewState, log: RecordReviewLog):
   };
 };
 
+const isRatingReviewLog = (log: RecordReviewLog) => !log.eventType || log.eventType === "rating";
+
+const reviewActionLog = (
+  eventType: Exclude<NonNullable<RecordReviewLog["eventType"]>, "rating">,
+  previous: RecordReviewState | undefined,
+  next: RecordReviewState,
+): RecordReviewLog => {
+  const base = previous ?? next;
+  const reviewedAt = nowISO();
+  return {
+    ...createBaseEntity(),
+    recordId: next.recordId,
+    rating: "remembered",
+    eventType,
+    normalizedRating: "good",
+    reviewKind: next.reviewKind,
+    scheduler: next.scheduler,
+    reviewedAt,
+    previousEaseFactor: base.easeFactor,
+    nextEaseFactor: next.easeFactor,
+    previousRepetition: base.repetition,
+    nextRepetition: next.repetition,
+    previousIntervalDays: base.intervalDays,
+    nextIntervalDays: next.intervalDays,
+    previousNextReviewDate: base.nextReviewDate,
+    nextReviewDate: next.nextReviewDate,
+    previousLastReviewDate: base.lastReviewDate,
+    previousLastReviewedAt: base.lastReviewedAt,
+    previousConsecutiveRemembered: base.consecutiveRemembered,
+    previousTotalReviews: base.totalReviews,
+    previousFsrsCard: base.fsrsCard,
+    nextFsrsCard: next.fsrsCard,
+    stateAfter: next,
+    updatedAt: reviewedAt,
+  };
+};
+
 export class DexieStorageAdapter implements StorageAdapter {
   async initialize(): Promise<void> {
     await db.open();
@@ -232,6 +269,8 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateTtsSettings();
     await this.purgeMistakeAndReviewData();
     await this.migrateRecordReviewsToMixedSystem();
+    await this.rebuildReviewProjectionFromEvents();
+    await this.compactOldReviewLogs();
     await this.resetStaleOcrJobs(10 * 60 * 1000);
     await this.getOrCreateEntry(todayISO());
   }
@@ -292,13 +331,24 @@ export class DexieStorageAdapter implements StorageAdapter {
     };
   }
 
+  private async saveRecordReviewAction(
+    eventType: Exclude<NonNullable<RecordReviewLog["eventType"]>, "rating">,
+    previous: RecordReviewState | undefined,
+    next: RecordReviewState,
+  ): Promise<void> {
+    await db.transaction("rw", db.recordReviews, db.recordReviewLogs, async () => {
+      await db.recordReviews.put(next);
+      await db.recordReviewLogs.put(reviewActionLog(eventType, previous, next));
+    });
+  }
+
   private async migrateRecordReviewsToMixedSystem(): Promise<void> {
     const reviews = await db.recordReviews.toArray();
     if (reviews.length === 0) {
       return;
     }
 
-    const logs = await db.recordReviewLogs.toArray();
+    const logs = (await db.recordReviewLogs.toArray()).filter(isRatingReviewLog);
     const latestLogByRecord = new Map<string, RecordReviewLog>();
     for (const log of logs) {
       const current = latestLogByRecord.get(log.recordId);
@@ -353,6 +403,70 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (changed) {
       await db.recordReviews.bulkPut(migrated);
     }
+  }
+
+  /** Rebuild projections from immutable cloud review events without exposing actions as ratings. */
+  private async rebuildReviewProjectionFromEvents(): Promise<void> {
+    const logs = await db.recordReviewLogs.toArray();
+    const projected = logs.filter((log) => log.stateAfter);
+    if (projected.length === 0) return;
+
+    const latestStateByRecord = new Map<string, RecordReviewLog>();
+    for (const log of projected) {
+      const current = latestStateByRecord.get(log.recordId);
+      if (!current || `${current.reviewedAt}:${current.updatedAt}` < `${log.reviewedAt}:${log.updatedAt}`) {
+        latestStateByRecord.set(log.recordId, log);
+      }
+    }
+    await db.recordReviews.bulkPut([...latestStateByRecord.values()]
+      .map((log) => log.stateAfter)
+      .filter((state): state is RecordReviewState => Boolean(state)));
+
+    const existingStats = new Map((await db.recordReviewDayStats.toArray()).map((stat) => [stat.date, stat]));
+    const finalRatingByRecordDay = new Map<string, RecordReviewLog>();
+    for (const log of logs.filter(isRatingReviewLog)) {
+      const date = isoDateTimeToLocalDate(log.reviewedAt);
+      const key = `${log.recordId}:${date}`;
+      const current = finalRatingByRecordDay.get(key);
+      if (!current || `${current.reviewedAt}:${current.updatedAt}` < `${log.reviewedAt}:${log.updatedAt}`) {
+        finalRatingByRecordDay.set(key, log);
+      }
+    }
+    const ratingsByDate = new Map<string, RecordReviewLog[]>();
+    for (const log of finalRatingByRecordDay.values()) {
+      const date = isoDateTimeToLocalDate(log.reviewedAt);
+      ratingsByDate.set(date, [...(ratingsByDate.get(date) ?? []), log]);
+    }
+    const rebuiltStats = [...ratingsByDate.entries()].map(([date, ratings]) => {
+      const existing = existingStats.get(date);
+      const count = (rating: RecordReviewRating) => ratings.filter((log) => normalizeLegacyRating(log.normalizedRating ?? log.rating) === rating).length;
+      const goodCount = count("good");
+      const easyCount = count("easy");
+      return {
+        ...(existing ?? createBaseEntity()),
+        id: date,
+        date,
+        dueCountAtFirstOpen: existing?.dueCountAtFirstOpen ?? 0,
+        reviewedCount: ratings.length,
+        rememberedCount: goodCount + easyCount,
+        fuzzyCount: count("fuzzy"),
+        forgotCount: count("forgot"),
+        goodCount,
+        easyCount,
+        completedAt: existing?.completedAt,
+        updatedAt: nowISO(),
+      };
+    });
+    if (rebuiltStats.length > 0) {
+      await db.recordReviewDayStats.bulkPut(rebuiltStats);
+    }
+  }
+
+  private async compactOldReviewLogs(retentionDays = 90): Promise<void> {
+    const cutoff = addDaysISO(todayISO(), -retentionDays);
+    await db.recordReviewLogs
+      .filter((log) => isoDateTimeToLocalDate(log.reviewedAt) < cutoff)
+      .delete();
   }
 
   private async cleanupOrphanAssetsForRecord(record: RecordBlock, draft?: RecordDraft): Promise<void> {
@@ -675,7 +789,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = this.reviewStateForNewCycle(recordId, existing, kind);
-    await db.recordReviews.put(saved);
+    await this.saveRecordReviewAction(existing ? "reset" : "added", existing, saved);
     return saved;
   }
 
@@ -692,7 +806,8 @@ export class DexieStorageAdapter implements StorageAdapter {
         result.skippedActive += 1;
         continue;
       }
-      await db.recordReviews.put(this.reviewStateForNewCycle(recordId, existing, kind));
+      const saved = this.reviewStateForNewCycle(recordId, existing, kind);
+      await this.saveRecordReviewAction(existing ? "reset" : "added", existing, saved);
       if (existing) {
         result.reset += 1;
       } else {
@@ -709,7 +824,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const existing = await db.recordReviews.get(recordId);
     const saved = this.reviewStateForNewCycle(recordId, existing, kind);
-    await db.recordReviews.put(saved);
+    await this.saveRecordReviewAction(existing ? "kind-changed" : "added", existing, saved);
     return saved;
   }
 
@@ -720,7 +835,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const existing = await db.recordReviews.get(recordId);
     const saved = this.reviewStateForNewCycle(recordId, existing, existing?.reviewKind ?? DEFAULT_REVIEW_KIND);
-    await db.recordReviews.put(saved);
+    await this.saveRecordReviewAction("reset", existing, saved);
     return saved;
   }
 
@@ -735,7 +850,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       nextReviewDate: undefined,
       updatedAt: nowISO(),
     };
-    await db.recordReviews.put(saved);
+    await this.saveRecordReviewAction("removed", existing, saved);
     return saved;
   }
 
@@ -785,8 +900,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
       const correctionLog = current.lastReviewDate === reviewedDate
         ? (await db.recordReviewLogs.where("recordId").equals(recordId).toArray())
+          .filter(isRatingReviewLog)
           .filter((log) => isoDateTimeToLocalDate(log.reviewedAt) === reviewedDate)
-          .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0]
+          .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt) || b.updatedAt.localeCompare(a.updatedAt))[0]
         : undefined;
       const baseState = correctionLog
         ? reviewStateBeforeLog(current, correctionLog)
@@ -797,9 +913,10 @@ export class DexieStorageAdapter implements StorageAdapter {
       const nextState = { ...scheduled.state, updatedAt: nowISO() };
       const normalizedRating = normalizeLegacyRating(rating);
       const log: RecordReviewLog = {
-        ...(correctionLog ?? createBaseEntity()),
+        ...createBaseEntity(),
         recordId,
         rating,
+        eventType: "rating",
         normalizedRating,
         reviewKind: nextState.reviewKind ?? DEFAULT_REVIEW_KIND,
         scheduler: nextState.scheduler ?? schedulerForKind(nextState.reviewKind ?? DEFAULT_REVIEW_KIND),
@@ -819,6 +936,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         previousTotalReviews: baseState.totalReviews,
         previousFsrsCard: baseState.fsrsCard,
         nextFsrsCard: nextState.fsrsCard,
+        stateAfter: nextState,
         updatedAt: nowISO(),
       };
       if (!log.evaluationText) {
@@ -917,7 +1035,9 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.recordReviewLogs.get(token.reviewLogId),
         db.recordReviewLogs.where("recordId").equals(token.recordId).toArray(),
       ]);
-      const latestLog = recordLogs.sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt))[0];
+      const latestLog = recordLogs
+        .filter(isRatingReviewLog)
+        .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt) || b.updatedAt.localeCompare(a.updatedAt))[0];
       if (
         !current ||
         !currentLog ||
@@ -930,10 +1050,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
 
       await db.recordReviews.put(token.previousReview);
+      await db.recordReviewLogs.delete(token.reviewLogId);
       if (token.previousLog) {
         await db.recordReviewLogs.put(token.previousLog);
-      } else {
-        await db.recordReviewLogs.delete(token.reviewLogId);
       }
 
       const reviewedDate = isoDateTimeToLocalDate(token.reviewedAt);
@@ -950,7 +1069,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     const logs = recordId
       ? await db.recordReviewLogs.where("recordId").equals(recordId).toArray()
       : await db.recordReviewLogs.toArray();
-    return logs.sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
+    return logs.filter(isRatingReviewLog).sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
   }
 
   async getRecordReviewStats(date = todayISO()): Promise<RecordReviewStats> {
@@ -960,6 +1079,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       db.recordReviewLogs.toArray(),
       this.listDueRecordReviews(date),
     ]);
+    const ratingLogs = logs.filter(isRatingReviewLog);
     const active = reviews.filter((review) => review.status === "active");
     const mastered = reviews.filter((review) => review.status === "mastered");
     const overdueCount = dueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < date).length;
@@ -976,7 +1096,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       streakCursor = addDaysISO(streakCursor, -1);
     }
     const byDate = new Map<string, { remembered: number; reviewed: number }>();
-    for (const log of logs) {
+    for (const log of ratingLogs) {
       const key = isoDateTimeToLocalDate(log.reviewedAt);
       const current = byDate.get(key) ?? { remembered: 0, reviewed: 0 };
       current.reviewed += 1;
@@ -997,7 +1117,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       masteredCount: mastered.length,
       dueCount: dueReviews.length,
       overdueCount,
-      totalReviews: logs.length,
+      totalReviews: dayStats.reduce((sum, s) => sum + s.reviewedCount, 0),
       streakDays,
       todayStat: dayStats.find((stat) => stat.date === date),
       dayStats: sortedStats,
@@ -1483,6 +1603,10 @@ export class DexieStorageAdapter implements StorageAdapter {
     };
   }
 
+  async createCloudSyncSnapshot(): Promise<StorageSnapshot> {
+    return this.createSnapshot();
+  }
+
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
     const snapshot = await db.transaction(
       "r",
@@ -1609,6 +1733,11 @@ export class DexieStorageAdapter implements StorageAdapter {
       },
     );
     await this.migrateRecordReviewsToMixedSystem();
+    await this.rebuildReviewProjectionFromEvents();
+  }
+
+  async restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void> {
+    await this.restoreSnapshot(snapshot);
   }
 
   async restoreStreamableSnapshot(

@@ -1,6 +1,7 @@
-const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require("electron");
-const { cpSync, existsSync, mkdirSync, renameSync } = require("node:fs");
+const { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } = require("electron");
+const { cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } = require("node:fs");
 const fs = require("node:fs/promises");
+const http = require("node:http");
 const { randomUUID, createHmac, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -8,6 +9,10 @@ const { recognizePaddleOcr } = require("./ocr.cjs");
 
 const APP_SCHEME = "study-journal";
 const APP_HOST = "app";
+const FIREBASE_AUTH_HOST = "study-journal-408-9f31.firebaseapp.com";
+const _oauth = require("./oauth-config.cjs");
+const DESKTOP_GOOGLE_CLIENT_ID = _oauth.clientId;
+const DESKTOP_GOOGLE_CLIENT_SECRET = _oauth.clientSecret;
 const UPDATE_QUIT_ARGUMENT = "--quit-for-update";
 const DIST_ROOT = path.resolve(__dirname, "..", "dist");
 const APP_ID = "com.noteproject.study408.desktop";
@@ -21,6 +26,41 @@ const LEGACY_COPY_EXCLUDED_NAMES = new Set([
   "SingletonSocket",
 ]);
 const PROFILE_DATA_ENTRIES = ["IndexedDB", "Local Storage", "WebStorage"];
+
+const PROXY_CONFIG_PATH = path.join(DESKTOP_DATA_ROOT, "proxy-config.json");
+
+const readProxyUrl = () => {
+  try {
+    const data = JSON.parse(readFileSync(PROXY_CONFIG_PATH, "utf8"));
+    return typeof data.proxyUrl === "string" ? data.proxyUrl : "";
+  } catch {
+    return "";
+  }
+};
+
+const writeProxyUrl = (url) => {
+  try {
+    writeFileSync(PROXY_CONFIG_PATH, JSON.stringify({ proxyUrl: url }), "utf8");
+  } catch {}
+};
+
+const applyProxy = async (proxyUrl) => {
+  if (!proxyUrl) {
+    await session.defaultSession.setProxy({ mode: "system" });
+    return;
+  }
+  // Chromium proxyRules: bare "host:port" applies to ALL schemes including HTTPS.
+  // With the "http://" prefix it would only proxy http:// traffic, leaving HTTPS
+  // (e.g. Firebase Storage) unproxied. Strip the http:// prefix; keep socks5://.
+  const rules = proxyUrl.replace(/^http:\/\//i, "");
+  await session.defaultSession.setProxy({ proxyRules: rules });
+};
+
+// Firebase Storage (*.firebasestorage.app) prefers QUIC (HTTP/3 over UDP).
+// Most proxy/VPN setups only tunnel TCP, so QUIC packets are silently dropped
+// and Chromium waits ~60 s before falling back to TCP — exactly long enough to
+// hit our asset download timeout. Force TCP for all connections.
+app.commandLine.appendSwitch("disable-quic");
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -469,6 +509,107 @@ ipcMain.on("study-journal:backup-flush-complete", (_event, requestId) => {
   complete?.();
 });
 
+ipcMain.handle("study-journal:google-sign-in", (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error("Google 登录请求来源无效。");
+  }
+  const codeVerifier = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+  const state = randomUUID();
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      const redirectUri = `http://127.0.0.1:${port}/callback`;
+      const timeout = setTimeout(() => {
+        server.close();
+        reject(new Error("Google 登录超时（90 秒内未完成），请重试。"));
+      }, 90_000);
+      server.on("request", async (req, res) => {
+        try {
+          const url = new URL(req.url, `http://127.0.0.1:${port}`);
+          if (url.pathname !== "/callback") {
+            res.writeHead(404);
+            res.end();
+            return;
+          }
+          clearTimeout(timeout);
+          const code = url.searchParams.get("code");
+          const returnedState = url.searchParams.get("state");
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end("<html><body><p>登录成功，可以关闭此窗口。</p><script>window.close()</script></body></html>");
+          server.close();
+          if (returnedState !== state) {
+            reject(new Error("OAuth state 不匹配，请重试。"));
+            return;
+          }
+          if (!code) {
+            reject(new Error("Google 未返回授权码。"));
+            return;
+          }
+          const tokenResp = await net.fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              code,
+              client_id: DESKTOP_GOOGLE_CLIENT_ID,
+              client_secret: DESKTOP_GOOGLE_CLIENT_SECRET,
+              redirect_uri: redirectUri,
+              grant_type: "authorization_code",
+              code_verifier: codeVerifier,
+            }).toString(),
+          });
+          const tokenData = await tokenResp.json();
+          if (!tokenResp.ok) {
+            reject(new Error(`Google token 交换失败：${JSON.stringify(tokenData).slice(0, 200)}`));
+            return;
+          }
+          const idToken = tokenData.id_token;
+          if (!idToken) {
+            reject(new Error("Google 未返回 id_token，请确认 OAuth 客户端类型为桌面应用。"));
+            return;
+          }
+          resolve({ idToken });
+        } catch (err) {
+          server.close();
+          reject(err);
+        }
+      });
+      server.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+      authUrl.searchParams.set("client_id", DESKTOP_GOOGLE_CLIENT_ID);
+      authUrl.searchParams.set("redirect_uri", redirectUri);
+      authUrl.searchParams.set("response_type", "code");
+      authUrl.searchParams.set("scope", "openid email profile");
+      authUrl.searchParams.set("code_challenge", codeChallenge);
+      authUrl.searchParams.set("code_challenge_method", "S256");
+      authUrl.searchParams.set("state", state);
+      authUrl.searchParams.set("access_type", "online");
+      void shell.openExternal(authUrl.toString());
+    });
+  });
+});
+
+ipcMain.handle("study-journal:get-proxy", (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error("代理设置请求来源无效。");
+  }
+  return { proxyUrl: readProxyUrl() };
+});
+
+ipcMain.handle("study-journal:set-proxy", async (event, proxyUrl) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error("代理设置请求来源无效。");
+  }
+  const url = typeof proxyUrl === "string" ? proxyUrl.trim() : "";
+  await applyProxy(url);
+  writeProxyUrl(url);
+  return { proxyUrl: url };
+});
+
 const isInsideDist = (filePath) => filePath === DIST_ROOT || filePath.startsWith(`${DIST_ROOT}${path.sep}`);
 
 const resolveAppFile = (requestUrl) => {
@@ -495,6 +636,15 @@ const registerAppProtocol = () => {
 const openExternalUrl = (url) => {
   if (/^https?:\/\//i.test(url)) {
     void shell.openExternal(url);
+  }
+};
+
+const isFirebaseAuthPopupUrl = (urlValue) => {
+  try {
+    const url = new URL(urlValue);
+    return url.protocol === "https:" && url.hostname === FIREBASE_AUTH_HOST && url.pathname.startsWith("/__/auth/");
+  } catch {
+    return false;
   }
 };
 
@@ -528,6 +678,22 @@ const createMainWindow = () => {
     closeMainWindowAfterBackup();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isFirebaseAuthPopupUrl(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          width: 520,
+          height: 720,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+          },
+        },
+      };
+    }
     openExternalUrl(url);
     return { action: "deny" };
   });
@@ -557,9 +723,10 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     app.setAppUserModelId(APP_ID);
     registerAppProtocol();
+    await applyProxy(readProxyUrl());
     createMainWindow();
 
     if (dataPathSetup.status === "migrated") {

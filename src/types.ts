@@ -10,6 +10,7 @@ export type RecordReviewKind = "overview" | "memory";
 export type RecordReviewScheduler = "overview-v1" | "fsrs-v6" | "sm2-legacy";
 export type RecordReviewRating = "forgot" | "fuzzy" | "good" | "easy" | "remembered";
 export type RecordReviewStatus = "active" | "mastered" | "removed";
+export type RecordReviewEventType = "rating" | "added" | "reset" | "removed" | "kind-changed";
 export type ExportKind = "full-backup" | "subject-markdown" | "knowledge-json" | "plain-text";
 export type ImportProgressStage =
   | "choosing"
@@ -113,6 +114,8 @@ export interface RecordReviewFsrsCard {
 export interface RecordReviewLog extends BaseEntity {
   recordId: EntityId;
   rating: RecordReviewRating;
+  /** Non-rating operations are immutable sync events and are hidden from rating history. */
+  eventType?: RecordReviewEventType;
   normalizedRating?: Exclude<RecordReviewRating, "remembered">;
   reviewKind?: RecordReviewKind;
   scheduler?: RecordReviewScheduler;
@@ -132,6 +135,8 @@ export interface RecordReviewLog extends BaseEntity {
   previousTotalReviews?: number;
   previousFsrsCard?: RecordReviewFsrsCard;
   nextFsrsCard?: RecordReviewFsrsCard;
+  /** The event projection used to rebuild review state after merging cloud events. */
+  stateAfter?: RecordReviewState;
 }
 
 export interface RecordReviewUndoToken {
@@ -785,6 +790,39 @@ export interface StorageSnapshot {
   recordDrafts?: RecordDraft[];
 }
 
+export type CloudSyncEntityType =
+  | "entry"
+  | "block"
+  | "template"
+  | "draft"
+  | "tag"
+  | "study-session"
+  | "settings"
+  | "podcast"
+  | "asset"
+  | "review-state"
+  | "review-day-stat";
+
+/** Local-only cursor and device identity for the incremental cloud protocol. */
+export interface CloudSyncStateRecord {
+  id: "state";
+  deviceId: string;
+  userId?: string;
+  lastPulledRevision: number;
+  lastReviewEventRevision: number;
+  lastSyncedAt?: ISODateTime;
+}
+
+/** Local-only knowledge of the last cloud version of one synchronized entity. */
+export interface CloudSyncLedgerRecord {
+  id: string;
+  entityType: CloudSyncEntityType | "review-event";
+  entityId: string;
+  contentHash: string;
+  cloudRevision: number;
+  assetHash?: string;
+}
+
 export type BackupAssetMeta = Omit<Asset, "data">;
 
 export interface StreamableBackupSnapshot {
@@ -918,8 +956,10 @@ export interface StorageAdapter {
   commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary>;
   discardRecordTransfer(sessionId: string): Promise<void>;
   createSnapshot(): Promise<StorageSnapshot>;
+  createCloudSyncSnapshot(): Promise<StorageSnapshot>;
   createStreamableSnapshot(): Promise<StreamableBackupSnapshot>;
   restoreSnapshot(snapshot: StorageSnapshot): Promise<void>;
+  restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void>;
   restoreStreamableSnapshot(
     snapshot: StreamableBackupSnapshot,
     readAsset: StreamedAssetReader,

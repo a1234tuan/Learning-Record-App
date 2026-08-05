@@ -188,7 +188,7 @@ describe("DexieStorageAdapter record review invariants", () => {
     });
   });
 
-  it("updates the same-day rating without duplicating logs or stats", async () => {
+  it("keeps same-day rating corrections as immutable events while projecting one daily stat", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
 
     await adapter.rateRecordReview("record-1", "remembered", "2026-07-02T16:30:00.000Z", "旧评价");
@@ -199,8 +199,8 @@ describe("DexieStorageAdapter record review invariants", () => {
     expect(secondResult?.review.nextReviewDate).toBe("2026-07-04");
     expect(secondResult?.review.intervalDays).toBe(1);
     const logs = await fakeDb.recordReviewLogs.toArray();
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({
+    expect(logs).toHaveLength(2);
+    expect(logs.at(-1)).toMatchObject({
       rating: "forgot",
       normalizedRating: "forgot",
       evaluationText: "更新评价",
@@ -223,8 +223,8 @@ describe("DexieStorageAdapter record review invariants", () => {
     await adapter.rateRecordReview("record-1", "forgot", "2026-07-03T02:00:00.000Z");
 
     const logs = await fakeDb.recordReviewLogs.toArray();
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({
+    expect(logs).toHaveLength(2);
+    expect(logs.at(-1)).toMatchObject({
       rating: "forgot",
       evaluationText: "第一次评价",
     });
@@ -288,7 +288,7 @@ describe("DexieStorageAdapter record review invariants", () => {
     });
     expect(saved?.nextReviewDate).toBeDefined();
     expect(saved?.fsrsCard).toBeDefined();
-    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
+    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(2);
 
     const overview = await adapter.setRecordReviewKind("record-1", "overview");
     expect(overview).toMatchObject({
@@ -298,7 +298,18 @@ describe("DexieStorageAdapter record review invariants", () => {
       intervalDays: 1,
     });
     expect(overview?.fsrsCard).toBeUndefined();
-    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
+    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(3);
+  });
+
+  it("records reset and removal as replayable sync events", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()]);
+
+    await adapter.resetRecordReview("record-1");
+    await adapter.removeRecordFromReview("record-1");
+
+    const events = await fakeDb.recordReviewLogs.toArray();
+    expect(events.map((event) => event.eventType)).toEqual(["reset", "removed"]);
+    expect(events.at(-1)?.stateAfter?.status).toBe("removed");
   });
 
   it("uses FSRS state for memory reviews", async () => {

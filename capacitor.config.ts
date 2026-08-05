@@ -7,6 +7,13 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: "https",
   },
+  plugins: {
+    FirebaseAuthentication: {
+      // Cloud sync continues to use the Firebase JavaScript SDK for Firestore.
+      skipNativeAuth: true,
+      providers: ["google.com"],
+    },
+  },
 };
 
 export default config;

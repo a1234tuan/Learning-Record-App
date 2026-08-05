@@ -11,6 +11,9 @@ declare global {
   interface Window {
     studyJournalDesktop?: Readonly<{
       isDesktop: true;
+      auth: Readonly<{
+        signInWithGoogle: () => Promise<{ idToken: string }>;
+      }>;
       ocr: Readonly<{
         recognize: (options: {
           data: string;
@@ -44,6 +47,10 @@ declare global {
           region?: string;
           languageCode?: string;
         }) => Promise<{ data: string; mimeType?: string }>;
+      }>;
+      proxy: Readonly<{
+        getProxy: () => Promise<{ proxyUrl: string }>;
+        setProxy: (proxyUrl: string) => Promise<{ proxyUrl: string }>;
       }>;
       onBackupFlushRequested: (listener: (reason: "minimize" | "close") => Promise<void> | void) => () => void;
     }>;

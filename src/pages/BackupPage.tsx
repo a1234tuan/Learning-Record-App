@@ -11,6 +11,7 @@ import { manualZipSyncAdapter } from "../services/syncAdapters";
 import { isNativePlatform } from "../lib/platform";
 import { canUseNativeAutoBackup } from "../services/nativeAutoBackup";
 import { AutoBackupPanel } from "../components/AutoBackupPanel";
+import { CloudSyncPanel } from "../components/CloudSyncPanel";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { importRecordTransferPackage, parseRecordTransferPackage } from "../services/recordTransferService";
 
@@ -317,6 +318,8 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
         subtitle="完整备份、导入恢复和自动备份都在这里管理。"
         density="compact"
       />
+
+      <CloudSyncPanel onRestored={onRestored} />
 
       <section className="more-section backup-actions-section">
         <h2>完整备份</h2>
