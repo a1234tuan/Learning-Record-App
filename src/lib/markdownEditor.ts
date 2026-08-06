@@ -48,9 +48,49 @@ export const normalizeCodeLanguage = (language: string | null | undefined): stri
     case "javascript":
     case "node":
     case "nodejs":
+      return "javascript";
     case "ts":
     case "typescript":
-      return "javascript";
+      return "typescript";
+    case "sh":
+    case "shell":
+    case "bash":
+    case "zsh":
+      return "bash";
+    case "c":
+      return "c";
+    case "c#":
+    case "cs":
+    case "csharp":
+      return "csharp";
+    case "go":
+    case "golang":
+      return "go";
+    case "rs":
+    case "rust":
+      return "rust";
+    case "sql":
+      return "sql";
+    case "json":
+      return "json";
+    case "html":
+    case "xml":
+      return "xml";
+    case "css":
+      return "css";
+    case "kotlin":
+    case "kt":
+      return "kotlin";
+    case "swift":
+      return "swift";
+    case "php":
+      return "php";
+    case "ruby":
+    case "rb":
+      return "ruby";
+    case "yaml":
+    case "yml":
+      return "yaml";
     default:
       return normalized;
   }

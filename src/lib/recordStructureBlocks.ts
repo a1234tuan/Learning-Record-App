@@ -1,6 +1,6 @@
 import { newId } from "./entity";
 
-export type StructureBlockKind = "diagram" | "comparison" | "sticky" | "collapse";
+export type StructureBlockKind = "diagram" | "comparison" | "sticky" | "collapse" | "mermaid";
 
 export interface StructureDiagramNode {
   id: string;

@@ -7,7 +7,8 @@ export type LinearNode =
   | { kind: "asset"; ref: RecordAssetRef; asset?: Asset; ocrText?: string }
   | { kind: "formula"; formula: RecordFormula; inline: boolean }
   | { kind: "highlight"; text: string; markdown: string }
-  | { kind: "structure"; text: string; markdown: string };
+  | { kind: "structure"; text: string; markdown: string }
+  | { kind: "mermaid"; text: string; markdown: string };
 
 type RecordContentSyncOptions = {
   preserveLegacyRefs?: boolean;
@@ -73,7 +74,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|inline-math|reference|tab|structure-diagram|comparison-table|sticky-board|collapse|highlight-block)\b/i.test(contentHtml);
+  /<record-(asset|formula|inline-math|reference|tab|structure-diagram|comparison-table|sticky-board|collapse|highlight-block|mermaid-diagram)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -287,6 +288,15 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
         });
         continue;
       }
+      if (tag === "record-mermaid-diagram") {
+        const source = element.getAttribute("data-source") ?? "";
+        nodes.push({
+          kind: "mermaid",
+          text: source,
+          markdown: ["```mermaid", source, "```"].join("\n"),
+        });
+        continue;
+      }
     }
 
     const wrapper = document.createElement("div");
@@ -315,6 +325,9 @@ export const recordToPlainText = (record: RecordBlock, assets: Asset[] = []): st
         return node.text;
       }
       if (node.kind === "highlight") {
+        return node.text;
+      }
+      if (node.kind === "mermaid") {
         return node.text;
       }
       const assetLabel = [node.ref.title, node.asset?.title, node.asset?.fileName].filter(Boolean).join(" / ");
@@ -346,6 +359,9 @@ export const recordToLinearMarkdown = (record: RecordBlock, assets: Asset[] = []
         return node.markdown;
       }
       if (node.kind === "highlight") {
+        return node.markdown;
+      }
+      if (node.kind === "mermaid") {
         return node.markdown;
       }
       const assetName = node.asset?.fileName ?? node.ref.title;

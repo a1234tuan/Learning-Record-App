@@ -13,10 +13,25 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { createLowlight } from "lowlight";
+import bash from "highlight.js/lib/languages/bash";
+import c from "highlight.js/lib/languages/c";
 import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import css from "highlight.js/lib/languages/css";
+import go from "highlight.js/lib/languages/go";
 import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import php from "highlight.js/lib/languages/php";
 import python from "highlight.js/lib/languages/python";
+import ruby from "highlight.js/lib/languages/ruby";
+import rust from "highlight.js/lib/languages/rust";
+import sql from "highlight.js/lib/languages/sql";
+import swift from "highlight.js/lib/languages/swift";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import { RecordAssetNode, RecordFormulaNode, RecordInlineMathNode, RecordReferenceNode, RecordTabStopNode, type RecordReferenceTarget } from "./RecordEditorNodes";
 import { ImageLightbox } from "./ImageLightbox";
 import { RecordReferencePicker } from "./RecordReferencePicker";
@@ -26,6 +41,7 @@ import {
   RecordStickyBoardNode,
   RecordStructureDiagramNode,
 } from "./RecordStructureNodes";
+import { RecordMermaidNode } from "./RecordMermaidNode";
 import {
   highlightToneOptions,
   normalizeHighlightTone,
@@ -60,19 +76,49 @@ import {
 import type { RecordAssetRef, RecordBlock, SubjectConfig } from "../types";
 
 const lowlight = createLowlight();
+lowlight.register("bash", bash);
+lowlight.register("c", c);
 lowlight.register("cpp", cpp);
+lowlight.register("csharp", csharp);
+lowlight.register("css", css);
+lowlight.register("go", go);
 lowlight.register("java", java);
 lowlight.register("javascript", javascript);
+lowlight.register("json", json);
+lowlight.register("kotlin", kotlin);
+lowlight.register("php", php);
 lowlight.register("python", python);
+lowlight.register("ruby", ruby);
+lowlight.register("rust", rust);
+lowlight.register("sql", sql);
+lowlight.register("swift", swift);
+lowlight.register("typescript", typescript);
+lowlight.register("xml", xml);
+lowlight.register("yaml", yaml);
 
 const HIGHLIGHT_MENU_WIDTH = 188;
 const HIGHLIGHT_MENU_ESTIMATED_HEIGHT = 142;
 const codeLanguageOptions = [
   { value: "", label: "纯文本" },
-  { value: "cpp", label: "C++" },
-  { value: "java", label: "Java" },
-  { value: "python", label: "Python" },
   { value: "javascript", label: "JavaScript" },
+  { value: "typescript", label: "TypeScript" },
+  { value: "python", label: "Python" },
+  { value: "java", label: "Java" },
+  { value: "cpp", label: "C++" },
+  { value: "c", label: "C" },
+  { value: "csharp", label: "C#" },
+  { value: "go", label: "Go" },
+  { value: "rust", label: "Rust" },
+  { value: "kotlin", label: "Kotlin" },
+  { value: "swift", label: "Swift" },
+  { value: "php", label: "PHP" },
+  { value: "ruby", label: "Ruby" },
+  { value: "sql", label: "SQL" },
+  { value: "bash", label: "Bash" },
+  { value: "json", label: "JSON" },
+  { value: "yaml", label: "YAML" },
+  { value: "xml", label: "HTML/XML" },
+  { value: "css", label: "CSS" },
 ];
 
 type QueuedRecordImage = RecordAssetRef & {
@@ -1454,6 +1500,7 @@ export const RichTextEditor = ({
       RecordComparisonTableNode,
       RecordStickyBoardNode,
       RecordCollapseBlockNode,
+      RecordMermaidNode,
       RecordHighlightBlockNode,
       TrailingEditableParagraph,
       DesktopEditorShortcuts,

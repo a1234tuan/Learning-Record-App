@@ -331,10 +331,10 @@ const appendRecord = (state: ContextBuildState, record: RecordBlock, assets: Ass
   let nodeIndex = 0;
   for (const node of nodes) {
     nodeIndex += 1;
-    if (node.kind === "text" || node.kind === "structure" || node.kind === "highlight") {
+    if (node.kind === "text" || node.kind === "structure" || node.kind === "highlight" || node.kind === "mermaid") {
       const markdown = normalizeText(node.markdown ?? node.text);
       const parts = splitText(node.text);
-      const label = node.kind === "structure" ? "结构块" : node.kind === "highlight" ? "高亮块" : "正文";
+      const label = node.kind === "structure" ? "结构块" : node.kind === "highlight" ? "高亮块" : node.kind === "mermaid" ? "流程图" : "正文";
       for (const [partIndex, part] of parts.entries()) {
         pushChunk(state, {
           chunkId: `${record.id}-${node.kind}-${nodeIndex}-${partIndex + 1}`,

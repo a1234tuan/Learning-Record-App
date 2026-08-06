@@ -24,6 +24,7 @@ import {
   serializeStructureData,
   type StructureBlockKind,
 } from "../lib/recordStructureBlocks";
+import { DEFAULT_MERMAID_SOURCE } from "../components/RecordMermaidNode";
 import {
   canUseNativeAudioRecorder,
   getNativeAudioRecordingStatus,
@@ -99,6 +100,11 @@ const structureBlockNode = (kind: StructureBlockKind): Record<string, unknown> =
         type: "recordCollapseBlock",
         attrs: { title: "折叠块", summary: "", defaultOpen: false, autofocusSummary: true },
         content: [{ type: "paragraph" }],
+      };
+    case "mermaid":
+      return {
+        type: "recordMermaidDiagram",
+        attrs: { source: DEFAULT_MERMAID_SOURCE },
       };
   }
 };

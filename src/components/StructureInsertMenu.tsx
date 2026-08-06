@@ -1,4 +1,4 @@
-import { ChevronDown, Rows3, SquareStack, StickyNote, Workflow } from "lucide-react";
+import { ChevronDown, GitBranch, Rows3, SquareStack, StickyNote, Workflow } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -15,6 +15,7 @@ const options: Array<{ kind: StructureBlockKind; label: string; description: str
   { kind: "comparison", label: "对照表", description: "概念、作用、类比、易错点", icon: Rows3 },
   { kind: "sticky", label: "便签板", description: "脑暴、疑问、例子", icon: StickyNote },
   { kind: "collapse", label: "折叠块", description: "先回忆，后展开验证", icon: SquareStack },
+  { kind: "mermaid", label: "流程图", description: "Mermaid 流程图/时序图", icon: GitBranch },
 ];
 
 const POPOVER_WIDTH = 260;

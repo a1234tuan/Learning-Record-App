@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Asset, RecordBlock } from "../types";
 import {
   extractRecordRefsFromContent,
+  hasLinearRecordNodes,
   normalizeRecordContent,
   renameRecordAssetTitle,
   recordToLinearMarkdown,
@@ -254,5 +255,26 @@ describe("recordContent", () => {
     expect(text).toContain("可搜索");
     expect(markdown).toContain("浅粉色高亮");
     expect(markdown).toContain("> 重点结论");
+  });
+
+  it("recognizes mermaid diagrams as linear nodes and exports the raw source", () => {
+    const source = "graph TD\n  A[开始] --> B[结束]";
+    const mermaidRecord = {
+      ...record,
+      assets: [],
+      formulas: [],
+      contentHtml: `<p>前文</p><record-mermaid-diagram data-source="${source.replace(/\n/g, "&#10;")}"></record-mermaid-diagram><p>后文</p>`,
+    };
+
+    expect(hasLinearRecordNodes(mermaidRecord.contentHtml)).toBe(true);
+
+    const text = recordToPlainText(mermaidRecord);
+    const markdown = recordToLinearMarkdown(mermaidRecord);
+
+    expect(text).toContain("graph TD");
+    expect(text).toContain("A[开始] --> B[结束]");
+    expect(markdown).toContain("```mermaid");
+    expect(markdown).toContain("graph TD");
+    expect(markdown).toContain("```");
   });
 });

@@ -9,6 +9,7 @@ import { StructureInsertMenu } from "../components/StructureInsertMenu";
 import { ActionButton, ListRow, PageHeader, SurfaceCard } from "../components/ui";
 import { createBaseEntity, newId } from "../lib/entity";
 import { createDefaultComparisonTable, createDefaultStructureDiagram, createDefaultStickyBoard, serializeStructureData, type StructureBlockKind } from "../lib/recordStructureBlocks";
+import { DEFAULT_MERMAID_SOURCE } from "../components/RecordMermaidNode";
 
 interface TemplateLibraryPageProps {
   templates: readonly ContentTemplate[];
@@ -30,6 +31,8 @@ const structureBlockNode = (kind: StructureBlockKind): Record<string, unknown> =
       return { type: "recordStickyBoard", attrs: { data: serializeStructureData(createDefaultStickyBoard()) } };
     case "collapse":
       return { type: "recordCollapseBlock", attrs: { title: "折叠块", summary: "", defaultOpen: false, autofocusSummary: true }, content: [{ type: "paragraph" }] };
+    case "mermaid":
+      return { type: "recordMermaidDiagram", attrs: { source: DEFAULT_MERMAID_SOURCE } };
   }
 };
 

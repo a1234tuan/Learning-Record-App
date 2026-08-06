@@ -255,7 +255,7 @@ describe("DexieStorageAdapter record review invariants", () => {
     expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([]);
   });
 
-  it("keeps successful overview reviews active instead of auto-mastering them", async () => {
+  it("masters an overview card after five consecutive successful reviews", async () => {
     const { adapter } = await loadAdapter([
       record(),
     ], [
@@ -268,8 +268,8 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     const saved = await adapter.rateRecordReview("record-1", "good", "2026-07-03T01:30:00.000Z");
 
-    expect(saved?.review.status).toBe("active");
-    expect(saved?.review.nextReviewDate).toBe("2026-07-24");
+    expect(saved?.review.status).toBe("mastered");
+    expect(saved?.review.nextReviewDate).toBeUndefined();
     expect(saved?.review.consecutiveRemembered).toBe(5);
     expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([]);
   });
