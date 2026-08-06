@@ -390,6 +390,18 @@ const writeInBatches = async (writes: Array<(batch: WriteBatch) => void>) => {
 };
 
 const ASSET_UPLOAD_CONCURRENCY = 5;
+const ASSET_UPLOAD_TIMEOUT_MS = 120_000;
+const METADATA_CHECK_TIMEOUT_MS = 30_000;
+
+const withTimeout = <T>(promise: Promise<T>, ms: number, message: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+};
 
 const uploadAssets = async (
   uid: string,
@@ -405,7 +417,7 @@ const uploadAssets = async (
     await Promise.all(
       hashes.map(async (hash) => {
         try {
-          await getMetadata(assetRef(uid, hash));
+          await withTimeout(getMetadata(assetRef(uid, hash)), METADATA_CHECK_TIMEOUT_MS, "检查云端资源超时，请检查网络连接后重试。");
           return null;
         } catch (e) {
           if ((e as { code?: string }).code !== "storage/object-not-found") throw e;
@@ -415,14 +427,16 @@ const uploadAssets = async (
     )
   ).filter((h): h is string => h !== null);
   let transferred = 0;
-  for (let i = 0; i < missing.length; i += ASSET_UPLOAD_CONCURRENCY) {
+  const total = missing.length;
+  let completed = 0;
+  for (let i = 0; i < total; i += ASSET_UPLOAD_CONCURRENCY) {
     await Promise.all(
       missing.slice(i, i + ASSET_UPLOAD_CONCURRENCY).map(async (hash) => {
         const blob = assetBlobs.get(hash);
         if (!blob) throw new Error("本地资源缓存不完整，无法同步。");
         const task = uploadBytesResumable(assetRef(uid, hash), blob, { contentType: blob.type || "application/octet-stream" });
         let taskTransferred = 0;
-        await new Promise<void>((resolve, reject) => task.on("state_changed", (snapshot) => {
+        const uploadPromise = new Promise<void>((resolve, reject) => task.on("state_changed", (snapshot) => {
           // Firebase reports bytesTransferred as a cumulative value for this
           // upload task. Add only the delta from the previous callback; adding
           // the cumulative value repeatedly makes a 90 MB upload look like
@@ -430,8 +444,11 @@ const uploadAssets = async (
           const delta = Math.max(0, snapshot.bytesTransferred - taskTransferred);
           taskTransferred = Math.max(taskTransferred, snapshot.bytesTransferred);
           transferred += delta;
-          progress(options, "uploading", `正在上传资源 ${(transferred / (1024 * 1024)).toFixed(1)} MB。`);
+          progress(options, "uploading", `正在上传资源 ${completed + 1}/${total}（${(transferred / (1024 * 1024)).toFixed(1)} MB）。`);
         }, reject, resolve));
+        await withTimeout(uploadPromise, ASSET_UPLOAD_TIMEOUT_MS, `资源上传超时（${completed + 1}/${total}），请确认网络可连接 Firebase Storage 后重试。`);
+        completed++;
+        progress(options, "uploading", `正在上传资源 ${completed}/${total}（${(transferred / (1024 * 1024)).toFixed(1)} MB）。`);
       }),
     );
   }
@@ -866,11 +883,13 @@ export const resolveCloudSyncConflict = async (
     progress(options, "done", "已以本机数据更新云端。");
     return { kind: "synced", uploaded: result.uploaded, downloaded: 0, revision: result.revision, pending: 0 };
   }
+  progress(options, "snapshot", "正在导出本机数据准备恢复点。");
   const localExport = await exportCloudSync(await storage.createCloudSyncSnapshot());
   const lock = await acquireLock(user.uid, state.deviceId);
   let lockReleased = false;
   try {
     const remote = await getRemoteState(user.uid);
+    progress(options, "snapshot", `正在上传本机恢复快照（共 ${localExport.assetBlobs.size} 个资源）。`);
     await makeLocalSnapshot(user, localExport, "冲突前的本机版本", remote.state.headRevision, options);
     const restored = await restoreRemote(user.uid, options).catch(async (error: unknown) => {
       const legacy = await getCloudSnapshotInfo(user.uid);
