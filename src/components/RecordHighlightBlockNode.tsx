@@ -240,6 +240,29 @@ export const RecordHighlightBlockNode = TiptapNode.create({
     return ["record-highlight-block", mergeAttributes(HTMLAttributes), 0];
   },
 
+  addKeyboardShortcuts() {
+    return {
+      Backspace: () => {
+        const { state } = this.editor;
+        const { selection } = state;
+        if (!selection.empty) return false;
+        const { $from } = selection;
+        if ($from.parentOffset !== 0) return false;
+        if ($from.parent.type.name !== "paragraph") return false;
+        const depth = $from.depth - 1;
+        if (depth < 0) return false;
+        const block = $from.node(depth);
+        if (block.type.name !== this.name) return false;
+        if (block.childCount !== 1 || $from.parent.childCount !== 0) return false;
+        const pos = $from.before(depth);
+        return this.editor.chain().command(({ tr }) => {
+          tr.delete(pos, pos + block.nodeSize);
+          return true;
+        }).run();
+      },
+    };
+  },
+
   addNodeView() {
     return ReactNodeViewRenderer(RecordHighlightBlockView);
   },

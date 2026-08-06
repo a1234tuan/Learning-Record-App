@@ -734,8 +734,7 @@ button:disabled {
 
 /* The editor normalizes these containers to end in a real empty paragraph. */
 .rich-editor > p:last-child,
-.collapse-block-content > p:last-child,
-.highlight-block-content > p:last-child {
+.collapse-block-content > p:last-child {
   min-block-size: 1.55em;
 }
 
@@ -4901,7 +4900,7 @@ button:disabled {
   max-inline-size: 100%;
   inline-size: 100%;
   margin: 12px 0;
-  padding: 12px 12px 12px 14px;
+  padding: 8px 12px 8px 14px;
   border: 1px solid #ddd3c2;
   border: 1px solid var(--border);
   border-left-width: 4px;
@@ -5051,7 +5050,12 @@ button:disabled {
 }
 
 .highlight-block-content p:last-child {
+  margin-top: 0;
   margin-bottom: 0;
+}
+
+.highlight-block-content > p:last-child > br.ProseMirror-trailingBreak:only-child {
+  display: none;
 }
 
 .structure-block {
