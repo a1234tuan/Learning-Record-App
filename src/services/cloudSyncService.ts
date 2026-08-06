@@ -28,6 +28,7 @@ import {
   hashValue,
   materializeCloudSyncSnapshot,
   mergeCloudSyncEntities,
+  NON_CONFLICTING_ENTITY_TYPES,
   withCloudPayloadDocument,
   type CloudReviewEvent,
   type CloudSyncEntity,
@@ -819,8 +820,8 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
     const remoteChanges = remote.exists ? await getRemoteChanges(user.uid, state.lastPulledRevision, remote.state) : { entities: [], reviewEvents: [] };
     const changed = await localChanges(restored ? await exportCloudSync(await storage.createCloudSyncSnapshot()) : initialExport, ledger);
     const normalLocal = (firstEmptyDevice ? [] : changed.entities)
-      .filter((entity) => entity.entityType !== "review-state" && entity.entityType !== "review-day-stat");
-    const normalRemote = remoteChanges.entities.filter((entity) => entity.entityType !== "review-state" && entity.entityType !== "review-day-stat");
+      .filter((entity) => !NON_CONFLICTING_ENTITY_TYPES.has(entity.entityType));
+    const normalRemote = remoteChanges.entities.filter((entity) => !NON_CONFLICTING_ENTITY_TYPES.has(entity.entityType));
     const localKeys = new Set(normalLocal.map((e) => e.key));
     const hasConflict = normalLocal.length > 0 && normalRemote.some((e) => localKeys.has(e.key));
     if (hasConflict) {

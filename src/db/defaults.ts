@@ -1,4 +1,4 @@
-import type { AiPromptPreset, AppSettings, Block, DayEntry } from "../types";
+import type { AiPromptPreset, AppSettings, AutoBackupSettings, Block, DayEntry } from "../types";
 import { createBaseEntity, newId } from "../lib/entity";
 import { nowISO, todayISO } from "../lib/date";
 import { createDefaultSubjects, DEFAULT_SUBJECT, nextRecordTitle } from "../lib/subjects";
@@ -156,6 +156,11 @@ export const isCodeBiasedDefaultAiPresetSet = (presets: AiPromptPreset[] | undef
   );
 };
 
+export const DEFAULT_AUTO_BACKUP_STATE: AutoBackupSettings = {
+  enabled: false,
+  debounceMs: 600_000,
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
   id: "settings",
   examDate: DEFAULT_EXAM_DATE,
@@ -165,10 +170,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontScale: 1,
   lineHeight: 1.7,
   subjects: createDefaultSubjects(),
-  autoBackup: {
-    enabled: false,
-    debounceMs: 600_000,
-  },
   ai: {
     currentProviderId: "default",
     providers: createDefaultAiProviders().map((provider) => ({ ...provider, id: "default" })),

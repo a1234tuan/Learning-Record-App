@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppSettings,
   Asset,
+  AutoBackupSettings,
   Block,
   ContentTemplate,
   DayEntry,
@@ -43,6 +44,7 @@ export const useAppData = () => {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [templates, setTemplates] = useState<ContentTemplate[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [autoBackupState, setAutoBackupState] = useState<AutoBackupSettings | null>(null);
   const [podcasts, setPodcasts] = useState<KnowledgePodcast[]>([]);
   const [deletedRecords, setDeletedRecords] = useState<RecordBlock[]>([]);
   const [recordReviews, setRecordReviews] = useState<RecordReviewState[]>([]);
@@ -52,7 +54,7 @@ export const useAppData = () => {
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList] = await Promise.all([
+    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList, currentAutoBackupState] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.listTemplates(),
@@ -64,11 +66,13 @@ export const useAppData = () => {
       storage.listRecordReviewLogs(),
       storage.getRecordReviewStats(todayISO()),
       storage.listKnowledgePodcasts?.() ?? Promise.resolve([]),
+      storage.getAutoBackupState(),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
     setTemplates(templateList);
     setSettings(currentSettings);
+    setAutoBackupState(currentAutoBackupState);
     setAssets(assetList);
     setDeletedRecords(deletedList);
     setRecordReviews(reviewList);
@@ -584,6 +588,7 @@ export const useAppData = () => {
     assets,
     templates,
     settings,
+    autoBackupState,
     podcasts,
     deletedRecords,
     recordReviews,

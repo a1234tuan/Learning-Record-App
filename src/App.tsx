@@ -898,7 +898,7 @@ export const App = () => {
           />
         );
       case "backup":
-        return <BackupPage settings={settings} onRestored={app.refresh} />;
+        return <BackupPage settings={settings} autoBackupState={app.autoBackupState ?? { enabled: false, debounceMs: 600_000 }} onRestored={app.refresh} />;
       case "aiExport":
         return <AiExportPage onBack={popCurrentTabDepth} />;
       case "aiTools":
@@ -1007,6 +1007,7 @@ export const App = () => {
             onOpenTemplates={() => openMoreSubRoute("templates")}
             onOpenGuide={() => openMoreSubRoute("guide")}
             settings={settings}
+            autoBackupState={app.autoBackupState ?? undefined}
           />
         );
     }

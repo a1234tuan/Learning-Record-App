@@ -1,10 +1,9 @@
 import { BarChart3, BookOpen, BrainCircuit, Download, FileText, Headphones, LayoutTemplate, Mic2, Settings, Trash2 } from "lucide-react";
 
-import type { AppSettings } from "../types";
+import type { AppSettings, AutoBackupSettings } from "../types";
 import { createDefaultAiPresets } from "../db/defaults";
 import { getCurrentAiProvider, normalizeAiConfig } from "../lib/aiProviders";
 import { formatBytes } from "../lib/format";
-import { getAutoBackupSettings } from "../services/autoBackupService";
 import { ListRow, PageHeader } from "../components/ui";
 
 interface MorePageProps {
@@ -19,22 +18,21 @@ interface MorePageProps {
   onOpenTemplates: () => void;
   onOpenGuide: () => void;
   settings: AppSettings;
+  autoBackupState?: AutoBackupSettings;
 }
 
 const formatBackupTime = (value?: string): string =>
   value ? new Date(value).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "尚未备份";
 
-const buildBackupMeta = (settings: AppSettings): string => {
-  const autoBackup = getAutoBackupSettings(settings);
-  const state = autoBackup?.enabled ? "已开启" : "未开启";
-  const time = formatBackupTime(autoBackup?.lastBackupAt);
-  const size = autoBackup?.lastBackupSize ? ` · ${formatBytes(autoBackup.lastBackupSize)}` : "";
-  return `${state} · ${time}${size}`;
+const buildBackupMeta = (state?: AutoBackupSettings): string => {
+  const enabled = state?.enabled ? "已开启" : "未开启";
+  const time = formatBackupTime(state?.lastBackupAt);
+  const size = state?.lastBackupSize ? ` · ${formatBytes(state.lastBackupSize)}` : "";
+  return `${enabled} · ${time}${size}`;
 };
 
-const buildBackupDescription = (settings: AppSettings): string => {
-  const autoBackup = getAutoBackupSettings(settings);
-  return autoBackup?.folderName ? `备份位置：${autoBackup.folderName}` : "管理数据备份、恢复导入和自动备份设置";
+const buildBackupDescription = (state?: AutoBackupSettings): string => {
+  return state?.folderName ? `备份位置：${state.folderName}` : "管理数据备份、恢复导入和自动备份设置";
 };
 
 const buildAiMeta = (settings: AppSettings): string => {
@@ -63,6 +61,7 @@ export const MorePage = ({
   onOpenTemplates,
   onOpenGuide,
   settings,
+  autoBackupState,
 }: MorePageProps) => (
   <main className="page more-page">
     <PageHeader
@@ -125,8 +124,8 @@ export const MorePage = ({
           className="more-summary-row"
           icon={<Download size={19} />}
           title="备份与恢复"
-          description={buildBackupDescription(settings)}
-          meta={buildBackupMeta(settings)}
+          description={buildBackupDescription(autoBackupState)}
+          meta={buildBackupMeta(autoBackupState)}
           onClick={onOpenBackup}
         />
         <ListRow icon={<Trash2 size={19} />} title="回收站" description="恢复或永久删除 30 天内的记录" onClick={onOpenTrash} />

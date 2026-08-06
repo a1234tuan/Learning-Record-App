@@ -1,51 +1,25 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AppSettings } from "../types";
+import type { AutoBackupSettings } from "../types";
 import { bindAutoBackupFolder, flushAutoBackupNow } from "../services/autoBackupService";
 import { AutoBackupPanel } from "./AutoBackupPanel";
 
 vi.mock("../services/autoBackupService", () => ({
   bindAutoBackupFolder: vi.fn(),
   flushAutoBackupNow: vi.fn(),
-  getAutoBackupSettings: (settings: AppSettings) => ({
-    enabled: settings.autoBackup?.enabled ?? false,
-    debounceMs: settings.autoBackup?.debounceMs ?? 600_000,
-    folderName: settings.autoBackup?.folderName,
-    backupFormat: settings.autoBackup?.backupFormat,
-    lastBackupAt: settings.autoBackup?.lastBackupAt,
-    lastBackupSize: settings.autoBackup?.lastBackupSize,
-    lastBackupBytesWritten: settings.autoBackup?.lastBackupBytesWritten,
-    lastBackupRepositorySize: settings.autoBackup?.lastBackupRepositorySize,
-    lastBackupAssetCount: settings.autoBackup?.lastBackupAssetCount,
-    lastBackupSnapshotId: settings.autoBackup?.lastBackupSnapshotId,
-    lastBackupFileName: settings.autoBackup?.lastBackupFileName,
-    lastBackupWarning: settings.autoBackup?.lastBackupWarning,
-    lastError: settings.autoBackup?.lastError,
-  }),
   setAutoBackupEnabled: vi.fn(),
 }));
 
-const settings = (
+const state = (
   lastError?: string,
-  autoBackup: Partial<NonNullable<AppSettings["autoBackup"]>> = {},
-): AppSettings => ({
-  id: "settings",
-  examDate: "2026-12-27",
-  theme: "system",
-  accentColor: "#2f6f5e",
-  backupReminderDays: 7,
-  fontScale: 1,
-  lineHeight: 1.7,
-  subjects: [],
-  autoBackup: {
-    enabled: true,
-    folderName: "backup",
-    debounceMs: 600_000,
-    lastError,
-    ...autoBackup,
-  },
-  schemaVersion: 4,
+  patch: Partial<AutoBackupSettings> = {},
+): AutoBackupSettings => ({
+  enabled: true,
+  folderName: "backup",
+  debounceMs: 600_000,
+  lastError,
+  ...patch,
 });
 
 describe("AutoBackupPanel", () => {
@@ -54,9 +28,9 @@ describe("AutoBackupPanel", () => {
   });
 
   it("binds a folder without immediately syncing current local data", async () => {
-    vi.mocked(bindAutoBackupFolder).mockResolvedValueOnce(settings(undefined, { enabled: false, folderName: "old-backup" }));
+    vi.mocked(bindAutoBackupFolder).mockResolvedValueOnce(state(undefined, { enabled: false, folderName: "old-backup" }));
 
-    render(<AutoBackupPanel settings={settings(undefined, { enabled: false })} onChanged={vi.fn()} />);
+    render(<AutoBackupPanel autoBackupState={state(undefined, { enabled: false })} onChanged={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /绑定备份文件夹/ }));
 
@@ -69,9 +43,9 @@ describe("AutoBackupPanel", () => {
   });
 
   it("shows the sync error instead of a success message when flush reports a backup error", async () => {
-    vi.mocked(flushAutoBackupNow).mockResolvedValueOnce(settings("自动备份写入结果为空。"));
+    vi.mocked(flushAutoBackupNow).mockResolvedValueOnce(state("自动备份写入结果为空。"));
 
-    render(<AutoBackupPanel settings={settings()} onChanged={vi.fn()} />);
+    render(<AutoBackupPanel autoBackupState={state()} onChanged={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));
 
@@ -84,7 +58,7 @@ describe("AutoBackupPanel", () => {
   it("shows the verified backup file name from the latest successful sync", () => {
     render(
       <AutoBackupPanel
-        settings={settings(undefined, {
+        autoBackupState={state(undefined, {
           lastBackupAt: "2026-06-21T01:00:00.000Z",
           lastBackupSize: 1234,
           lastBackupFileName: "study-journal-latest (1).zip",
@@ -101,7 +75,7 @@ describe("AutoBackupPanel", () => {
   it("shows repository backup fields after a successful Android incremental backup", () => {
     render(
       <AutoBackupPanel
-        settings={settings(undefined, {
+        autoBackupState={state(undefined, {
           backupFormat: "folder-repository-v1",
           lastBackupAt: "2026-06-21T01:00:00.000Z",
           lastBackupSize: 9_000,

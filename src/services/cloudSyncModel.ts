@@ -41,6 +41,15 @@ export interface CloudSyncExport {
   assetBlobs: Map<string, Blob>;
 }
 
+/**
+ * Entity types excluded from cross-device conflict detection because their
+ * content changes on its own (review scheduling state, or settings fields
+ * like autoBackup bookkeeping) without representing a genuine user edit.
+ * Touching one of these on both sides should never force a manual "keep
+ * local or cloud" choice — whichever side syncs last simply wins.
+ */
+export const NON_CONFLICTING_ENTITY_TYPES = new Set<CloudSyncEntityType>(["review-state", "review-day-stat", "settings"]);
+
 type JsonRecord = Record<string, unknown>;
 
 export const CLOUD_DOCUMENT_THRESHOLD_BYTES = 750 * 1024;

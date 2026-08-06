@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { RecordBlock, StorageSnapshot } from "../types";
+import type { CloudSyncEntityType, RecordBlock, StorageSnapshot } from "../types";
 import {
   CLOUD_DOCUMENT_THRESHOLD_BYTES,
   createCloudPayloadDocument,
@@ -8,6 +8,7 @@ import {
   hashValue,
   materializeCloudSyncSnapshot,
   mergeCloudSyncEntities,
+  NON_CONFLICTING_ENTITY_TYPES,
   withCloudPayloadDocument,
 } from "./cloudSyncModel";
 
@@ -116,11 +117,13 @@ describe("cloud sync model", () => {
 });
 
 describe("per-entity-key conflict detection", () => {
-  const ent = (key: string) => ({ key });
+  const ent = (key: string, entityType: CloudSyncEntityType = "block") => ({ key, entityType });
 
-  const detectConflict = (local: { key: string }[], remote: { key: string }[]) => {
-    const localKeys = new Set(local.map((e) => e.key));
-    return local.length > 0 && remote.some((e) => localKeys.has(e.key));
+  const detectConflict = (local: { key: string; entityType: CloudSyncEntityType }[], remote: { key: string; entityType: CloudSyncEntityType }[]) => {
+    const normalLocal = local.filter((e) => !NON_CONFLICTING_ENTITY_TYPES.has(e.entityType));
+    const normalRemote = remote.filter((e) => !NON_CONFLICTING_ENTITY_TYPES.has(e.entityType));
+    const localKeys = new Set(normalLocal.map((e) => e.key));
+    return normalLocal.length > 0 && normalRemote.some((e) => localKeys.has(e.key));
   };
 
   it("no conflict when both sides edit entirely different entities", () => {
@@ -143,6 +146,27 @@ describe("per-entity-key conflict detection", () => {
     expect(detectConflict(
       [ent("block:x"), ent("block:y")],
       [ent("block:z"), ent("block:y")],
+    )).toBe(true);
+  });
+
+  it("no conflict when only settings is touched on both sides (e.g. autoBackup bookkeeping)", () => {
+    expect(detectConflict(
+      [ent("settings:settings", "settings")],
+      [ent("settings:settings", "settings")],
+    )).toBe(false);
+  });
+
+  it("no conflict when only review-state/review-day-stat overlap on both sides", () => {
+    expect(detectConflict(
+      [ent("review-state:r1", "review-state"), ent("review-day-stat:2026-08-05", "review-day-stat")],
+      [ent("review-state:r1", "review-state"), ent("review-day-stat:2026-08-05", "review-day-stat")],
+    )).toBe(false);
+  });
+
+  it("still conflicts on a real content overlap even if settings also overlaps", () => {
+    expect(detectConflict(
+      [ent("block:a"), ent("settings:settings", "settings")],
+      [ent("block:a"), ent("settings:settings", "settings")],
     )).toBe(true);
   });
 });

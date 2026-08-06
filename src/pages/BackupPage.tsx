@@ -1,7 +1,7 @@
 import { CheckSquare, DatabaseBackup, Download, FileArchive, Square, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { AppSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary, RecordTransferPackage } from "../types";
+import type { AppSettings, AutoBackupSettings, ExportKind, ExportProgress, ImportProgress, ImportSummary, RecordTransferPackage } from "../types";
 import { exportFullBackupFromStorage } from "../services/knowledgeExportService";
 import { importAndRestoreSnapshot } from "../services/importRestoreService";
 import { nativeBackupAdapter, pickNativeZipFile } from "../services/nativeBackupAdapter";
@@ -17,6 +17,7 @@ import { importRecordTransferPackage, parseRecordTransferPackage } from "../serv
 
 interface BackupPageProps {
   settings: AppSettings;
+  autoBackupState: AutoBackupSettings;
   onRestored: () => Promise<void> | void;
 }
 
@@ -76,7 +77,7 @@ const ImportStatusCard = ({ status }: { status: ImportStatus }) => {
   );
 };
 
-export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
+export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPageProps) => {
   const [message, setMessage] = useState("");
   const [importStatus, setImportStatus] = useState<ImportStatus>({ state: "idle" });
   const [busy, setBusy] = useState<ExportKind | "import" | "repository-import" | "record-transfer-parse" | "record-transfer-import" | null>(null);
@@ -439,7 +440,7 @@ export const BackupPage = ({ settings, onRestored }: BackupPageProps) => {
         )}
       </section>
 
-      <AutoBackupPanel settings={settings} onChanged={onRestored} />
+      <AutoBackupPanel autoBackupState={autoBackupState} onChanged={onRestored} />
 
       {busy && <p className="status-message">正在处理，请稍等...</p>}
       {message && <p className="status-message">{message}</p>}

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AppSettings, StorageAdapter, StorageSnapshot } from "../types";
+import type { AutoBackupSettings, StorageAdapter, StorageSnapshot } from "../types";
 import type { AutoBackupAdapter, AutoBackupWriteResult } from "./autoBackupAdapter";
 import {
   bindAutoBackupFolder,
@@ -12,25 +12,14 @@ import {
 
 const stamp = "2026-06-21T00:00:00.000Z";
 
-const settings = (
+const autoBackupState = (
   enabled = true,
-  autoBackup: Partial<NonNullable<AppSettings["autoBackup"]>> = {},
-): AppSettings => ({
-  id: "settings",
-  examDate: "2026-12-27",
-  theme: "system",
-  accentColor: "#2f6f5e",
-  backupReminderDays: 7,
-  fontScale: 1,
-  lineHeight: 1.7,
-  subjects: [],
-  autoBackup: {
-    enabled,
-    folderName: "backup",
-    debounceMs: 600_000,
-    ...autoBackup,
-  },
-  schemaVersion: 3,
+  patch: Partial<AutoBackupSettings> = {},
+): AutoBackupSettings => ({
+  enabled,
+  folderName: "backup",
+  debounceMs: 600_000,
+  ...patch,
 });
 
 const snapshot: StorageSnapshot = {
@@ -48,17 +37,39 @@ const snapshot: StorageSnapshot = {
     tags: [],
     reviews: [],
     studySessions: [],
-    settings: settings(),
+    settings: {
+      id: "settings",
+      examDate: "2026-12-27",
+      theme: "system",
+      accentColor: "#2f6f5e",
+      backupReminderDays: 7,
+      fontScale: 1,
+      lineHeight: 1.7,
+      subjects: [],
+      schemaVersion: 3,
+    },
   },
   assets: [],
 };
 
-const makeStore = (initial = settings()): StorageAdapter => {
+const makeStore = (initial = autoBackupState()): StorageAdapter => {
   let current = initial;
   return {
     initialize: vi.fn(),
-    getSettings: vi.fn(async () => current),
-    saveSettings: vi.fn(async (next: AppSettings) => {
+    getSettings: vi.fn(async () => ({
+      id: "settings",
+      examDate: "2026-12-27",
+      theme: "system" as const,
+      accentColor: "#2f6f5e",
+      backupReminderDays: 7,
+      fontScale: 1,
+      lineHeight: 1.7,
+      subjects: [],
+      schemaVersion: 3 as const,
+    })),
+    saveSettings: vi.fn(async () => undefined),
+    getAutoBackupState: vi.fn(async () => current),
+    saveAutoBackupState: vi.fn(async (next: AutoBackupSettings) => {
       current = next;
     }),
     getOrCreateEntry: vi.fn(),
@@ -134,27 +145,25 @@ describe("autoBackupService", () => {
       lastModified: new Date("2026-06-21T00:59:00.000Z").getTime(),
     });
 
-    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+    const next = await flushAutoBackupNow("manual", adapter, store);
 
     expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
-    expect(nextSettings.autoBackup?.lastBackupSize).toBe(1234);
-    expect(nextSettings.autoBackup?.lastBackupFileName).toBe("study-journal-latest.zip");
-    expect(nextSettings.autoBackup?.lastBackupUri).toBe("content://backup/latest");
-    expect(nextSettings.autoBackup?.lastBackupVerifiedAt).toBe("2026-06-21T01:00:00.000Z");
-    expect(nextSettings.autoBackup?.lastBackupFileModifiedAt).toBe("2026-06-21T00:59:00.000Z");
-    expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
-      autoBackup: expect.objectContaining({ lastBackupSize: 1234 }),
-    }));
+    expect(next.lastBackupSize).toBe(1234);
+    expect(next.lastBackupFileName).toBe("study-journal-latest.zip");
+    expect(next.lastBackupUri).toBe("content://backup/latest");
+    expect(next.lastBackupVerifiedAt).toBe("2026-06-21T01:00:00.000Z");
+    expect(next.lastBackupFileModifiedAt).toBe("2026-06-21T00:59:00.000Z");
+    expect(store.saveAutoBackupState).toHaveBeenCalledWith(expect.objectContaining({ lastBackupSize: 1234 }));
   });
 
   it("app-start flush writes once when automatic backup is enabled", async () => {
     const store = makeStore();
     const adapter = makeAdapter(true, { folderName: "backup", size: 4321 });
 
-    const nextSettings = await flushAutoBackupNow("app-start", adapter, store);
+    const next = await flushAutoBackupNow("app-start", adapter, store);
 
     expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
-    expect(nextSettings.autoBackup?.lastBackupSize).toBe(4321);
+    expect(next.lastBackupSize).toBe(4321);
   });
 
   it("records the provider's actual file name and warning when native verification reports a renamed file", async () => {
@@ -166,11 +175,11 @@ describe("autoBackupService", () => {
       warning: "系统文件提供器返回的实际文件名不是 study-journal-latest.zip，请在备份文件夹中查找：study-journal-latest (1).zip",
     });
 
-    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+    const next = await flushAutoBackupNow("manual", adapter, store);
 
-    expect(nextSettings.autoBackup?.lastBackupFileName).toBe("study-journal-latest (1).zip");
-    expect(nextSettings.autoBackup?.lastBackupWarning).toContain("study-journal-latest (1).zip");
-    expect(nextSettings.autoBackup?.lastError).toBeUndefined();
+    expect(next.lastBackupFileName).toBe("study-journal-latest (1).zip");
+    expect(next.lastBackupWarning).toContain("study-journal-latest (1).zip");
+    expect(next.lastError).toBeUndefined();
   });
 
   it("persists repository backup metadata from Android incremental sync", async () => {
@@ -186,9 +195,9 @@ describe("autoBackupService", () => {
       displayName: "study-journal-backup",
     });
 
-    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+    const next = await flushAutoBackupNow("manual", adapter, store);
 
-    expect(nextSettings.autoBackup).toEqual(expect.objectContaining({
+    expect(next).toMatchObject({
       backupFormat: "folder-repository-v1",
       lastBackupSize: 12_345,
       lastBackupBytesWritten: 456,
@@ -197,22 +206,22 @@ describe("autoBackupService", () => {
       lastBackupSnapshotId: "20260621T010000000Z",
       lastBackupFileName: "study-journal-backup",
       lastError: undefined,
-    }));
+    });
   });
 
   it("does not advance last backup time when the write result is empty", async () => {
     const previousBackupAt = "2026-06-20T00:00:00.000Z";
-    const store = makeStore(settings(true, { lastBackupAt: previousBackupAt, lastBackupSize: 999 }));
+    const store = makeStore(autoBackupState(true, { lastBackupAt: previousBackupAt, lastBackupSize: 999 }));
     const adapter = makeAdapter(true, { folderName: "backup", size: 0 });
 
-    const nextSettings = await flushAutoBackupNow("manual", adapter, store);
+    const next = await flushAutoBackupNow("manual", adapter, store);
 
-    expect(nextSettings.autoBackup?.lastBackupAt).toBe(previousBackupAt);
-    expect(nextSettings.autoBackup?.lastBackupSize).toBe(999);
-    expect(nextSettings.autoBackup?.lastError).toBe("自动备份写入结果为空。");
+    expect(next.lastBackupAt).toBe(previousBackupAt);
+    expect(next.lastBackupSize).toBe(999);
+    expect(next.lastError).toBe("自动备份写入结果为空。");
   });
 
-  it("waits for an in-flight flush instead of returning stale settings", async () => {
+  it("waits for an in-flight flush instead of returning stale state", async () => {
     let resolveWrite: (value: AutoBackupWriteResult) => void = () => undefined;
     const writePromise = new Promise<AutoBackupWriteResult>((resolve) => {
       resolveWrite = resolve;
@@ -231,8 +240,8 @@ describe("autoBackupService", () => {
     resolveWrite({ folderName: "backup", size: 2222 });
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
-    expect(firstResult.autoBackup?.lastBackupSize).toBe(2222);
-    expect(secondResult.autoBackup?.lastBackupSize).toBe(2222);
+    expect(firstResult.lastBackupSize).toBe(2222);
+    expect(secondResult.lastBackupSize).toBe(2222);
     expect(adapter.writeLatest).toHaveBeenCalledTimes(1);
   });
 
@@ -243,35 +252,36 @@ describe("autoBackupService", () => {
     await flushAutoBackupNow("manual", adapter, store);
 
     expect(adapter.writeLatest).not.toHaveBeenCalled();
-    expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
-      autoBackup: expect.objectContaining({ lastError: "尚未绑定自动备份文件夹。" }),
+    expect(store.saveAutoBackupState).toHaveBeenCalledWith(expect.objectContaining({
+      lastError: "尚未绑定自动备份文件夹。",
     }));
   });
 
   it("binds a folder without forcing automatic writes on for a fresh install", async () => {
-    const store = makeStore(settings(false));
+    const store = makeStore(autoBackupState(false));
     const adapter = makeAdapter();
 
-    const nextSettings = await bindAutoBackupFolder(adapter, store);
+    const next = await bindAutoBackupFolder(adapter, store);
 
-    expect(store.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
-      autoBackup: expect.objectContaining({ enabled: false, folderName: "backup" }),
+    expect(store.saveAutoBackupState).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: false,
+      folderName: "backup",
     }));
-    expect(nextSettings.autoBackup?.enabled).toBe(false);
+    expect(next.enabled).toBe(false);
   });
 
   it("keeps automatic writes enabled when rebinding an already enabled folder", async () => {
-    const store = makeStore(settings(true));
+    const store = makeStore(autoBackupState(true));
     const adapter = makeAdapter();
 
-    const nextSettings = await bindAutoBackupFolder(adapter, store);
+    const next = await bindAutoBackupFolder(adapter, store);
 
-    expect(nextSettings.autoBackup?.enabled).toBe(true);
-    expect(nextSettings.autoBackup?.folderName).toBe("backup");
+    expect(next.enabled).toBe(true);
+    expect(next.folderName).toBe("backup");
   });
 
   it("rejects enabling when no adapter is available", async () => {
-    const store = makeStore(settings(false));
+    const store = makeStore(autoBackupState(false));
     const adapter = { ...makeAdapter(), isAvailable: vi.fn(() => false) };
 
     await expect(setAutoBackupEnabled(true, adapter, store)).rejects.toThrow("不支持自动备份");

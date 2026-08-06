@@ -311,6 +311,9 @@ export interface AutoBackupSettings {
   debounceMs: number;
 }
 
+/** Stored in a local-only Dexie table, never synced to the cloud. */
+export type AutoBackupStateRecord = AutoBackupSettings & { id: "autoBackup" };
+
 export interface AiPromptPreset extends BaseEntity {
   title: string;
   prompt: string;
@@ -728,7 +731,6 @@ export interface AppSettings {
   fontScale: number;
   lineHeight: number;
   subjects?: SubjectConfig[];
-  autoBackup?: AutoBackupSettings;
   ai?: AiProviderConfig;
   tts?: TtsProviderConfig;
   knowledgePodcastModeTemplates?: KnowledgePodcastModeTemplate[];
@@ -901,6 +903,8 @@ export interface StorageAdapter {
   initialize(): Promise<void>;
   getSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
+  getAutoBackupState(): Promise<AutoBackupSettings>;
+  saveAutoBackupState(state: AutoBackupSettings): Promise<void>;
   saveSubjects(subjects: SubjectConfig[]): Promise<void>;
   renameSubject(oldName: Subject, newName: Subject): Promise<void>;
   getOrCreateEntry(date: ISODate): Promise<DayEntry>;

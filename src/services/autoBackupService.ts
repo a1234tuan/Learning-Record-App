@@ -1,41 +1,38 @@
-import type { AppSettings, StorageAdapter } from "../types";
+import type { AutoBackupSettings, StorageAdapter } from "../types";
 import { nowISO } from "../lib/date";
 import { autoBackupAdapter, type AutoBackupAdapter } from "./autoBackupAdapter";
 import { storage } from "./storageAdapter";
 
 const DEFAULT_DEBOUNCE_MS = 600_000;
 
-let runningPromise: Promise<AppSettings> | undefined;
+let runningPromise: Promise<AutoBackupSettings> | undefined;
 let dirtyTimer: number | undefined;
 let dirtyGeneration = 0;
 let suspended = false;
 
-const withAutoBackupDefaults = (settings: AppSettings): AppSettings => ({
-  ...settings,
-  autoBackup: {
-    enabled: settings.autoBackup?.enabled ?? false,
-    debounceMs: settings.autoBackup?.debounceMs ?? DEFAULT_DEBOUNCE_MS,
-    folderName: settings.autoBackup?.folderName,
-    backupFormat: settings.autoBackup?.backupFormat,
-    lastBackupAt: settings.autoBackup?.lastBackupAt,
-    lastBackupSize: settings.autoBackup?.lastBackupSize,
-    lastBackupBytesWritten: settings.autoBackup?.lastBackupBytesWritten,
-    lastBackupRepositorySize: settings.autoBackup?.lastBackupRepositorySize,
-    lastBackupAssetCount: settings.autoBackup?.lastBackupAssetCount,
-    lastBackupSnapshotId: settings.autoBackup?.lastBackupSnapshotId,
-    lastBackupFileName: settings.autoBackup?.lastBackupFileName,
-    lastBackupUri: settings.autoBackup?.lastBackupUri,
-    lastBackupVerifiedAt: settings.autoBackup?.lastBackupVerifiedAt,
-    lastBackupFileModifiedAt: settings.autoBackup?.lastBackupFileModifiedAt,
-    lastBackupWarning: settings.autoBackup?.lastBackupWarning,
-    lastError: settings.autoBackup?.lastError,
-  },
+const withAutoBackupDefaults = (state: AutoBackupSettings): AutoBackupSettings => ({
+  enabled: state.enabled ?? false,
+  debounceMs: state.debounceMs ?? DEFAULT_DEBOUNCE_MS,
+  folderName: state.folderName,
+  backupFormat: state.backupFormat,
+  lastBackupAt: state.lastBackupAt,
+  lastBackupSize: state.lastBackupSize,
+  lastBackupBytesWritten: state.lastBackupBytesWritten,
+  lastBackupRepositorySize: state.lastBackupRepositorySize,
+  lastBackupAssetCount: state.lastBackupAssetCount,
+  lastBackupSnapshotId: state.lastBackupSnapshotId,
+  lastBackupFileName: state.lastBackupFileName,
+  lastBackupUri: state.lastBackupUri,
+  lastBackupVerifiedAt: state.lastBackupVerifiedAt,
+  lastBackupFileModifiedAt: state.lastBackupFileModifiedAt,
+  lastBackupWarning: state.lastBackupWarning,
+  lastError: state.lastError,
 });
 
-export const getAutoBackupSettings = (settings: AppSettings) => withAutoBackupDefaults(settings).autoBackup;
+export const getAutoBackupSettings = (state: AutoBackupSettings): AutoBackupSettings => withAutoBackupDefaults(state);
 
-const currentAutoBackup = (settings: AppSettings) =>
-  withAutoBackupDefaults(settings).autoBackup ?? { enabled: false, debounceMs: DEFAULT_DEBOUNCE_MS };
+const currentAutoBackup = (state: AutoBackupSettings): AutoBackupSettings =>
+  withAutoBackupDefaults(state);
 
 const ensureValidWriteResult = (result: { size: number }) => {
   if (!Number.isFinite(result.size) || result.size <= 0) {
@@ -54,113 +51,98 @@ export const setAutoBackupEnabled = async (
   enabled: boolean,
   adapter: AutoBackupAdapter = autoBackupAdapter,
   store: StorageAdapter = storage,
-): Promise<AppSettings> => {
-  const settings = withAutoBackupDefaults(await store.getSettings());
+): Promise<AutoBackupSettings> => {
+  const state = withAutoBackupDefaults(await store.getAutoBackupState());
   if (enabled && !adapter.isAvailable()) {
     throw new Error("当前环境不支持自动备份文件夹绑定，请使用手动导出 zip。");
   }
-  const nextSettings: AppSettings = {
-    ...settings,
-    autoBackup: {
-      ...currentAutoBackup(settings),
-      enabled,
-      lastError: enabled ? settings.autoBackup?.lastError : undefined,
-    },
+  const next: AutoBackupSettings = {
+    ...currentAutoBackup(state),
+    enabled,
+    lastError: enabled ? state.lastError : undefined,
   };
-  await store.saveSettings(nextSettings);
-  return nextSettings;
+  await store.saveAutoBackupState(next);
+  return next;
 };
 
 export const bindAutoBackupFolder = async (
   adapter: AutoBackupAdapter = autoBackupAdapter,
   store: StorageAdapter = storage,
-): Promise<AppSettings> => {
+): Promise<AutoBackupSettings> => {
   if (!adapter.isAvailable()) {
     throw new Error("当前环境不支持自动备份文件夹绑定，请使用手动导出 zip。");
   }
   const bound = await adapter.bindFolder();
-  const settings = withAutoBackupDefaults(await store.getSettings());
-  const nextSettings: AppSettings = {
-    ...settings,
-    autoBackup: {
-      ...currentAutoBackup(settings),
-      enabled: settings.autoBackup?.enabled ?? false,
-      folderName: bound.folderName,
-      lastError: undefined,
-    },
+  const state = withAutoBackupDefaults(await store.getAutoBackupState());
+  const next: AutoBackupSettings = {
+    ...currentAutoBackup(state),
+    enabled: state.enabled ?? false,
+    folderName: bound.folderName,
+    lastError: undefined,
   };
-  await store.saveSettings(nextSettings);
-  return nextSettings;
+  await store.saveAutoBackupState(next);
+  return next;
 };
 
 export const flushAutoBackupNow = async (
   reason = "manual",
   adapter: AutoBackupAdapter = autoBackupAdapter,
   store: StorageAdapter = storage,
-): Promise<AppSettings> => {
+): Promise<AutoBackupSettings> => {
   void reason;
   if (suspended) {
-    return withAutoBackupDefaults(await store.getSettings());
+    return withAutoBackupDefaults(await store.getAutoBackupState());
   }
   if (runningPromise) {
     return runningPromise;
   }
 
   runningPromise = (async () => {
-    const settings = withAutoBackupDefaults(await store.getSettings());
-    if (!settings.autoBackup?.enabled) {
-      return settings;
+    const state = withAutoBackupDefaults(await store.getAutoBackupState());
+    if (!state.enabled) {
+      return state;
     }
 
     const bound = await adapter.isBound();
     if (!bound.bound) {
-      const nextSettings: AppSettings = {
-        ...settings,
-        autoBackup: {
-          ...currentAutoBackup(settings),
-          lastError: "尚未绑定自动备份文件夹。",
-        },
+      const next: AutoBackupSettings = {
+        ...currentAutoBackup(state),
+        lastError: "尚未绑定自动备份文件夹。",
       };
-      await store.saveSettings(nextSettings);
-      return nextSettings;
+      await store.saveAutoBackupState(next);
+      return next;
     }
 
     try {
       const result = await adapter.writeLatest(store);
       ensureValidWriteResult(result);
-      const nextSettings: AppSettings = {
-        ...settings,
-        autoBackup: {
-          ...currentAutoBackup(settings),
-          enabled: true,
-          folderName: result.folderName ?? bound.folderName ?? settings.autoBackup.folderName,
-          backupFormat: result.format ?? "zip-latest",
-          lastBackupAt: nowISO(),
-          lastBackupSize: result.size,
-          lastBackupBytesWritten: result.bytesWritten,
-          lastBackupRepositorySize: result.repositorySize,
-          lastBackupAssetCount: result.assetCount,
-          lastBackupSnapshotId: result.snapshotId,
-          lastBackupFileName: result.displayName ?? "study-journal-latest.zip",
-          lastBackupUri: result.uri,
-          lastBackupVerifiedAt: timestampToISO(result.verifiedAt) ?? nowISO(),
-          lastBackupFileModifiedAt: timestampToISO(result.lastModified),
-          lastBackupWarning: result.warning,
-          lastError: undefined,
-        },
+      const next: AutoBackupSettings = {
+        ...currentAutoBackup(state),
+        enabled: true,
+        folderName: result.folderName ?? bound.folderName ?? state.folderName,
+        backupFormat: result.format ?? "zip-latest",
+        lastBackupAt: nowISO(),
+        lastBackupSize: result.size,
+        lastBackupBytesWritten: result.bytesWritten,
+        lastBackupRepositorySize: result.repositorySize,
+        lastBackupAssetCount: result.assetCount,
+        lastBackupSnapshotId: result.snapshotId,
+        lastBackupFileName: result.displayName ?? "study-journal-latest.zip",
+        lastBackupUri: result.uri,
+        lastBackupVerifiedAt: timestampToISO(result.verifiedAt) ?? nowISO(),
+        lastBackupFileModifiedAt: timestampToISO(result.lastModified),
+        lastBackupWarning: result.warning,
+        lastError: undefined,
       };
-      await store.saveSettings(nextSettings);
-      return nextSettings;
+      await store.saveAutoBackupState(next);
+      return next;
     } catch (error) {
-      const nextSettings: AppSettings = {
-        ...settings,
-        autoBackup: {
-          ...currentAutoBackup(settings),
-          lastError: error instanceof Error ? error.message : "自动备份失败。",
-        },
+      const next: AutoBackupSettings = {
+        ...currentAutoBackup(state),
+        lastError: error instanceof Error ? error.message : "自动备份失败。",
       };
-      await store.saveSettings(nextSettings);
-      return nextSettings;
+      await store.saveAutoBackupState(next);
+      return next;
     }
   })();
 
@@ -180,11 +162,11 @@ export const markAutoBackupDirty = async (
   if (suspended) {
     return;
   }
-  if (typeof store.getSettings !== "function") {
+  if (typeof store.getAutoBackupState !== "function") {
     return;
   }
-  const settings = withAutoBackupDefaults(await store.getSettings());
-  if (!settings.autoBackup?.enabled) {
+  const state = withAutoBackupDefaults(await store.getAutoBackupState());
+  if (!state.enabled) {
     return;
   }
   dirtyGeneration += 1;
@@ -197,7 +179,7 @@ export const markAutoBackupDirty = async (
     if (!suspended && generation === dirtyGeneration) {
       void flushAutoBackupNow("dirty", adapter, store);
     }
-  }, Math.max(1_000, settings.autoBackup.debounceMs ?? DEFAULT_DEBOUNCE_MS));
+  }, Math.max(1_000, state.debounceMs ?? DEFAULT_DEBOUNCE_MS));
 };
 
 export const setAutoBackupSuspended = (value: boolean): void => {

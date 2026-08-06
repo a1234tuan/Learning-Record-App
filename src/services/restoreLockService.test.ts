@@ -1,26 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AppSettings, StorageAdapter } from "../types";
+import type { AutoBackupSettings, StorageAdapter } from "../types";
 import type { AutoBackupAdapter } from "./autoBackupAdapter";
 import { flushAutoBackupNow } from "./autoBackupService";
 import { isRestoreInProgress, setRestoreInProgress, withRestoreLock } from "./restoreLockService";
 
-const settings: AppSettings = {
-  id: "settings",
-  examDate: "2026-12-27",
-  theme: "system",
-  accentColor: "#2f6f5e",
-  backupReminderDays: 7,
-  fontScale: 1,
-  lineHeight: 1.7,
-  subjects: [],
-  autoBackup: { enabled: true, debounceMs: 600_000, folderName: "backup" },
-  schemaVersion: 4,
+const autoBackupState: AutoBackupSettings = {
+  enabled: true,
+  debounceMs: 600_000,
+  folderName: "backup",
 };
 
 const store = {
-  getSettings: vi.fn(async () => settings),
-  saveSettings: vi.fn(async () => undefined),
+  getAutoBackupState: vi.fn(async () => autoBackupState),
+  saveAutoBackupState: vi.fn(async () => undefined),
 } as unknown as StorageAdapter;
 
 const adapter = {

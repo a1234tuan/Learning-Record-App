@@ -7,6 +7,7 @@ import type {
   AiSecret,
   AppSettings,
   Asset,
+  AutoBackupSettings,
   BackupAssetMeta,
   Block,
   ContentTemplate,
@@ -39,6 +40,7 @@ import type {
 import { db } from "../db/database";
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_AUTO_BACKUP_STATE,
   DEFAULT_TAGS,
   createDayEntry,
   isCodeBiasedDefaultAiPresetSet,
@@ -267,6 +269,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateSettingsToDynamicSubjects();
     await this.migrateAiSettings();
     await this.migrateTtsSettings();
+    await this.migrateAutoBackupToLocalTable();
     await this.purgeMistakeAndReviewData();
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
@@ -615,6 +618,31 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   async saveSettings(settings: AppSettings): Promise<void> {
     await db.settings.put(ensureSettingsSubjects(settings, await this.recordBlocks()));
+  }
+
+  async getAutoBackupState(): Promise<AutoBackupSettings> {
+    const row = await db.autoBackupState.get("autoBackup");
+    if (row) {
+      const { id: _id, ...state } = row;
+      return state;
+    }
+    return { ...DEFAULT_AUTO_BACKUP_STATE };
+  }
+
+  async saveAutoBackupState(state: AutoBackupSettings): Promise<void> {
+    await db.autoBackupState.put({ id: "autoBackup", ...state });
+  }
+
+  private async migrateAutoBackupToLocalTable(): Promise<void> {
+    const existing = await db.autoBackupState.get("autoBackup");
+    if (existing) return;
+    const settings = await db.settings.get("settings") as (AppSettings & { autoBackup?: AutoBackupSettings }) | undefined;
+    if (!settings) return;
+    const legacy = settings.autoBackup;
+    if (!legacy) return;
+    await db.autoBackupState.put({ id: "autoBackup", ...legacy });
+    const { autoBackup: _removed, ...stripped } = settings as typeof settings & { autoBackup?: unknown };
+    await db.settings.put(stripped as AppSettings);
   }
 
   async saveSubjects(subjects: SubjectConfig[]): Promise<void> {
