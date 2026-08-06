@@ -6,6 +6,7 @@ import * as pmView from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import { redoDepth, undoDepth } from "@tiptap/pm/history";
 import { TextSelection, type SelectionBookmark, type Transaction } from "@tiptap/pm/state";
+import { search as searchPlugin } from "prosemirror-search";
 import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, Redo2, Undo2, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -48,6 +49,7 @@ import {
   RecordHighlightBlockNode,
   type HighlightTone,
 } from "./RecordHighlightBlockNode";
+import { SearchReplacePanel } from "./SearchReplacePanel";
 import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosition";
 import { createPortal } from "react-dom";
 import {
@@ -405,6 +407,14 @@ const DesktopEditorShortcuts = Extension.create({
   },
 });
 
+const SearchReplaceExtension = Extension.create({
+  name: "searchReplace",
+
+  addProseMirrorPlugins() {
+    return [searchPlugin()];
+  },
+});
+
 const keepDesktopSelectionAboveViewportBottom = (view: EditorView): boolean => {
   if (!isDesktopPlatform() || !view.hasFocus() || view.composing) {
     return false;
@@ -684,6 +694,9 @@ interface RichTextEditorProps {
   referenceRecords?: readonly RecordBlock[];
   referenceSubjects?: readonly SubjectConfig[];
   onOpenRecordReference?: (recordId: string) => void;
+  findReplaceOpen?: boolean;
+  onFindReplaceOpen?: () => void;
+  onFindReplaceClose?: () => void;
 }
 
 const rawMarkdownChunkNode = (source: string): JSONContent => {
@@ -848,6 +861,9 @@ export const RichTextEditor = ({
   referenceRecords = [],
   referenceSubjects = [],
   onOpenRecordReference,
+  findReplaceOpen = false,
+  onFindReplaceOpen,
+  onFindReplaceClose,
 }: RichTextEditorProps) => {
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
   const historyAvailabilityRef = useRef(historyAvailability);
@@ -856,6 +872,7 @@ export const RichTextEditor = ({
   const recordReferenceTargetsRef = useRef<Map<string, RecordReferenceTarget>>(recordReferenceTargetMap(referenceRecords));
   const recordReferenceListenersRef = useRef(new Set<() => void>());
   const onOpenRecordReferenceRef = useRef(onOpenRecordReference);
+  const onFindReplaceOpenRef = useRef(onFindReplaceOpen);
   const editorViewRef = useRef<EditorView | undefined>();
   const editorInstanceRef = useRef<Editor | undefined>();
   const currentRecordIdRef = useRef(currentRecordId);
@@ -903,6 +920,9 @@ export const RichTextEditor = ({
   useEffect(() => {
     onOpenRecordReferenceRef.current = onOpenRecordReference;
   }, [onOpenRecordReference]);
+  useEffect(() => {
+    onFindReplaceOpenRef.current = onFindReplaceOpen;
+  }, [onFindReplaceOpen]);
 
   const openImageGallery = useCallback((assetRef: RecordAssetRef, position: number) => {
     const currentEditor = editorInstanceRef.current;
@@ -1504,6 +1524,7 @@ export const RichTextEditor = ({
       RecordHighlightBlockNode,
       TrailingEditableParagraph,
       DesktopEditorShortcuts,
+      SearchReplaceExtension,
       MarkdownPasteConversionExtension.configure({
         onCancel: () => cancelMarkdownPasteConversion(),
       }),
@@ -1531,6 +1552,11 @@ export const RichTextEditor = ({
           return false;
         },
         keydown: (view, event) => {
+          if (isDesktopPlatform() && (event as KeyboardEvent).key === "f" && ((event as KeyboardEvent).ctrlKey || (event as KeyboardEvent).metaKey)) {
+            event.preventDefault();
+            onFindReplaceOpenRef.current?.();
+            return true;
+          }
           if (bulkMarkdownConversionRef.current || pasteAnchorRef.current || (isNativePlatform() && ANDROID_IME_SESSION_CANCEL_KEYS.has((event as KeyboardEvent).key))) {
             cancelPendingPaste(view);
           }
@@ -1869,6 +1895,9 @@ export const RichTextEditor = ({
             </button>
           )}
         </div>
+      )}
+      {findReplaceOpen && editor && (
+        <SearchReplacePanel editor={editor} readOnly={readOnly} onClose={() => onFindReplaceClose?.()} />
       )}
       <EditorContent editor={editor} />
       {imageGallery && (

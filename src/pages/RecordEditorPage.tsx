@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Star, Trash2, Volume2, X } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Search, Star, Trash2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
@@ -154,6 +154,7 @@ export const RecordEditorPage = ({
   const [draftLoading, setDraftLoading] = useState(true);
   const interactionLocked = restoreLocked || draftLoading;
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [editingTagIndex, setEditingTagIndex] = useState<number | null>(null);
   const recordIdRef = useRef(record.id);
@@ -185,6 +186,23 @@ export const RecordEditorPage = ({
   useEffect(() => {
     initialEditingRef.current = initialEditing;
   }, [initialEditing]);
+
+  useEffect(() => {
+    if (!isDesktopPlatform()) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "f") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+      if (event.key === "Escape" && searchOpen) {
+        setSearchOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [searchOpen]);
 
   const setEditing = useCallback(
     (nextEditing: boolean) => {
@@ -735,6 +753,16 @@ export const RecordEditorPage = ({
             <button type="button" className="icon-button danger collapsible-action" onClick={() => void remove()} disabled={saving || interactionLocked} aria-label="删除记录">
               <Trash2 size={18} />
             </button>
+            {isDesktopPlatform() && (
+              <button
+                type="button"
+                className={`icon-button${searchOpen ? " active" : ""}`}
+                aria-label="查找替换"
+                onClick={() => setSearchOpen((o) => !o)}
+              >
+                <Search size={18} />
+              </button>
+            )}
             <div className="record-more-actions">
               <button
                 type="button"
@@ -748,6 +776,12 @@ export const RecordEditorPage = ({
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
+                  {!isDesktopPlatform() && (
+                    <button type="button" onClick={() => { setSearchOpen(true); closeMoreActions(); }}>
+                      <Search size={16} />
+                      查找替换
+                    </button>
+                  )}
                   {draftRestored && (
                     <button type="button" onClick={() => void discardDraft().finally(closeMoreActions)} disabled={saving || interactionLocked}>
                       <RotateCcw size={16} />
@@ -774,11 +808,11 @@ export const RecordEditorPage = ({
                       {exporting ? "导出中..." : "导出此日志"}
                     </button>
                   )}
-                   <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving || interactionLocked}>
+                  <button type="button" onClick={() => void Promise.resolve(toggleFavorite()).finally(closeMoreActions)} disabled={saving || interactionLocked}>
                     <Star size={16} fill={record.favorite ? "currentColor" : "none"} />
                     {record.favorite ? "取消收藏" : "收藏记录"}
                   </button>
-                   <button type="button" className="danger" onClick={() => void remove().finally(closeMoreActions)} disabled={saving || interactionLocked}>
+                  <button type="button" className="danger" onClick={() => void remove().finally(closeMoreActions)} disabled={saving || interactionLocked}>
                     <Trash2 size={16} />
                     删除记录
                   </button>
@@ -814,6 +848,16 @@ export const RecordEditorPage = ({
             >
               <Star size={18} fill={record.favorite ? "currentColor" : "none"} />
             </button>
+            {isDesktopPlatform() && (
+              <button
+                type="button"
+                className={`icon-button${searchOpen ? " active" : ""}`}
+                aria-label="查找"
+                onClick={() => setSearchOpen((o) => !o)}
+              >
+                <Search size={18} />
+              </button>
+            )}
             <div className="record-more-actions">
               <button
                 type="button"
@@ -826,6 +870,12 @@ export const RecordEditorPage = ({
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
+                  {!isDesktopPlatform() && (
+                    <button type="button" onClick={() => { setSearchOpen(true); closeMoreActions(); }}>
+                      <Search size={16} />
+                      查找
+                    </button>
+                  )}
                   {onAddToReview && (
                     <button
                       type="button"
@@ -920,6 +970,9 @@ export const RecordEditorPage = ({
             currentRecordId={record.id}
             referenceRecords={referenceRecords}
             referenceSubjects={subjects}
+            findReplaceOpen={searchOpen}
+            onFindReplaceOpen={() => setSearchOpen(true)}
+            onFindReplaceClose={() => setSearchOpen(false)}
             renderInsertTools={(editor) => {
               editorRef.current = editor;
               return (
@@ -1012,6 +1065,9 @@ export const RecordEditorPage = ({
             referenceRecords={referenceRecords}
             referenceSubjects={subjects}
             onOpenRecordReference={onOpenRecordReference}
+            findReplaceOpen={searchOpen}
+            onFindReplaceOpen={() => setSearchOpen(true)}
+            onFindReplaceClose={() => setSearchOpen(false)}
           />
           {exportMessage && <p className="status-message">{exportMessage}</p>}
           {(reviewState || reviewLogs.length > 0) && (
