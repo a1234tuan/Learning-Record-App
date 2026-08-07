@@ -36,6 +36,7 @@ import {
 } from "./cloudSyncModel";
 import { storage } from "./storageAdapter";
 import { snapshotToZip, summarizeSnapshot, zipToSnapshot } from "./backup";
+import { downloadNativeFirebaseStorageBlob } from "./nativeFirebaseStorage";
 
 const PROTOCOL_VERSION = 2;
 const MAX_BATCH_WRITES = 400;
@@ -125,6 +126,9 @@ const legacySnapshotRef = (uid: string) => ref(firebaseStorage, `users/${uid}/${
 const getCloudStorageBlob = async (uid: string, storageRef: StorageReference): Promise<Blob> => {
   const desktopStorage = isDesktopPlatform() ? window.studyJournalDesktop?.firebaseStorage : undefined;
   const user = firebaseAuth.currentUser;
+  if (isNativePlatform() && user?.uid === uid) {
+    return downloadNativeFirebaseStorageBlob(storageRef.fullPath, await user.getIdToken());
+  }
   if (!desktopStorage || !user || user.uid !== uid) {
     return getBlob(storageRef);
   }
@@ -134,6 +138,22 @@ const getCloudStorageBlob = async (uid: string, storageRef: StorageReference): P
 
 const progress = (options: CloudSyncOptions, stage: CloudSyncProgress["stage"], message: string, current?: number, total?: number) =>
   options.onProgress?.({ stage, message, current, total });
+
+/**
+ * Firebase's web SDK can leave a request pending indefinitely after a proxy/network change in
+ * Android WebView. Surface a useful error instead of relying on the UI watchdog to guess why the
+ * operation stopped. This does not cancel the underlying SDK request, so callers must still avoid
+ * mutating local state until the raced promise has resolved.
+ */
+const withTimeout = <T>(promise: PromiseLike<T>, ms: number, message: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+};
 
 const parseLegacySnapshotInfo = (value: unknown): CloudSnapshotInfo | undefined => {
   if (!value || typeof value !== "object") return undefined;
@@ -269,7 +289,12 @@ const hydratePayloadDocuments = async <T extends CloudSyncEntity>(uid: string, e
     if (entity.deleted || !documentHash) return entity;
     const index = documents.findIndex((item) => item.key === entity.key) + 1;
     progress(options, "downloading", `正在下载大文本 ${index}/${documents.length}。`, index, documents.length);
-    const content = await (await getCloudStorageBlob(uid, documentRef(uid, documentHash))).text();
+    const blob = await withTimeout(
+      getCloudStorageBlob(uid, documentRef(uid, documentHash)),
+      ASSET_DOWNLOAD_TIMEOUT_MS,
+      `下载云端大文本超时（${index}/${documents.length}），请确认网络可连接 Firebase Storage 后重试。`,
+    );
+    const content = await blob.text();
     let payload: unknown;
     try {
       payload = JSON.parse(content);
@@ -393,16 +418,6 @@ const ASSET_UPLOAD_CONCURRENCY = 5;
 const ASSET_UPLOAD_TIMEOUT_MS = 120_000;
 const METADATA_CHECK_TIMEOUT_MS = 30_000;
 
-const withTimeout = <T>(promise: Promise<T>, ms: number, message: string): Promise<T> => {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timeoutId) clearTimeout(timeoutId);
-  });
-};
-
 const uploadAssets = async (
   uid: string,
   entities: CloudSyncEntity[],
@@ -468,7 +483,11 @@ const uploadLargePayloadDocuments = async <T extends CloudSyncEntity>(
     await Promise.all(
       documents.map(async (item) => {
         try {
-          await getMetadata(documentRef(uid, item.document.hash));
+          await withTimeout(
+            getMetadata(documentRef(uid, item.document.hash)),
+            METADATA_CHECK_TIMEOUT_MS,
+            "检查云端大文本超时，请检查网络连接后重试。",
+          );
           return null;
         } catch (e) {
           if ((e as { code?: string }).code !== "storage/object-not-found") throw e;
@@ -480,7 +499,12 @@ const uploadLargePayloadDocuments = async <T extends CloudSyncEntity>(
   await Promise.all(
     missingDocs.map((item, index) => {
       progress(options, "uploading", `正在上传大文本 ${index + 1}/${missingDocs.length}。`, index + 1, missingDocs.length);
-      return uploadBytesResumable(documentRef(uid, item.document.hash), item.document.blob, { contentType: "application/json" });
+      const task = uploadBytesResumable(documentRef(uid, item.document.hash), item.document.blob, { contentType: "application/json" });
+      return withTimeout(
+        new Promise<void>((resolve, reject) => task.on("state_changed", undefined, reject, resolve)),
+        ASSET_UPLOAD_TIMEOUT_MS,
+        `上传云端大文本超时（${index + 1}/${missingDocs.length}），请确认网络可连接 Firebase Storage 后重试。`,
+      );
     }),
   );
   return prepared.map((item) => item.entity);

@@ -13,9 +13,13 @@ interface CloudSyncState {
   token: number;
 }
 
-/** Safety net for a sync that never reaches its finally block (e.g. the OS suspends the app
- *  mid-request and the promise never settles) — clears busy so the button doesn't spin forever. */
-const WATCHDOG_MS = 120_000;
+/**
+ * Safety net for a sync that never reaches its finally block (for example, when Android
+ * suspends the WebView mid-request). A single Storage download is allowed to run for five
+ * minutes on native, so this must be longer than that request timeout. Otherwise a perfectly
+ * healthy, large restore is reported as a suspended app at the two-minute mark.
+ */
+export const CLOUD_SYNC_WATCHDOG_MS = 6 * 60_000;
 
 let state: CloudSyncState = { busy: null, message: "", conflict: undefined, token: 0 };
 const listeners = new Set<() => void>();
@@ -38,7 +42,7 @@ const armWatchdog = (token: number) => {
       state = { ...state, busy: null, token: state.token + 1, message: "同步未在预期时间内完成，可能是应用被系统挂起，请重新点击同步。" };
       notify();
     }
-  }, WATCHDOG_MS);
+  }, CLOUD_SYNC_WATCHDOG_MS);
 };
 
 export const cloudSyncStore = {
@@ -53,7 +57,12 @@ export const cloudSyncStore = {
     if (busy !== null) armWatchdog(state.token);
     else clearWatchdog();
   },
-  setMessage: (message: string) => { state = { ...state, message }; notify(); },
+  /** A progress message proves the operation is still alive, so give its watchdog a fresh window. */
+  setMessage: (message: string) => {
+    state = { ...state, message };
+    if (state.busy !== null) armWatchdog(state.token);
+    notify();
+  },
   setConflict: (conflict: CloudSyncConflict | undefined) => { state = { ...state, conflict }; notify(); },
   /** Token for the operation just started by setBusy(). Capture right after setBusy and pass to isCurrent(). */
   currentToken: () => state.token,

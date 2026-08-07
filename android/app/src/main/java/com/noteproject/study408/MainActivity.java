@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeAutoBackupPlugin.class);
         registerPlugin(NativeZipArchivePlugin.class);
         registerPlugin(NativeAiPlugin.class);
+        registerPlugin(NativeFirebaseStoragePlugin.class);
         registerPlugin(NativeTtsPlugin.class);
         registerPlugin(NativePodcastTtsPlugin.class);
         super.onCreate(savedInstanceState);
