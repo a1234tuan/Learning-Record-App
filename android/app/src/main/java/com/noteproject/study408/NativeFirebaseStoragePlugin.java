@@ -32,6 +32,7 @@ public class NativeFirebaseStoragePlugin extends Plugin {
     // while access remains protected by the Firebase ID token passed with each request.
     private static final String STORAGE_BUCKET = "study-journal-408-9f31.firebasestorage.app";
     private final Map<String, DownloadSession> downloadSessions = new ConcurrentHashMap<>();
+    private final Map<String, UploadSession> uploadSessions = new ConcurrentHashMap<>();
 
     private static class DownloadSession {
         final File file;
@@ -41,6 +42,55 @@ public class NativeFirebaseStoragePlugin extends Plugin {
             this.file = file;
             this.contentType = contentType;
         }
+    }
+
+    private static class UploadSession {
+        final File file;
+        final FileOutputStream output;
+        final String path;
+        final String idToken;
+        final String contentType;
+
+        UploadSession(File file, FileOutputStream output, String path, String idToken, String contentType) {
+            this.file = file;
+            this.output = output;
+            this.path = path;
+            this.idToken = idToken;
+            this.contentType = contentType;
+        }
+    }
+
+    @PluginMethod
+    public void exists(PluginCall call) {
+        String path = call.getString("path", "");
+        String idToken = call.getString("idToken", "");
+        if (path.trim().isEmpty() || idToken.trim().isEmpty()) {
+            call.reject("原生 Firebase Storage 检查缺少资源路径或登录令牌。");
+            return;
+        }
+        execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                String encodedPath = URLEncoder.encode(path, StandardCharsets.UTF_8).replace("+", "%20");
+                URL url = new URL("https://firebasestorage.googleapis.com/v0/b/" + STORAGE_BUCKET + "/o/" + encodedPath);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(READ_TIMEOUT_MS);
+                connection.setRequestProperty("Authorization", "Bearer " + idToken);
+                int status = connection.getResponseCode();
+                if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_NOT_FOUND) {
+                    throw new IllegalStateException("Firebase Storage 原生检查失败（HTTP " + status + "）：" + compact(readBody(connection.getErrorStream())));
+                }
+                JSObject result = new JSObject();
+                result.put("exists", status == HttpURLConnection.HTTP_OK);
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "Firebase Storage 原生检查失败。", error);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
     }
 
     @PluginMethod
@@ -131,6 +181,112 @@ public class NativeFirebaseStoragePlugin extends Plugin {
     private DownloadSession downloadSession(PluginCall call) {
         DownloadSession session = downloadSessions.get(call.getString("sessionId", ""));
         if (session == null) call.reject("Firebase Storage 下载会话已失效。");
+        return session;
+    }
+
+    @PluginMethod
+    public void beginUpload(PluginCall call) {
+        String path = call.getString("path", "");
+        String idToken = call.getString("idToken", "");
+        String contentType = call.getString("contentType", "application/octet-stream");
+        if (path.trim().isEmpty() || idToken.trim().isEmpty()) {
+            call.reject("原生 Firebase Storage 上传缺少资源路径或登录令牌。");
+            return;
+        }
+        execute(() -> {
+            try {
+                File directory = new File(getContext().getCacheDir(), "firebase-storage-uploads");
+                if (!directory.exists() && !directory.mkdirs()) {
+                    throw new IllegalStateException("无法创建 Firebase Storage 上传缓存目录。");
+                }
+                File file = new File(directory, UUID.randomUUID() + ".bin");
+                String sessionId = UUID.randomUUID().toString();
+                uploadSessions.put(sessionId, new UploadSession(file, new FileOutputStream(file), path, idToken, contentType));
+                JSObject result = new JSObject();
+                result.put("sessionId", sessionId);
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "开始 Firebase Storage 上传失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void appendUploadChunk(PluginCall call) {
+        UploadSession session = uploadSession(call);
+        if (session == null) return;
+        String base64 = call.getString("base64");
+        if (base64 == null) {
+            call.reject("Firebase Storage 上传分块为空。");
+            return;
+        }
+        execute(() -> {
+            try {
+                session.output.write(Base64.decode(base64, Base64.DEFAULT));
+                call.resolve();
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "写入 Firebase Storage 上传分块失败。", error);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void finishUpload(PluginCall call) {
+        String sessionId = call.getString("sessionId", "");
+        UploadSession session = uploadSessions.remove(sessionId);
+        if (session == null) {
+            call.reject("Firebase Storage 上传会话已失效。");
+            return;
+        }
+        execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                session.output.close();
+                String encodedPath = URLEncoder.encode(session.path, StandardCharsets.UTF_8).replace("+", "%20");
+                URL url = new URL("https://firebasestorage.googleapis.com/v0/b/" + STORAGE_BUCKET + "/o?uploadType=media&name=" + encodedPath);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(READ_TIMEOUT_MS);
+                connection.setDoOutput(true);
+                connection.setFixedLengthStreamingMode(session.file.length());
+                connection.setRequestProperty("Authorization", "Bearer " + session.idToken);
+                connection.setRequestProperty("Content-Type", session.contentType);
+                try (InputStream input = new java.io.FileInputStream(session.file); java.io.OutputStream output = connection.getOutputStream()) {
+                    byte[] buffer = new byte[32 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                }
+                int status = connection.getResponseCode();
+                if (status < 200 || status >= 300) {
+                    throw new IllegalStateException("Firebase Storage 原生上传失败（HTTP " + status + "）：" + compact(readBody(connection.getErrorStream())));
+                }
+                call.resolve();
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "Firebase Storage 原生上传失败。", error);
+            } finally {
+                if (connection != null) connection.disconnect();
+                session.file.delete();
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelUpload(PluginCall call) {
+        UploadSession session = uploadSessions.remove(call.getString("sessionId", ""));
+        if (session != null) {
+            try {
+                session.output.close();
+            } catch (Exception ignored) {
+            }
+            session.file.delete();
+        }
+        call.resolve();
+    }
+
+    private UploadSession uploadSession(PluginCall call) {
+        UploadSession session = uploadSessions.get(call.getString("sessionId", ""));
+        if (session == null) call.reject("Firebase Storage 上传会话已失效。");
         return session;
     }
 

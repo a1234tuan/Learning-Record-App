@@ -1,9 +1,14 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 interface NativeFirebaseStoragePlugin {
+  exists(options: { path: string; idToken: string }): Promise<{ exists: boolean }>;
   beginDownload(options: { path: string; idToken: string }): Promise<{ sessionId: string; size: number; contentType?: string }>;
   readDownloadChunk(options: { sessionId: string; offset: number; length: number }): Promise<{ base64: string; bytesRead: number; done: boolean }>;
   finishDownload(options: { sessionId: string }): Promise<void>;
+  beginUpload(options: { path: string; idToken: string; contentType: string }): Promise<{ sessionId: string }>;
+  appendUploadChunk(options: { sessionId: string; base64: string }): Promise<void>;
+  finishUpload(options: { sessionId: string }): Promise<void>;
+  cancelUpload(options: { sessionId: string }): Promise<void>;
 }
 
 const NativeFirebaseStorage = registerPlugin<NativeFirebaseStoragePlugin>("NativeFirebaseStorage");
@@ -17,6 +22,12 @@ const decodeBase64 = (base64: string): ArrayBuffer => {
 };
 
 const CHUNK_SIZE = 512 * 1024;
+
+const encodeBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+  return globalThis.btoa(binary);
+};
 
 /**
  * Android's WebView can fail to reach Firebase Storage even when the system browser works.
@@ -42,5 +53,42 @@ export const downloadNativeFirebaseStorageBlob = async (path: string, idToken: s
     return new Blob(chunks, { type: session.contentType || "application/octet-stream" });
   } finally {
     await NativeFirebaseStorage.finishDownload({ sessionId: session.sessionId }).catch(() => undefined);
+  }
+};
+
+export const nativeFirebaseStorageObjectExists = async (path: string, idToken: string): Promise<boolean> => {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
+    throw new Error("当前平台不支持原生 Firebase Storage 检查。");
+  }
+  return (await NativeFirebaseStorage.exists({ path, idToken })).exists;
+};
+
+/** Stage data in Android's cache and upload it through the same system network stack as downloads. */
+export const uploadNativeFirebaseStorageBlob = async (
+  path: string,
+  blob: Blob,
+  idToken: string,
+  onProgress?: (bytesTransferred: number, totalBytes: number) => void,
+): Promise<void> => {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
+    throw new Error("当前平台不支持原生 Firebase Storage 上传。");
+  }
+  const session = await NativeFirebaseStorage.beginUpload({
+    path,
+    idToken,
+    contentType: blob.type || "application/octet-stream",
+  });
+  try {
+    let offset = 0;
+    while (offset < blob.size) {
+      const chunk = new Uint8Array(await blob.slice(offset, offset + CHUNK_SIZE).arrayBuffer());
+      await NativeFirebaseStorage.appendUploadChunk({ sessionId: session.sessionId, base64: encodeBase64(chunk) });
+      offset += chunk.byteLength;
+      onProgress?.(offset, blob.size);
+    }
+    await NativeFirebaseStorage.finishUpload({ sessionId: session.sessionId });
+  } catch (error) {
+    await NativeFirebaseStorage.cancelUpload({ sessionId: session.sessionId }).catch(() => undefined);
+    throw error;
   }
 };

@@ -6,6 +6,7 @@ import {
   createCloudPayloadDocument,
   exportCloudSync,
   hashValue,
+  hasConflictingChanges,
   materializeCloudSyncSnapshot,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
@@ -117,56 +118,81 @@ describe("cloud sync model", () => {
 });
 
 describe("per-entity-key conflict detection", () => {
-  const ent = (key: string, entityType: CloudSyncEntityType = "block") => ({ key, entityType });
+  // contentHash has no default — every call site must state whether the two sides agree or
+  // disagree, so a test can't accidentally pass by relying on a hidden shared default.
+  const ent = (key: string, contentHash: string, entityType: CloudSyncEntityType = "block") => ({ key, entityType, contentHash });
 
-  const detectConflict = (local: { key: string; entityType: CloudSyncEntityType }[], remote: { key: string; entityType: CloudSyncEntityType }[]) => {
+  const detectConflict = (
+    local: { key: string; entityType: CloudSyncEntityType; contentHash: string }[],
+    remote: { key: string; entityType: CloudSyncEntityType; contentHash: string }[],
+  ) => {
     const normalLocal = local.filter((e) => !NON_CONFLICTING_ENTITY_TYPES.has(e.entityType));
     const normalRemote = remote.filter((e) => !NON_CONFLICTING_ENTITY_TYPES.has(e.entityType));
-    const localKeys = new Set(normalLocal.map((e) => e.key));
-    return normalLocal.length > 0 && normalRemote.some((e) => localKeys.has(e.key));
+    return hasConflictingChanges(normalLocal, normalRemote);
   };
 
   it("no conflict when both sides edit entirely different entities", () => {
-    expect(detectConflict([ent("block:a")], [ent("block:b")])).toBe(false);
+    expect(detectConflict([ent("block:a", "h1")], [ent("block:b", "h2")])).toBe(false);
   });
 
-  it("conflict when the same entity key is modified on both sides", () => {
-    expect(detectConflict([ent("block:a")], [ent("block:a"), ent("block:b")])).toBe(true);
+  it("conflict when the same entity key is modified on both sides with different content", () => {
+    expect(detectConflict(
+      [ent("block:a", "local-hash")],
+      [ent("block:a", "remote-hash"), ent("block:b", "h2")],
+    )).toBe(true);
   });
 
   it("no conflict when local has no normal changes", () => {
-    expect(detectConflict([], [ent("block:a")])).toBe(false);
+    expect(detectConflict([], [ent("block:a", "h1")])).toBe(false);
   });
 
   it("no conflict when remote has no normal changes", () => {
-    expect(detectConflict([ent("block:a")], [])).toBe(false);
+    expect(detectConflict([ent("block:a", "h1")], [])).toBe(false);
   });
 
   it("conflict when the overlapping key is not the first entry on either side", () => {
     expect(detectConflict(
-      [ent("block:x"), ent("block:y")],
-      [ent("block:z"), ent("block:y")],
+      [ent("block:x", "h1"), ent("block:y", "local-y")],
+      [ent("block:z", "h2"), ent("block:y", "remote-y")],
     )).toBe(true);
   });
 
   it("no conflict when only settings is touched on both sides (e.g. autoBackup bookkeeping)", () => {
     expect(detectConflict(
-      [ent("settings:settings", "settings")],
-      [ent("settings:settings", "settings")],
+      [ent("settings:settings", "local-settings", "settings")],
+      [ent("settings:settings", "remote-settings", "settings")],
     )).toBe(false);
   });
 
   it("no conflict when only review-state/review-day-stat overlap on both sides", () => {
     expect(detectConflict(
-      [ent("review-state:r1", "review-state"), ent("review-day-stat:2026-08-05", "review-day-stat")],
-      [ent("review-state:r1", "review-state"), ent("review-day-stat:2026-08-05", "review-day-stat")],
+      [ent("review-state:r1", "local-1", "review-state"), ent("review-day-stat:2026-08-05", "local-2", "review-day-stat")],
+      [ent("review-state:r1", "remote-1", "review-state"), ent("review-day-stat:2026-08-05", "remote-2", "review-day-stat")],
     )).toBe(false);
   });
 
   it("still conflicts on a real content overlap even if settings also overlaps", () => {
     expect(detectConflict(
-      [ent("block:a"), ent("settings:settings", "settings")],
-      [ent("block:a"), ent("settings:settings", "settings")],
+      [ent("block:a", "local-a"), ent("settings:settings", "local-settings", "settings")],
+      [ent("block:a", "remote-a"), ent("settings:settings", "remote-settings", "settings")],
+    )).toBe(true);
+  });
+
+  it("no conflict when the same key has matching hashes on both sides (self-heal after an interrupted publish)", () => {
+    // Targets the publish() reordering fix: headRevision can advance before this device's own
+    // ledger write for that same publish completes. The next sync then sees its own upload
+    // reflected back as a "remote change" with an identical hash — not a real edit conflict, and
+    // it must fall through to the normal merge/download path so the ledger gets re-derived.
+    expect(detectConflict(
+      [ent("block:a", "same-hash")],
+      [ent("block:a", "same-hash")],
+    )).toBe(false);
+  });
+
+  it("conflict when the same key has different hashes on both sides (a genuine concurrent edit)", () => {
+    expect(detectConflict(
+      [ent("block:a", "local-hash")],
+      [ent("block:a", "remote-hash")],
     )).toBe(true);
   });
 });

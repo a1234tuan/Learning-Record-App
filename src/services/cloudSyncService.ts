@@ -26,6 +26,7 @@ import {
   exportCloudSync,
   createCloudPayloadDocument,
   hashValue,
+  hasConflictingChanges,
   materializeCloudSyncSnapshot,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
@@ -36,7 +37,11 @@ import {
 } from "./cloudSyncModel";
 import { storage } from "./storageAdapter";
 import { snapshotToZip, summarizeSnapshot, zipToSnapshot } from "./backup";
-import { downloadNativeFirebaseStorageBlob } from "./nativeFirebaseStorage";
+import {
+  downloadNativeFirebaseStorageBlob,
+  nativeFirebaseStorageObjectExists,
+  uploadNativeFirebaseStorageBlob,
+} from "./nativeFirebaseStorage";
 
 const PROTOCOL_VERSION = 2;
 const MAX_BATCH_WRITES = 400;
@@ -134,6 +139,37 @@ const getCloudStorageBlob = async (uid: string, storageRef: StorageReference): P
   }
   const { data, contentType } = await desktopStorage.download(uid, storageRef.fullPath, await user.getIdToken());
   return new Blob([data], { type: contentType });
+};
+
+const uploadCloudStorageBlob = async (
+  uid: string,
+  storageRef: StorageReference,
+  blob: Blob,
+  onProgress?: (bytesTransferred: number, totalBytes: number) => void,
+) => {
+  const user = firebaseAuth.currentUser;
+  if (isNativePlatform() && user?.uid === uid) {
+    await uploadNativeFirebaseStorageBlob(storageRef.fullPath, blob, await user.getIdToken(), onProgress);
+    return;
+  }
+  const task = uploadBytesResumable(storageRef, blob, { contentType: blob.type || "application/octet-stream" });
+  await new Promise<void>((resolve, reject) => task.on("state_changed", (snapshot) => {
+    onProgress?.(snapshot.bytesTransferred, snapshot.totalBytes);
+  }, reject, resolve));
+};
+
+const cloudStorageObjectExists = async (uid: string, storageRef: StorageReference): Promise<boolean> => {
+  const user = firebaseAuth.currentUser;
+  if (isNativePlatform() && user?.uid === uid) {
+    return nativeFirebaseStorageObjectExists(storageRef.fullPath, await user.getIdToken());
+  }
+  try {
+    await getMetadata(storageRef);
+    return true;
+  } catch (error) {
+    if ((error as { code?: string }).code === "storage/object-not-found") return false;
+    throw error;
+  }
 };
 
 const progress = (options: CloudSyncOptions, stage: CloudSyncProgress["stage"], message: string, current?: number, total?: number) =>
@@ -415,7 +451,9 @@ const writeInBatches = async (writes: Array<(batch: WriteBatch) => void>) => {
 };
 
 const ASSET_UPLOAD_CONCURRENCY = 5;
-const ASSET_UPLOAD_TIMEOUT_MS = 120_000;
+// Native uploads use Android's network stack and may legitimately take longer than the web SDK
+// timeout while the operating system sends a large cached file.
+const ASSET_UPLOAD_TIMEOUT_MS = isNativePlatform() ? 300_000 : 120_000;
 const METADATA_CHECK_TIMEOUT_MS = 30_000;
 
 const uploadAssets = async (
@@ -431,13 +469,12 @@ const uploadAssets = async (
   const missing = (
     await Promise.all(
       hashes.map(async (hash) => {
-        try {
-          await withTimeout(getMetadata(assetRef(uid, hash)), METADATA_CHECK_TIMEOUT_MS, "检查云端资源超时，请检查网络连接后重试。");
-          return null;
-        } catch (e) {
-          if ((e as { code?: string }).code !== "storage/object-not-found") throw e;
-          return hash;
-        }
+        const exists = await withTimeout(
+          cloudStorageObjectExists(uid, assetRef(uid, hash)),
+          METADATA_CHECK_TIMEOUT_MS,
+          "检查云端资源超时，请检查网络连接后重试。",
+        );
+        return exists ? null : hash;
       }),
     )
   ).filter((h): h is string => h !== null);
@@ -449,18 +486,15 @@ const uploadAssets = async (
       missing.slice(i, i + ASSET_UPLOAD_CONCURRENCY).map(async (hash) => {
         const blob = assetBlobs.get(hash);
         if (!blob) throw new Error("本地资源缓存不完整，无法同步。");
-        const task = uploadBytesResumable(assetRef(uid, hash), blob, { contentType: blob.type || "application/octet-stream" });
         let taskTransferred = 0;
-        const uploadPromise = new Promise<void>((resolve, reject) => task.on("state_changed", (snapshot) => {
-          // Firebase reports bytesTransferred as a cumulative value for this
-          // upload task. Add only the delta from the previous callback; adding
-          // the cumulative value repeatedly makes a 90 MB upload look like
-          // hundreds of megabytes in the UI.
-          const delta = Math.max(0, snapshot.bytesTransferred - taskTransferred);
-          taskTransferred = Math.max(taskTransferred, snapshot.bytesTransferred);
+        const uploadPromise = uploadCloudStorageBlob(uid, assetRef(uid, hash), blob, (bytesTransferred) => {
+          // Both native and web upload implementations report a cumulative value. Add only the
+          // delta; otherwise a 90 MB upload would look like hundreds of megabytes in the UI.
+          const delta = Math.max(0, bytesTransferred - taskTransferred);
+          taskTransferred = Math.max(taskTransferred, bytesTransferred);
           transferred += delta;
           progress(options, "uploading", `正在上传资源 ${completed + 1}/${total}（${(transferred / (1024 * 1024)).toFixed(1)} MB）。`);
-        }, reject, resolve));
+        });
         await withTimeout(uploadPromise, ASSET_UPLOAD_TIMEOUT_MS, `资源上传超时（${completed + 1}/${total}），请确认网络可连接 Firebase Storage 后重试。`);
         completed++;
         progress(options, "uploading", `正在上传资源 ${completed}/${total}（${(transferred / (1024 * 1024)).toFixed(1)} MB）。`);
@@ -482,26 +516,20 @@ const uploadLargePayloadDocuments = async <T extends CloudSyncEntity>(
   const missingDocs = (
     await Promise.all(
       documents.map(async (item) => {
-        try {
-          await withTimeout(
-            getMetadata(documentRef(uid, item.document.hash)),
-            METADATA_CHECK_TIMEOUT_MS,
-            "检查云端大文本超时，请检查网络连接后重试。",
-          );
-          return null;
-        } catch (e) {
-          if ((e as { code?: string }).code !== "storage/object-not-found") throw e;
-          return item;
-        }
+        const exists = await withTimeout(
+          cloudStorageObjectExists(uid, documentRef(uid, item.document.hash)),
+          METADATA_CHECK_TIMEOUT_MS,
+          "检查云端大文本超时，请检查网络连接后重试。",
+        );
+        return exists ? null : item;
       }),
     )
   ).filter((item): item is (typeof documents)[number] => item !== null);
   await Promise.all(
     missingDocs.map((item, index) => {
       progress(options, "uploading", `正在上传大文本 ${index + 1}/${missingDocs.length}。`, index + 1, missingDocs.length);
-      const task = uploadBytesResumable(documentRef(uid, item.document.hash), item.document.blob, { contentType: "application/json" });
       return withTimeout(
-        new Promise<void>((resolve, reject) => task.on("state_changed", undefined, reject, resolve)),
+        uploadCloudStorageBlob(uid, documentRef(uid, item.document.hash), item.document.blob),
         ASSET_UPLOAD_TIMEOUT_MS,
         `上传云端大文本超时（${index + 1}/${missingDocs.length}），请确认网络可连接 Firebase Storage 后重试。`,
       );
@@ -628,8 +656,19 @@ const publish = async (
         updatedAt: new Date().toISOString(),
       })),
     ]);
-    await persistLedgers(state, remoteEntities, remoteEvents, lock.revision);
+    // Advance headRevision before recording the local ledger, not after. The Firestore batch write
+    // above is the true point of no return — once it succeeds, this revision's data is durably
+    // stored regardless of what happens next. If the app is killed between these two calls:
+    //  - headRevision-first (this order): the server already reflects the new revision, so every
+    //    device (including this one) can see it on the very next pull. This device's local ledger
+    //    is stale, so its next sync harmlessly re-diffs and re-uploads the same content under a new
+    //    revision — wasteful but self-correcting on this device's own next attempt.
+    //  - ledger-first (the old order): the local ledger says "already synced," so this device's own
+    //    retries find nothing to publish and release the lock without advancing headRevision. The
+    //    just-written entities sit above headRevision — invisible to every device, including this
+    //    one — until some unrelated future edit anywhere finally pushes headRevision past them.
     await releaseLock(user.uid, state.deviceId, lock.revision, true);
+    await persistLedgers(state, remoteEntities, remoteEvents, lock.revision);
     return { revision: lock.revision, uploaded: remoteEntities.length + remoteEvents.length };
   } catch (error) {
     await releaseLock(user.uid, state.deviceId, lock.revision, false).catch(() => undefined);
@@ -865,8 +904,7 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
     const normalLocal = (firstEmptyDevice ? [] : changed.entities)
       .filter((entity) => !NON_CONFLICTING_ENTITY_TYPES.has(entity.entityType));
     const normalRemote = remoteChanges.entities.filter((entity) => !NON_CONFLICTING_ENTITY_TYPES.has(entity.entityType));
-    const localKeys = new Set(normalLocal.map((e) => e.key));
-    const hasConflict = normalLocal.length > 0 && normalRemote.some((e) => localKeys.has(e.key));
+    const hasConflict = hasConflictingChanges(normalLocal, normalRemote);
     if (hasConflict) {
       await releaseLock(user.uid, state.deviceId, lock.revision, false);
       lockReleased = true;

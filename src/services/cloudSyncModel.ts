@@ -267,3 +267,24 @@ export const mergeCloudSyncEntities = (
   updates.forEach((entity) => byKey.set(entity.key, entity));
   return [...byKey.values()];
 };
+
+/**
+ * True only when a locally-changed entity and a remotely-changed entity share a key AND their
+ * content actually differs. Sharing a key with matching hashes means the two sides already agree —
+ * most commonly this device's own prior publish coming back to it after `headRevision` advanced but
+ * this device's local ledger write for that same publish was interrupted (e.g. app killed between
+ * the two). That case must resolve as "no conflict" and fall through to the normal merge/download
+ * path, which re-derives the ledger row from the (identical) remote copy instead of raising a manual
+ * "keep local or cloud" prompt for something neither side actually disagrees about.
+ */
+export const hasConflictingChanges = (
+  normalLocal: Pick<CloudSyncEntity, "key" | "contentHash">[],
+  normalRemote: Pick<CloudSyncEntity, "key" | "contentHash">[],
+): boolean => {
+  if (normalLocal.length === 0) return false;
+  const localHashByKey = new Map(normalLocal.map((entity) => [entity.key, entity.contentHash]));
+  return normalRemote.some((entity) => {
+    const localHash = localHashByKey.get(entity.key);
+    return localHash !== undefined && localHash !== entity.contentHash;
+  });
+};
