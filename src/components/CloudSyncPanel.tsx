@@ -1,5 +1,5 @@
-import { AlertTriangle, Cloud, CloudDownload, History, LogIn, LogOut, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Cloud, CloudDownload, History, LogIn, LogOut, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { User } from "firebase/auth";
 
 import {
@@ -8,35 +8,38 @@ import {
   getCloudSyncStatus,
   listCloudRecoverySnapshots,
   listenToCloudUser,
-  resolveCloudSyncConflict,
   restoreCloudRecoverySnapshot,
   signInToCloudSync,
   signOutOfCloudSync,
-  synchronizeCloudChanges,
   type CloudRecoverySnapshot,
-  type CloudSyncConflict,
   type CloudSyncStatus,
 } from "../services/cloudSyncService";
+import { cloudSyncStore, useCloudSyncStore } from "../services/cloudSyncStore";
+import { CloudSyncButton } from "./CloudSyncButton";
 import { SurfaceCard } from "./ui";
 
 interface CloudSyncPanelProps {
   onRestored: () => Promise<void> | void;
 }
 
-type BusyAction = "sign-in" | "sign-out" | "sync" | "restore" | "resolve" | null;
-
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "云同步操作失败。";
 
+// The sync trigger itself (button + conflict resolution) now lives in CloudSyncButton /
+// CloudSyncConflictDialog, mounted globally (home page header on mobile, sidebar on desktop) so
+// it's reachable from anywhere. This panel keeps account management, status display, and
+// snapshot recovery — it still embeds CloudSyncButton so this page can also kick off a sync.
 export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
   const [user, setUser] = useState<User | null>(() => getCurrentCloudUser());
   const [status, setStatus] = useState<CloudSyncStatus>();
   const [snapshots, setSnapshots] = useState<CloudRecoverySnapshot[]>([]);
-  const [conflict, setConflict] = useState<CloudSyncConflict>();
-  const [busy, setBusy] = useState<BusyAction>(null);
-  const [message, setMessage] = useState("");
+  const { busy, message } = useCloudSyncStore();
+  const setBusy = cloudSyncStore.setBusy;
+  const setMessage = cloudSyncStore.setMessage;
+  const setConflict = cloudSyncStore.setConflict;
+  const previousBusyRef = useRef(busy);
 
   const refresh = async (nextUser: User) => {
     const [nextStatus, nextSnapshots] = await Promise.all([
@@ -65,9 +68,19 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
         setSnapshots([]);
         setConflict(undefined);
         if (!nextUser) setMessage("");
+        if (nextUser) void refresh(nextUser).catch((error: unknown) => setMessage(errorMessage(error)));
       }),
     [],
   );
+
+  // The sync/conflict-resolve buttons live outside this panel now, so pick up their completion
+  // here to keep the status card and snapshot list fresh.
+  useEffect(() => {
+    if (previousBusyRef.current !== null && busy === null && user) {
+      void refresh(user).catch((error: unknown) => setMessage(errorMessage(error)));
+    }
+    previousBusyRef.current = busy;
+  }, [busy, user]);
 
   const signIn = async () => {
     setBusy("sign-in");
@@ -108,64 +121,9 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
     }
   };
 
-  const sync = async () => {
-    if (!user) return;
-    setBusy("sync");
-    setConflict(undefined);
-    setMessage("正在检查本机和云端的更改。");
-    try {
-      const result = await synchronizeCloudChanges(user, { onProgress: (event) => setMessage(event.message) });
-      if (result.kind === "conflict") {
-        setConflict(result.conflict);
-        setMessage("检测到本机和云端都存在未同步的数据，请选择保留哪一侧。");
-      } else {
-        setMessage(`同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`);
-        if (result.restored) await onRestored();
-        await refresh(user);
-      }
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const resolve = async (choice: "local" | "cloud") => {
-    if (!user || !conflict) return;
-    setBusy("resolve");
-    setMessage(choice === "local" ? "正在以本机数据更新云端。" : "正在保存本机恢复点并恢复云端数据。");
-    try {
-      const result = await resolveCloudSyncConflict(user, choice, { onProgress: (event) => setMessage(event.message) });
-      if (result.kind === "conflict") {
-        setConflict(result.conflict);
-        setMessage("云端状态已变化，请重新选择同步策略。");
-        return;
-      }
-      setConflict(undefined);
-      if (choice === "cloud") {
-        await onRestored();
-        setMessage("正在上传本机剩余更改。");
-        const finalResult = await synchronizeCloudChanges(user, { onProgress: (event) => setMessage(event.message) });
-        if (finalResult.kind === "synced") {
-          setMessage(`同步完成：上传 ${result.uploaded + finalResult.uploaded} 项，下载 ${result.downloaded + finalResult.downloaded} 项。`);
-        } else {
-          setConflict(finalResult.conflict);
-          setMessage("已恢复云端数据，但上传本机数据时再次遇到冲突，请重新选择策略。");
-        }
-      } else {
-        setMessage(`同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`);
-      }
-      await refresh(user);
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const restore = async (snapshot: CloudRecoverySnapshot) => {
     if (!user) return;
-    const accepted = window.confirm(`恢复“${snapshot.label}”会覆盖当前设备上的同步数据。继续恢复？`);
+    const accepted = window.confirm(`恢复"${snapshot.label}"会覆盖当前设备上的同步数据。继续恢复？`);
     if (!accepted) return;
     setBusy("restore");
     setMessage("正在恢复云端快照。");
@@ -215,10 +173,7 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
                 <p>{status ? `本机待同步 ${status.localPending} 项 / 云端待拉取 ${status.remotePending} 项` : "点击后检查同步状态"}</p>
               </div>
             </div>
-            <button type="button" className="primary-button" onClick={() => void sync()} disabled={busy !== null}>
-              <RefreshCw size={18} />
-              {busy === "sync" ? "同步中..." : "同步更改"}
-            </button>
+            <CloudSyncButton className="backup-sync-button" onSignedOut={() => undefined} onRestored={onRestored} />
           </SurfaceCard>
         ) : null}
 
@@ -255,27 +210,6 @@ export const CloudSyncPanel = ({ onRestored }: CloudSyncPanelProps) => {
         </div>
       ) : null}
 
-      {conflict ? (
-        <div className="import-warning" role="alert">
-          <p><AlertTriangle size={16} /> {conflict.reason === "legacy-snapshot" ? "检测到旧版完整云端备份。" : "检测到双端并发编辑。"}</p>
-          <p>本机 {conflict.localChanges} 项，云端 {conflict.remoteChanges} 项。选择前会保留恢复点。</p>
-          <div className="backup-action-grid">
-            <button type="button" className="primary-button" onClick={() => void resolve("local")} disabled={busy !== null}>以本机为准</button>
-            <button type="button" className="secondary-button" onClick={() => void resolve("cloud")} disabled={busy !== null}>以云端为准</button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => {
-                setConflict(undefined);
-                setMessage("已取消，本机和云端数据均未修改。");
-              }}
-              disabled={busy !== null}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      ) : null}
       {status?.lastSyncedAt ? <p className="import-warning">上次完成同步：{formatDateTime(status.lastSyncedAt)} / 云端修订 {status.cloudRevision}</p> : null}
       {message ? <p className="import-warning" role="status">{message}</p> : null}
     </section>

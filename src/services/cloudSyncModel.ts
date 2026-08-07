@@ -48,7 +48,7 @@ export interface CloudSyncExport {
  * Touching one of these on both sides should never force a manual "keep
  * local or cloud" choice — whichever side syncs last simply wins.
  */
-export const NON_CONFLICTING_ENTITY_TYPES = new Set<CloudSyncEntityType>(["review-state", "review-day-stat", "settings"]);
+export const NON_CONFLICTING_ENTITY_TYPES = new Set<CloudSyncEntityType>(["review-state", "review-day-stat", "settings", "template"]);
 
 type JsonRecord = Record<string, unknown>;
 

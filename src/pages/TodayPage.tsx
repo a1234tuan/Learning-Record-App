@@ -5,6 +5,7 @@ import type { Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, Re
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
+import { CloudSyncButton } from "../components/CloudSyncButton";
 import { fallbackSubjectName } from "../lib/subjects";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { getDailyMotto } from "../lib/dailyMotto";
@@ -27,6 +28,8 @@ interface TodayPageProps {
   dueReviewStates?: RecordReviewState[];
   reviewTitlesByRecord?: Record<string, string>;
   onAddToReview?: (recordId: string) => void;
+  onOpenCloudSyncSettings?: () => void;
+  onCloudSyncRestored?: () => Promise<void> | void;
 }
 
 export const TodayPage = ({
@@ -47,6 +50,8 @@ export const TodayPage = ({
   dueReviewStates = [],
   reviewTitlesByRecord = {},
   onAddToReview = () => undefined,
+  onOpenCloudSyncSettings = () => undefined,
+  onCloudSyncRestored = () => undefined,
 }: TodayPageProps) => {
   const [subject, setSubject] = useState<Subject>(() =>
     subjects.find((item) => !item.archivedAt)?.name ??
@@ -75,6 +80,7 @@ export const TodayPage = ({
               <span>距离目标</span>
               <strong>{countdown >= 0 ? `${countdown} 天` : "已结束"}</strong>
             </div>
+            <CloudSyncButton onSignedOut={onOpenCloudSyncSettings} onRestored={onCloudSyncRestored} />
             <button type="button" className="icon-button" onClick={onOpenFavorites} title="收藏夹" aria-label="打开收藏夹">
               <Star size={18} />
             </button>

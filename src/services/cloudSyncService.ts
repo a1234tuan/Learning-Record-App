@@ -287,7 +287,7 @@ const hydratePayloadDocuments = async <T extends CloudSyncEntity>(uid: string, e
   }));
 };
 
-const ASSET_DOWNLOAD_TIMEOUT_MS = 120_000;
+const ASSET_DOWNLOAD_TIMEOUT_MS = isNativePlatform() ? 300_000 : 120_000;
 const ASSET_DOWNLOAD_CONCURRENCY = 5;
 
 const downloadRemoteAssets = async (uid: string, entities: CloudSyncEntity[], existing: Map<string, Blob>, options: CloudSyncOptions) => {
@@ -623,6 +623,7 @@ const makeRemoteSnapshot = async (uid: string, label: string, entities: RemoteEn
     entityCount: snapshotEntities.length + events.length,
     revision,
   });
+  progress(options, "snapshot", `正在写入快照数据（共 ${snapshotEntities.length + events.length} 项）。`);
   await writeInBatches([
     ...snapshotEntities.map((entity) => (batch: WriteBatch) => batch.set(doc(snapshotEntitiesRef(uid, id), entity.key), snapshotEntityDocument(entity))),
     ...events.map((event) => (batch: WriteBatch) => batch.set(doc(snapshotEntitiesRef(uid, id), `review-event:${event.id}`), { ...event, kind: "review-event" })),
@@ -705,6 +706,7 @@ const replaceCloudWithLocal = async (user: User, state: CloudSyncStateRecord, op
 const restoreRemote = async (uid: string, options: CloudSyncOptions) => {
   const remote = await getRemoteState(uid);
   if (!remote.exists || remote.state.headRevision === 0) throw new Error("云端没有可恢复的增量同步数据。");
+  progress(options, "downloading", "正在从云端读取全量数据。");
   const all = await getAllRemote(uid, remote.state);
   all.entities = await hydratePayloadDocuments(uid, all.entities, options);
   const assetBlobs = new Map<string, Blob>();
@@ -891,6 +893,31 @@ export const resolveCloudSyncConflict = async (
     const remote = await getRemoteState(user.uid);
     progress(options, "snapshot", `正在上传本机恢复快照（共 ${localExport.assetBlobs.size} 个资源）。`);
     await makeLocalSnapshot(user, localExport, "冲突前的本机版本", remote.state.headRevision, options);
+    if (remote.exists && remote.state.headRevision > 0) {
+      const remoteChanges = await getRemoteChanges(user.uid, state.lastPulledRevision, remote.state);
+      const ledger = await ledgerFor();
+      const ledgerKeys = new Set(ledger.map((l) => l.id));
+      const remoteEntityKeys = new Set(remoteChanges.entities.map((e) => e.key));
+      const remoteEventIds = new Set(remoteChanges.reviewEvents.map((e) => e.id));
+      const merged = mergeCloudSyncEntities(localExport.entities, remoteChanges.entities);
+      const mergedEvents = mergeReviewEvents(localExport.reviewEvents, remoteChanges.reviewEvents);
+      // 只保留曾同步过（账本中）或本次从云端新收到的 entity，丢弃手机本地独有内容
+      const cloudEntities = await hydratePayloadDocuments(
+        user.uid,
+        merged.filter((e) => ledgerKeys.has(e.key) || remoteEntityKeys.has(e.key) || e.entityType === "template"),
+        options,
+      );
+      const cloudEvents = mergedEvents.filter((e) => ledgerKeys.has(ledgerId("review-event", e.id)) || remoteEventIds.has(e.id));
+      const assetBlobs = new Map(localExport.assetBlobs);
+      await downloadRemoteAssets(user.uid, cloudEntities, assetBlobs, options);
+      progress(options, "applying", "正在恢复云端数据。");
+      await storage.restoreCloudSyncSnapshot(materializeCloudSyncSnapshot(cloudEntities, cloudEvents, assetBlobs));
+      await persistLedgers(state, remoteChanges.entities, remoteChanges.reviewEvents, remote.state.headRevision);
+      await releaseLock(user.uid, state.deviceId, lock.revision, false);
+      lockReleased = true;
+      progress(options, "done", "已以云端为准完成同步。");
+      return { kind: "synced", uploaded: 0, downloaded: remoteChanges.entities.length + remoteChanges.reviewEvents.length, revision: remote.state.headRevision, pending: 0, restored: true };
+    }
     const restored = await restoreRemote(user.uid, options).catch(async (error: unknown) => {
       const legacy = await getCloudSnapshotInfo(user.uid);
       if (!legacy) throw error;

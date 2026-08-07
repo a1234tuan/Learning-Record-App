@@ -39,6 +39,8 @@ import { TrashPage } from "./pages/TrashPage";
 import { UsageGuidePage } from "./pages/UsageGuidePage";
 import { TemplateLibraryPage } from "./pages/TemplateLibraryPage";
 import { PageTransition } from "./components/PageTransition";
+import { CloudSyncButton } from "./components/CloudSyncButton";
+import { CloudSyncConflictDialog } from "./components/CloudSyncConflictDialog";
 import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
 import { createAiSessionForScope } from "./services/aiSessionService";
@@ -1037,6 +1039,8 @@ export const App = () => {
             dueReviewStates={app.dueRecordReviews}
             reviewTitlesByRecord={recordTitlesById}
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
+            onOpenCloudSyncSettings={() => openMoreSubRoute("backup")}
+            onCloudSyncRestored={app.refresh}
           />
         );
       case "journal":
@@ -1305,6 +1309,11 @@ export const App = () => {
             <strong>学习日志</strong>
             <small>离线优先</small>
           </div>
+          <CloudSyncButton
+            className="sidebar-sync-button"
+            onSignedOut={() => openMoreSubRoute("backup")}
+            onRestored={app.refresh}
+          />
         </div>
         <nav>
           {navItems.map((item) => {
@@ -1368,6 +1377,7 @@ export const App = () => {
           </section>
         </div>
       )}
+      <CloudSyncConflictDialog onRestored={app.refresh} />
       <nav className="bottom-nav">
         {bottomNavItems.map((item) => {
           const Icon = item.icon;

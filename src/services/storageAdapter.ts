@@ -1765,7 +1765,22 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void> {
-    await this.restoreSnapshot(snapshot);
+    // Knowledge podcasts and their generated audio assets are local-only (not in cloud sync).
+    // restoreSnapshot clears all tables including knowledgePodcasts and assets, so we must
+    // read them first and inject back after to prevent data loss on every cloud sync restore.
+    const [existingPodcasts, podcastAudioAssets] = await Promise.all([
+      db.knowledgePodcasts.toArray(),
+      db.assets.filter((a) => a.generatedBy === "knowledge-podcast").toArray(),
+    ]);
+    const mergedSnapshot: StorageSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, podcasts: existingPodcasts },
+      assets: [
+        ...snapshot.assets.filter((a) => a.generatedBy !== "knowledge-podcast"),
+        ...podcastAudioAssets,
+      ],
+    };
+    await this.restoreSnapshot(mergedSnapshot);
   }
 
   async restoreStreamableSnapshot(
