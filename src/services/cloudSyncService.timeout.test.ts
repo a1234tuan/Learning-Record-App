@@ -15,7 +15,7 @@ vi.mock("./firebase", () => ({
 // (getRemoteState, acquireLock/releaseLock, getRemoteChanges, batch commits, snapshot listing,
 // etc.) — testing it directly covers all of them without mocking each call site's own dependency
 // chain (db/storage/cloudSyncModel/nativeFirebaseStorage), which would make the test fragile.
-const { withTimeout } = await import("./cloudSyncService");
+const { mapWithConcurrency, withTimeout } = await import("./cloudSyncService");
 
 describe("withTimeout", () => {
   it("rejects with the given message once the timeout elapses, for a promise that never settles", async () => {
@@ -61,5 +61,22 @@ describe("withTimeout", () => {
 
   it("propagates the underlying rejection unchanged when it rejects before the timeout", async () => {
     await expect(withTimeout(Promise.reject(new Error("real failure")), 20_000, "超时。")).rejects.toThrow("real failure");
+  });
+});
+
+describe("mapWithConcurrency", () => {
+  it("keeps concurrent network work bounded while preserving result order", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const result = await mapWithConcurrency([0, 1, 2, 3, 4, 5, 6], 2, async (value) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return value * 2;
+    });
+
+    expect(maximumActive).toBe(2);
+    expect(result).toEqual([0, 2, 4, 6, 8, 10, 12]);
   });
 });

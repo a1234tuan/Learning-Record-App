@@ -12,6 +12,7 @@ const APP_HOST = "app";
 const FIREBASE_AUTH_HOST = "study-journal-408-9f31.firebaseapp.com";
 const FIREBASE_STORAGE_BUCKET = "study-journal-408-9f31.firebasestorage.app";
 const FIREBASE_STORAGE_TEST_URL = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o?maxResults=1`;
+const FIREBASE_STORAGE_METADATA_TIMEOUT_MS = 30_000;
 const FIREBASE_STORAGE_REQUEST_TIMEOUT_MS = 120_000;
 const _oauth = require("./oauth-config.cjs");
 const DESKTOP_GOOGLE_CLIENT_ID = _oauth.clientId;
@@ -79,6 +80,14 @@ const isAllowedFirebaseStoragePath = (uid, objectPath) => {
 const firebaseStorageObjectUrl = (objectPath) =>
   `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o/${encodeURIComponent(objectPath)}?alt=media`;
 
+const firebaseStorageObjectMetadataUrl = (objectPath) =>
+  `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o/${encodeURIComponent(objectPath)}`;
+
+const firebaseStorageObjectUploadUrl = (objectPath) =>
+  `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(FIREBASE_STORAGE_BUCKET)}/o?uploadType=media&name=${encodeURIComponent(objectPath)}`;
+
+const responseDetail = async (response) => (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+
 const fetchFirebaseStorageObject = async (uid, objectPath, idToken) => {
   if (!isAllowedFirebaseStoragePath(uid, objectPath) || typeof idToken !== "string" || !idToken) {
     throw new Error("Firebase Storage 下载请求无效。");
@@ -91,7 +100,7 @@ const fetchFirebaseStorageObject = async (uid, objectPath, idToken) => {
       signal: controller.signal,
     });
     if (!response.ok) {
-      const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+      const detail = await responseDetail(response);
       throw new Error(`Firebase Storage 返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
     }
     return {
@@ -101,6 +110,80 @@ const fetchFirebaseStorageObject = async (uid, objectPath, idToken) => {
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error(`Firebase Storage 在 ${FIREBASE_STORAGE_REQUEST_TIMEOUT_MS / 1000} 秒内未响应。`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const checkFirebaseStorageObject = async (uid, objectPath, idToken) => {
+  if (!isAllowedFirebaseStoragePath(uid, objectPath) || typeof idToken !== "string" || !idToken) {
+    throw new Error("Firebase Storage 检查请求无效。");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FIREBASE_STORAGE_METADATA_TIMEOUT_MS);
+  try {
+    const response = await session.defaultSession.fetch(firebaseStorageObjectMetadataUrl(objectPath), {
+      headers: { Authorization: `Firebase ${idToken}` },
+      signal: controller.signal,
+    });
+    if (response.status === 404) return false;
+    if (response.status === 407) {
+      throw new Error("代理服务器要求认证，当前桌面端不支持需要用户名和密码的代理。");
+    }
+    if (!response.ok) {
+      const detail = await responseDetail(response);
+      throw new Error(`Firebase Storage 检查返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+    }
+    return true;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Firebase Storage 检查在 ${FIREBASE_STORAGE_METADATA_TIMEOUT_MS / 1000} 秒内未响应。`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const uploadFirebaseStorageObject = async (uid, objectPath, idToken, data, contentType) => {
+  if (!isAllowedFirebaseStoragePath(uid, objectPath) || typeof idToken !== "string" || !idToken) {
+    throw new Error("Firebase Storage 上传请求无效。");
+  }
+  if (typeof contentType !== "string" || !contentType) {
+    throw new Error("Firebase Storage 上传缺少内容类型。");
+  }
+  let body;
+  if (data instanceof ArrayBuffer) {
+    body = Buffer.from(data);
+  } else if (ArrayBuffer.isView(data)) {
+    body = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  } else {
+    throw new Error("Firebase Storage 上传数据无效。");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FIREBASE_STORAGE_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await session.defaultSession.fetch(firebaseStorageObjectUploadUrl(objectPath), {
+      method: "POST",
+      headers: {
+        Authorization: `Firebase ${idToken}`,
+        "Content-Type": contentType,
+      },
+      body,
+      signal: controller.signal,
+    });
+    if (response.status === 407) {
+      throw new Error("代理服务器要求认证，当前桌面端不支持需要用户名和密码的代理。");
+    }
+    if (!response.ok) {
+      const detail = await responseDetail(response);
+      throw new Error(`Firebase Storage 上传返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Firebase Storage 上传在 ${FIREBASE_STORAGE_REQUEST_TIMEOUT_MS / 1000} 秒内未完成。`);
     }
     throw error;
   } finally {
@@ -689,6 +772,16 @@ ipcMain.handle("study-journal:test-firebase-storage", async (event) => {
 ipcMain.handle("study-journal:firebase-storage-download", async (event, uid, objectPath, idToken) => {
   requireMainWindowSender(event, "Firebase Storage 下载请求来源无效。");
   return fetchFirebaseStorageObject(uid, objectPath, idToken);
+});
+
+ipcMain.handle("study-journal:firebase-storage-exists", async (event, uid, objectPath, idToken) => {
+  requireMainWindowSender(event, "Firebase Storage 检查请求来源无效。");
+  return checkFirebaseStorageObject(uid, objectPath, idToken);
+});
+
+ipcMain.handle("study-journal:firebase-storage-upload", async (event, uid, objectPath, idToken, data, contentType) => {
+  requireMainWindowSender(event, "Firebase Storage 上传请求来源无效。");
+  await uploadFirebaseStorageObject(uid, objectPath, idToken, data, contentType);
 });
 
 const isInsideDist = (filePath) => filePath === DIST_ROOT || filePath.startsWith(`${DIST_ROOT}${path.sep}`);

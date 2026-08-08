@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("studyJournalDesktop", Object.freeze({
   }),
   firebaseStorage: Object.freeze({
     download: (uid, objectPath, idToken) => ipcRenderer.invoke("study-journal:firebase-storage-download", uid, objectPath, idToken),
+    exists: (uid, objectPath, idToken) => ipcRenderer.invoke("study-journal:firebase-storage-exists", uid, objectPath, idToken),
+    upload: (uid, objectPath, idToken, data, contentType) => ipcRenderer.invoke("study-journal:firebase-storage-upload", uid, objectPath, idToken, data, contentType),
   }),
   onBackupFlushRequested: (listener) => {
     backupFlushListeners.add(listener);

@@ -20,7 +20,7 @@ import type { StorageReference } from "firebase/storage";
 import type { CloudSyncEntityType, CloudSyncLedgerRecord, CloudSyncStateRecord, ImportOptions } from "../types";
 import { db } from "../db/database";
 import { newId } from "../lib/entity";
-import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
+import { isAndroidPlatform, isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { firebaseAuth, firebaseStorage, firestore, googleAuthProvider } from "./firebase";
 import {
   exportCloudSync,
@@ -39,6 +39,7 @@ import { storage } from "./storageAdapter";
 import { snapshotToZip, summarizeSnapshot, zipToSnapshot } from "./backup";
 import {
   downloadNativeFirebaseStorageBlob,
+  listNativeFirebaseStoragePaths,
   nativeFirebaseStorageObjectExists,
   uploadNativeFirebaseStorageBlob,
 } from "./nativeFirebaseStorage";
@@ -131,7 +132,7 @@ const legacySnapshotRef = (uid: string) => ref(firebaseStorage, `users/${uid}/${
 const getCloudStorageBlob = async (uid: string, storageRef: StorageReference): Promise<Blob> => {
   const desktopStorage = isDesktopPlatform() ? window.studyJournalDesktop?.firebaseStorage : undefined;
   const user = firebaseAuth.currentUser;
-  if (isNativePlatform() && user?.uid === uid) {
+  if (isAndroidPlatform() && user?.uid === uid) {
     return downloadNativeFirebaseStorageBlob(storageRef.fullPath, await user.getIdToken());
   }
   if (!desktopStorage || !user || user.uid !== uid) {
@@ -147,9 +148,21 @@ const uploadCloudStorageBlob = async (
   blob: Blob,
   onProgress?: (bytesTransferred: number, totalBytes: number) => void,
 ) => {
+  const desktopStorage = isDesktopPlatform() ? window.studyJournalDesktop?.firebaseStorage : undefined;
   const user = firebaseAuth.currentUser;
-  if (isNativePlatform() && user?.uid === uid) {
+  if (isAndroidPlatform() && user?.uid === uid) {
     await uploadNativeFirebaseStorageBlob(storageRef.fullPath, blob, await user.getIdToken(), onProgress);
+    return;
+  }
+  if (desktopStorage && user?.uid === uid) {
+    await desktopStorage.upload(
+      uid,
+      storageRef.fullPath,
+      await user.getIdToken(),
+      await blob.arrayBuffer(),
+      blob.type || "application/octet-stream",
+    );
+    onProgress?.(blob.size, blob.size);
     return;
   }
   const task = uploadBytesResumable(storageRef, blob, { contentType: blob.type || "application/octet-stream" });
@@ -159,9 +172,13 @@ const uploadCloudStorageBlob = async (
 };
 
 const cloudStorageObjectExists = async (uid: string, storageRef: StorageReference): Promise<boolean> => {
+  const desktopStorage = isDesktopPlatform() ? window.studyJournalDesktop?.firebaseStorage : undefined;
   const user = firebaseAuth.currentUser;
-  if (isNativePlatform() && user?.uid === uid) {
+  if (isAndroidPlatform() && user?.uid === uid) {
     return nativeFirebaseStorageObjectExists(storageRef.fullPath, await user.getIdToken());
+  }
+  if (desktopStorage && user?.uid === uid) {
+    return desktopStorage.exists(uid, storageRef.fullPath, await user.getIdToken());
   }
   try {
     await getMetadata(storageRef);
@@ -189,6 +206,27 @@ export const withTimeout = <T>(promise: PromiseLike<T>, ms: number, message: str
   return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
     if (timeoutId) clearTimeout(timeoutId);
   });
+};
+
+/** Run network work with a small fixed number of concurrent requests. */
+export const mapWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 };
 
 /**
@@ -479,6 +517,7 @@ const writeInBatches = async (writes: Array<(batch: WriteBatch) => void>) => {
 };
 
 const ASSET_UPLOAD_CONCURRENCY = 5;
+const STORAGE_METADATA_CONCURRENCY = 6;
 // Native uploads use Android's network stack and may legitimately take longer than the web SDK
 // timeout while the operating system sends a large cached file.
 const ASSET_UPLOAD_TIMEOUT_MS = isNativePlatform() ? 300_000 : 120_000;
@@ -494,18 +533,26 @@ const uploadAssets = async (
     .filter((entity) => entity.entityType === "asset" && !entity.deleted)
     .map((entity) => entity.payload.contentHash)
     .filter((hash): hash is string => typeof hash === "string"))];
-  const missing = (
-    await Promise.all(
-      hashes.map(async (hash) => {
+  const user = firebaseAuth.currentUser;
+  const nativeAssetPaths = hashes.length > 0 && isAndroidPlatform() && user?.uid === uid
+    ? await withTimeout(
+      listNativeFirebaseStoragePaths(`users/${uid}/assets/`, await user.getIdToken()),
+      METADATA_CHECK_TIMEOUT_MS,
+      "检查云端资源超时，请检查网络连接后重试。",
+    )
+    : undefined;
+  const missing = nativeAssetPaths
+    ? hashes.filter((hash) => !nativeAssetPaths.has(`users/${uid}/assets/${hash}`))
+    : (
+      await mapWithConcurrency(hashes, STORAGE_METADATA_CONCURRENCY, async (hash) => {
         const exists = await withTimeout(
           cloudStorageObjectExists(uid, assetRef(uid, hash)),
           METADATA_CHECK_TIMEOUT_MS,
           "检查云端资源超时，请检查网络连接后重试。",
         );
         return exists ? null : hash;
-      }),
-    )
-  ).filter((h): h is string => h !== null);
+      })
+    ).filter((h): h is string => h !== null);
   let transferred = 0;
   const total = missing.length;
   let completed = 0;
@@ -541,28 +588,34 @@ const uploadLargePayloadDocuments = async <T extends CloudSyncEntity>(
     return document ? { entity: { ...entity, ...withCloudPayloadDocument(entity, document) } as T, document } : { entity };
   }));
   const documents = prepared.filter((item): item is { entity: T; document: NonNullable<Awaited<ReturnType<typeof createCloudPayloadDocument>>> } => Boolean(item.document));
-  const missingDocs = (
-    await Promise.all(
-      documents.map(async (item) => {
+  const user = firebaseAuth.currentUser;
+  const nativeDocumentPaths = documents.length > 0 && isAndroidPlatform() && user?.uid === uid
+    ? await withTimeout(
+      listNativeFirebaseStoragePaths(`users/${uid}/documents/`, await user.getIdToken()),
+      METADATA_CHECK_TIMEOUT_MS,
+      "检查云端大文本超时，请确认网络可连接后重试。",
+    )
+    : undefined;
+  const missingDocs = nativeDocumentPaths
+    ? documents.filter((item) => !nativeDocumentPaths.has(`users/${uid}/documents/${item.document.hash}`))
+    : (
+      await mapWithConcurrency(documents, STORAGE_METADATA_CONCURRENCY, async (item) => {
         const exists = await withTimeout(
           cloudStorageObjectExists(uid, documentRef(uid, item.document.hash)),
           METADATA_CHECK_TIMEOUT_MS,
-          "检查云端大文本超时，请检查网络连接后重试。",
+          "检查云端大文本超时，请确认网络可连接后重试。",
         );
         return exists ? null : item;
-      }),
-    )
-  ).filter((item): item is (typeof documents)[number] => item !== null);
-  await Promise.all(
-    missingDocs.map((item, index) => {
-      progress(options, "uploading", `正在上传大文本 ${index + 1}/${missingDocs.length}。`, index + 1, missingDocs.length);
-      return withTimeout(
-        uploadCloudStorageBlob(uid, documentRef(uid, item.document.hash), item.document.blob),
-        ASSET_UPLOAD_TIMEOUT_MS,
-        `上传云端大文本超时（${index + 1}/${missingDocs.length}），请确认网络可连接 Firebase Storage 后重试。`,
-      );
-    }),
-  );
+      })
+    ).filter((item): item is (typeof documents)[number] => item !== null);
+  await mapWithConcurrency(missingDocs, ASSET_UPLOAD_CONCURRENCY, (item, index) => {
+    progress(options, "uploading", `正在上传大文本 ${index + 1}/${missingDocs.length}。`, index + 1, missingDocs.length);
+    return withTimeout(
+      uploadCloudStorageBlob(uid, documentRef(uid, item.document.hash), item.document.blob),
+      ASSET_UPLOAD_TIMEOUT_MS,
+      `上传云端大文本超时（${index + 1}/${missingDocs.length}），请确认网络可连接 Firebase Storage 后重试。`,
+    );
+  });
   return prepared.map((item) => item.entity);
 };
 

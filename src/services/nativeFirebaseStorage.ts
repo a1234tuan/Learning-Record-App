@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 interface NativeFirebaseStoragePlugin {
   exists(options: { path: string; idToken: string }): Promise<{ exists: boolean }>;
+  list(options: { prefix: string; idToken: string }): Promise<{ paths: string[] }>;
   beginDownload(options: { path: string; idToken: string }): Promise<{ sessionId: string; size: number; contentType?: string }>;
   readDownloadChunk(options: { sessionId: string; offset: number; length: number }): Promise<{ base64: string; bytesRead: number; done: boolean }>;
   finishDownload(options: { sessionId: string }): Promise<void>;
@@ -61,6 +62,14 @@ export const nativeFirebaseStorageObjectExists = async (path: string, idToken: s
     throw new Error("当前平台不支持原生 Firebase Storage 检查。");
   }
   return (await NativeFirebaseStorage.exists({ path, idToken })).exists;
+};
+
+/** List one authenticated Storage prefix so a sync can compare hashes without hundreds of GETs. */
+export const listNativeFirebaseStoragePaths = async (prefix: string, idToken: string): Promise<Set<string>> => {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") {
+    throw new Error("当前平台不支持原生 Firebase Storage 列表。");
+  }
+  return new Set((await NativeFirebaseStorage.list({ prefix, idToken })).paths);
 };
 
 /** Stage data in Android's cache and upload it through the same system network stack as downloads. */

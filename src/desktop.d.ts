@@ -55,6 +55,8 @@ declare global {
       }>;
       firebaseStorage: Readonly<{
         download: (uid: string, objectPath: string, idToken: string) => Promise<{ data: ArrayBuffer; contentType: string }>;
+        exists: (uid: string, objectPath: string, idToken: string) => Promise<boolean>;
+        upload: (uid: string, objectPath: string, idToken: string, data: ArrayBuffer, contentType: string) => Promise<void>;
       }>;
       onBackupFlushRequested: (listener: (reason: "minimize" | "close") => Promise<void> | void) => () => void;
     }>;

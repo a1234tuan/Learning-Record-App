@@ -2,6 +2,7 @@ package com.noteproject.study408;
 
 import android.util.Base64;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -15,18 +16,23 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Firebase's JavaScript Storage client runs inside Android WebView. Some VPN/proxy setups can
- * reach Firebase in Chrome but repeatedly fail from that WebView. This small bridge performs the
- * authenticated Storage REST download through Android's normal network stack instead.
+ * reach Firebase in Chrome but repeatedly fail from that WebView. This bridge performs
+ * authenticated Storage REST operations through Android's normal network stack instead.
  */
 @CapacitorPlugin(name = "NativeFirebaseStorage")
 public class NativeFirebaseStoragePlugin extends Plugin {
-    private static final int CONNECT_TIMEOUT_MS = 30_000;
+    private static final int CONNECT_TIMEOUT_MS = 15_000;
+    private static final int EXISTS_READ_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 300_000;
     // Matches android/app/google-services.json. The bucket name is public client configuration,
     // while access remains protected by the Firebase ID token passed with each request.
@@ -76,8 +82,9 @@ public class NativeFirebaseStoragePlugin extends Plugin {
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-                connection.setReadTimeout(READ_TIMEOUT_MS);
-                connection.setRequestProperty("Authorization", "Bearer " + idToken);
+                connection.setReadTimeout(EXISTS_READ_TIMEOUT_MS);
+                connection.setRequestProperty("Authorization", "Firebase " + idToken);
+                connection.setRequestProperty("Accept", "application/json");
                 int status = connection.getResponseCode();
                 if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_NOT_FOUND) {
                     throw new IllegalStateException("Firebase Storage 原生检查失败（HTTP " + status + "）：" + compact(readBody(connection.getErrorStream())));
@@ -89,6 +96,68 @@ public class NativeFirebaseStoragePlugin extends Plugin {
                 call.reject(error.getMessage() != null ? error.getMessage() : "Firebase Storage 原生检查失败。", error);
             } finally {
                 if (connection != null) connection.disconnect();
+            }
+        });
+    }
+
+    /** List a Storage prefix in one request (paginated by Firebase at 1,000 objects per page). */
+    @PluginMethod
+    public void list(PluginCall call) {
+        String prefix = call.getString("prefix", "");
+        String idToken = call.getString("idToken", "");
+        if (prefix.trim().isEmpty() || idToken.trim().isEmpty()) {
+            call.reject("原生 Firebase Storage 列表缺少前缀或登录令牌。");
+            return;
+        }
+        execute(() -> {
+            try {
+                Set<String> paths = new LinkedHashSet<>();
+                String pageToken = null;
+                do {
+                    HttpURLConnection connection = null;
+                    try {
+                        StringBuilder urlText = new StringBuilder("https://firebasestorage.googleapis.com/v0/b/")
+                                .append(STORAGE_BUCKET)
+                                .append("/o?prefix=")
+                                .append(URLEncoder.encode(prefix, StandardCharsets.UTF_8).replace("+", "%20"))
+                                .append("&maxResults=1000");
+                        if (pageToken != null && !pageToken.isEmpty()) {
+                            urlText.append("&pageToken=")
+                                    .append(URLEncoder.encode(pageToken, StandardCharsets.UTF_8).replace("+", "%20"));
+                        }
+                        connection = (HttpURLConnection) new URL(urlText.toString()).openConnection();
+                        connection.setRequestMethod("GET");
+                        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+                        connection.setReadTimeout(EXISTS_READ_TIMEOUT_MS);
+                        connection.setRequestProperty("Authorization", "Firebase " + idToken);
+                        connection.setRequestProperty("Accept", "application/json");
+                        int status = connection.getResponseCode();
+                        if (status != HttpURLConnection.HTTP_OK) {
+                            throw new IllegalStateException("Firebase Storage 原生列表失败（HTTP " + status + "）：" + compact(readBody(connection.getErrorStream())));
+                        }
+                        JSONObject response = new JSONObject(readBody(connection.getInputStream()));
+                        JSONArray items = response.optJSONArray("items");
+                        if (items != null) {
+                            for (int index = 0; index < items.length(); index += 1) {
+                                String name = items.optJSONObject(index) != null
+                                        ? items.optJSONObject(index).optString("name", "")
+                                        : "";
+                                if (!name.isEmpty()) paths.add(name);
+                            }
+                        }
+                        pageToken = response.optString("nextPageToken", "");
+                    } finally {
+                        if (connection != null) connection.disconnect();
+                    }
+                } while (pageToken != null && !pageToken.isEmpty());
+
+                JSArray resultPaths = new JSArray();
+                for (String path : paths) resultPaths.put(path);
+                JSObject result = new JSObject();
+                result.put("paths", resultPaths);
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject(error.getMessage() != null ? error.getMessage() : "Firebase Storage 原生列表失败。", error);
             }
         });
     }
@@ -111,7 +180,7 @@ public class NativeFirebaseStoragePlugin extends Plugin {
                 connection.setRequestMethod("GET");
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
                 connection.setReadTimeout(READ_TIMEOUT_MS);
-                connection.setRequestProperty("Authorization", "Bearer " + idToken);
+                connection.setRequestProperty("Authorization", "Firebase " + idToken);
                 connection.setRequestProperty("Accept", "application/octet-stream");
 
                 int status = connection.getResponseCode();
@@ -250,7 +319,7 @@ public class NativeFirebaseStoragePlugin extends Plugin {
                 connection.setReadTimeout(READ_TIMEOUT_MS);
                 connection.setDoOutput(true);
                 connection.setFixedLengthStreamingMode(session.file.length());
-                connection.setRequestProperty("Authorization", "Bearer " + session.idToken);
+                connection.setRequestProperty("Authorization", "Firebase " + session.idToken);
                 connection.setRequestProperty("Content-Type", session.contentType);
                 try (InputStream input = new java.io.FileInputStream(session.file); java.io.OutputStream output = connection.getOutputStream()) {
                     byte[] buffer = new byte[32 * 1024];
