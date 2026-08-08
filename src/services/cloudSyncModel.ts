@@ -104,6 +104,23 @@ export const hashValue = async (value: unknown) => {
 };
 
 /**
+ * `updatedAt` is bookkeeping, not content — storageAdapter.ts's save paths already skip bumping it
+ * when nothing else changed, but every entity hashed here still carries whatever `updatedAt` value
+ * it happens to have. Stripping it before hashing means the entity's contentHash reflects only its
+ * actual content, so re-saving with a genuinely unchanged payload can never look like a real edit
+ * to the sync layer even in paths that don't (or can't) guard the timestamp itself.
+ *
+ * Only used at the two call sites that compute an entity's `contentHash` (`entity()` and
+ * `createCloudPayloadDocument()`) — NOT inside the shared `hashValue`/`stableJson` used elsewhere
+ * (e.g. review-event log hashing), whose `updatedAt` semantics are unrelated to this concern.
+ */
+export const stripUpdatedAt = (value: unknown): unknown => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const { updatedAt: _updatedAt, ...rest } = value as JsonRecord;
+  return rest;
+};
+
+/**
  * Firestore documents have a 1 MiB ceiling. Keep a margin and store large
  * structured payloads in Storage, addressed by the same hash as the entity.
  */
@@ -112,7 +129,7 @@ export const createCloudPayloadDocument = async (entity: CloudSyncEntity): Promi
   const source = stableJson(entity.payload);
   const bytes = new TextEncoder().encode(source);
   if (bytes.byteLength <= CLOUD_DOCUMENT_THRESHOLD_BYTES) return undefined;
-  const hash = await hashValue(entity.payload);
+  const hash = await hashValue(stripUpdatedAt(entity.payload));
   if (hash !== entity.contentHash) {
     throw new Error(`同步实体 ${entity.key} 的内容哈希不一致。`);
   }
@@ -155,7 +172,7 @@ const entity = async (
     key: `${entityType}:${value.id}`,
     entityType,
     entityId: value.id,
-    contentHash: await hashValue(payload),
+    contentHash: await hashValue(stripUpdatedAt(payload)),
     payload,
     deleted: Boolean(value.deletedAt),
   };

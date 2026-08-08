@@ -10,6 +10,7 @@ import {
   materializeCloudSyncSnapshot,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
+  stripUpdatedAt,
   withCloudPayloadDocument,
 } from "./cloudSyncModel";
 
@@ -105,7 +106,9 @@ describe("cloud sync model", () => {
     const block = exported.entities.find((entity) => entity.entityType === "block");
     if (!block) throw new Error("expected block entity");
     const large = { ...block, payload: { ...block.payload, contentHtml: "x".repeat(CLOUD_DOCUMENT_THRESHOLD_BYTES + 1) } };
-    large.contentHash = await hashValue(large.payload);
+    // contentHash must be computed the same way entity() computes it (updatedAt stripped first) —
+    // createCloudPayloadDocument() re-derives the hash the same way and checks it against this value.
+    large.contentHash = await hashValue(stripUpdatedAt(large.payload));
 
     const document = await createCloudPayloadDocument(large);
     expect(document?.hash).toBe(large.contentHash);
@@ -114,6 +117,37 @@ describe("cloud sync model", () => {
     const referenced = withCloudPayloadDocument(large, document!);
     expect(referenced.payload).toEqual({});
     expect(referenced.payloadDocumentHash).toBe(document?.hash);
+  });
+
+  it("computes the same contentHash for an entity re-saved with only updatedAt different", async () => {
+    // Simulates re-saving a record where the visible content is identical but updatedAt ticked
+    // forward (e.g. before the storageAdapter.ts guard runs, or any future save path that doesn't
+    // itself compare old/new content). The sync layer must not see this as a real edit.
+    const laterSnapshot: StorageSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [{ ...record, updatedAt: "2026-08-06T00:00:00.000Z" }] },
+    };
+    const exportedNow = await exportCloudSync(snapshot);
+    const exportedLater = await exportCloudSync(laterSnapshot);
+    const blockNow = exportedNow.entities.find((entity) => entity.entityType === "block");
+    const blockLater = exportedLater.entities.find((entity) => entity.entityType === "block");
+
+    expect(blockNow?.payload.updatedAt).not.toBe(blockLater?.payload.updatedAt);
+    expect(blockNow?.contentHash).toBe(blockLater?.contentHash);
+  });
+
+  it("computes a different contentHash when content actually changes even with the same updatedAt", async () => {
+    const editedSnapshot: StorageSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [{ ...record, title: "上下文切换（修订）" }] },
+    };
+    const exportedOriginal = await exportCloudSync(snapshot);
+    const exportedEdited = await exportCloudSync(editedSnapshot);
+    const blockOriginal = exportedOriginal.entities.find((entity) => entity.entityType === "block");
+    const blockEdited = exportedEdited.entities.find((entity) => entity.entityType === "block");
+
+    expect(blockOriginal?.payload.updatedAt).toBe(blockEdited?.payload.updatedAt);
+    expect(blockOriginal?.contentHash).not.toBe(blockEdited?.contentHash);
   });
 });
 

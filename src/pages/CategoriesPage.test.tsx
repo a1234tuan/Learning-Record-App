@@ -40,11 +40,16 @@ const createSaveSubjectsMock = (): SaveSubjectsMock =>
 const renderPage = (
   blocks: Block[] = [],
   onSaveSubjects: SaveSubjectsMock = createSaveSubjectsMock(),
-  options: { activeSubject?: string | null; managing?: boolean; onAskAiScope?: (scope: AiKnowledgeScope) => void } = {},
+  options: {
+    activeSubject?: string | null;
+    managing?: boolean;
+    onAskAiScope?: (scope: AiKnowledgeScope) => void;
+    subjects?: SubjectConfig[];
+  } = {},
 ) => render(
   <CategoriesPage
     blocks={blocks}
-    subjects={subjects}
+    subjects={options.subjects ?? subjects}
     activeSubject={options.activeSubject ?? null}
     managing={options.managing ?? true}
     onActiveSubjectChange={vi.fn()}
@@ -171,5 +176,63 @@ describe("CategoriesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "针对标签 专项突破 进行 AI 问答" }));
 
     expect(onAskAiScope).toHaveBeenCalledWith({ kind: "tag", subject: "数学", tag: "专项突破" });
+  });
+
+  it("archiving one subject does not bump updatedAt on subjects that were not touched", async () => {
+    const onSaveSubjects = createSaveSubjectsMock();
+    renderPage([], onSaveSubjects);
+
+    // Row order matches `subjects`: 读书笔记 (index 0), 数学 (index 1). Archive toggle is the
+    // 4th action button in each row (move-up, move-down, edit, archive, delete) — these icon-only
+    // buttons have no aria-label, so select by row structure instead.
+    const rows = document.querySelectorAll(".subject-manager-row");
+    const mathArchiveButton = rows[1].querySelectorAll(".subject-manager-actions button")[3] as HTMLButtonElement;
+    fireEvent.click(mathArchiveButton);
+
+    await waitFor(() => expect(onSaveSubjects).toHaveBeenCalledTimes(1));
+    const saved = onSaveSubjects.mock.calls[0]?.[0] as SubjectConfig[];
+    const savedReading = saved.find((subject) => subject.name === "读书笔记");
+    const savedMath = saved.find((subject) => subject.name === "数学");
+
+    // Untouched subject keeps its original updatedAt (and object identity).
+    expect(savedReading?.updatedAt).toBe(stamp);
+    expect(savedReading).toBe(subjects[0]);
+    // The archived subject genuinely changed (archivedAt flipped) and must get a fresh updatedAt.
+    expect(savedMath?.archivedAt).toBeTruthy();
+    expect(savedMath?.updatedAt).not.toBe(stamp);
+  });
+
+  it("reordering subjects does not bump updatedAt on the subject that stayed in place", async () => {
+    // Three subjects so a swap between the last two leaves the first one genuinely untouched —
+    // with only two subjects, any move is a full swap and neither side stays in place.
+    const threeSubjects: SubjectConfig[] = [
+      { id: "subject-reading", createdAt: stamp, updatedAt: stamp, name: "读书笔记", order: 0 },
+      { id: "subject-math", createdAt: stamp, updatedAt: stamp, name: "数学", order: 1 },
+      { id: "subject-physics", createdAt: stamp, updatedAt: stamp, name: "物理", order: 2 },
+    ];
+    const onSaveSubjects = createSaveSubjectsMock();
+    renderPage([], onSaveSubjects, { subjects: threeSubjects });
+
+    // Move 物理 (index 2) up by one — it swaps with 数学 (index 1); 读书笔记 (index 0) is not
+    // touched by this move at all.
+    const rows = document.querySelectorAll(".subject-manager-row");
+    const physicsMoveUpButton = rows[2].querySelectorAll(".subject-manager-actions button")[0] as HTMLButtonElement;
+    fireEvent.click(physicsMoveUpButton);
+
+    await waitFor(() => expect(onSaveSubjects).toHaveBeenCalledTimes(1));
+    const saved = onSaveSubjects.mock.calls[0]?.[0] as SubjectConfig[];
+    const savedReading = saved.find((subject) => subject.name === "读书笔记");
+    const savedMath = saved.find((subject) => subject.name === "数学");
+    const savedPhysics = saved.find((subject) => subject.name === "物理");
+
+    // 读书笔记 keeps order 0 and its original updatedAt/object identity — genuinely untouched.
+    expect(savedReading?.order).toBe(0);
+    expect(savedReading?.updatedAt).toBe(stamp);
+    expect(savedReading).toBe(threeSubjects[0]);
+    // 数学 and 物理 swapped places and must both get a fresh updatedAt.
+    expect(savedMath?.order).toBe(2);
+    expect(savedMath?.updatedAt).not.toBe(stamp);
+    expect(savedPhysics?.order).toBe(1);
+    expect(savedPhysics?.updatedAt).not.toBe(stamp);
   });
 });

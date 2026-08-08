@@ -183,7 +183,17 @@ export const CategoriesPage = ({
   };
 
   const updateSubjects = async (nextSubjects: SubjectConfig[]) => {
-    await onSaveSubjects(nextSubjects.map((subject, index) => ({ ...subject, order: index, updatedAt: nowISO() })));
+    // Re-indexing/archiving/deleting one subject shouldn't bump updatedAt on every other untouched
+    // subject — cloud sync hashes the whole settings payload, so an unnecessary bump here makes the
+    // entire settings entity look "changed" on the next sync even though only one item actually is.
+    await onSaveSubjects(nextSubjects.map((subject, index) => {
+      const existing = subjects.find((item) => item.id === subject.id);
+      const unchanged = existing
+        && existing.order === index
+        && existing.name === subject.name
+        && existing.archivedAt === subject.archivedAt;
+      return unchanged ? existing : { ...subject, order: index, updatedAt: nowISO() };
+    }));
   };
 
   const moveSubject = async (index: number, direction: -1 | 1) => {

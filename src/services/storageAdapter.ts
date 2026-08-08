@@ -48,7 +48,7 @@ import {
   isLegacyDefaultAiPresetSet,
 } from "../db/defaults";
 import { addDaysISO, isoDateTimeToLocalDate, nowISO, todayISO } from "../lib/date";
-import { createBaseEntity, newId, touch } from "../lib/entity";
+import { createBaseEntity, deepEqualIgnoring, newId, shallowEqual, touch } from "../lib/entity";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import {
   extractRecordRefsFromContent,
@@ -699,6 +699,17 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async saveEntry(entry: DayEntry): Promise<DayEntry> {
+    const existing = await db.entries.get(entry.id);
+    if (
+      existing &&
+      shallowEqual(
+        { date: existing.date, title: existing.title, pinned: existing.pinned, favorite: existing.favorite, summary: existing.summary },
+        { date: entry.date, title: entry.title, pinned: entry.pinned, favorite: entry.favorite, summary: entry.summary },
+      ) &&
+      JSON.stringify(existing.tags) === JSON.stringify(entry.tags)
+    ) {
+      return existing;
+    }
     const saved = touch(entry);
     await db.entries.put(saved);
     return saved;
@@ -711,7 +722,15 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async saveBlock(block: Block): Promise<Block> {
-    const saved = touch(block.type === "record" ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] }) : block);
+    // Compare against the post-normalization value (after syncRecordRefsFromContent), not the raw
+    // incoming param — otherwise the auto-derived assets/formulas would make an unchanged save look
+    // "different" and vice versa.
+    const normalized = block.type === "record" ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] }) : block;
+    const existingBlock = await db.blocks.get(normalized.id);
+    const isUnchangedBlock = existingBlock
+      && existingBlock.type === normalized.type
+      && deepEqualIgnoring(existingBlock, normalized, ["updatedAt"]);
+    const saved = isUnchangedBlock ? existingBlock : touch(normalized);
     await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
       await db.blocks.put(saved);
       if (saved.type === "record") {
@@ -721,7 +740,7 @@ export class DexieStorageAdapter implements StorageAdapter {
 
     if (saved.type === "studySession") {
       const existing = await db.studySessions.where("blockId").equals(saved.id).first();
-      const session: StudySession = {
+      const nextSession: StudySession = {
         ...(existing ?? createBaseEntity()),
         date: saved.date,
         subject: saved.subject,
@@ -729,7 +748,12 @@ export class DexieStorageAdapter implements StorageAdapter {
         note: saved.note,
         blockId: saved.id,
       };
-      await db.studySessions.put(touch(session));
+      const isUnchangedSession = existing
+        && existing.date === nextSession.date
+        && existing.subject === nextSession.subject
+        && existing.minutes === nextSession.minutes
+        && existing.note === nextSession.note;
+      await db.studySessions.put(isUnchangedSession ? existing : touch(nextSession));
     }
 
     return saved;
@@ -740,11 +764,16 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async saveTemplate(template: ContentTemplate): Promise<ContentTemplate> {
-    const saved = touch({
+    const normalized = {
       ...template,
       title: template.title.trim() || "未命名模板",
       contentHtml: template.contentHtml.trim() || "<p></p>",
-    });
+    };
+    const existing = await db.templates.get(normalized.id);
+    if (existing && shallowEqual({ title: existing.title, contentHtml: existing.contentHtml }, { title: normalized.title, contentHtml: normalized.contentHtml })) {
+      return existing;
+    }
+    const saved = touch(normalized);
     await db.templates.put(saved);
     return saved;
   }
@@ -1227,6 +1256,9 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (!block || block.type !== "record") {
       return undefined;
     }
+    if (block.favorite === favorite) {
+      return block;
+    }
     const saved = { ...block, favorite, updatedAt: nowISO() };
     await db.blocks.put(saved);
     return saved;
@@ -1236,7 +1268,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await db.transaction("rw", db.blocks, async () => {
       for (const [order, blockId] of blockIds.entries()) {
         const block = await db.blocks.get(blockId);
-        if (block && block.date === date) {
+        if (block && block.date === date && block.order !== order) {
           await db.blocks.put({ ...block, order, updatedAt: nowISO() });
         }
       }
@@ -1288,6 +1320,16 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async saveStudySession(session: StudySession): Promise<StudySession> {
+    const existing = await db.studySessions.get(session.id);
+    if (
+      existing &&
+      shallowEqual(
+        { date: existing.date, subject: existing.subject, minutes: existing.minutes, note: existing.note, blockId: existing.blockId },
+        { date: session.date, subject: session.subject, minutes: session.minutes, note: session.note, blockId: session.blockId },
+      )
+    ) {
+      return existing;
+    }
     const saved = touch(session);
     await db.studySessions.put(saved);
     return saved;
@@ -1343,7 +1385,12 @@ export class DexieStorageAdapter implements StorageAdapter {
       return undefined;
     }
     const { data: _ignoredData, id: _ignoredId, ...safePatch } = patch as Partial<Asset>;
-    const saved = touch({ ...existing, ...safePatch, data: existing.data });
+    const next = { ...existing, ...safePatch, data: existing.data };
+    // Blob fields can't round-trip through JSON, so compare everything except updatedAt/data.
+    if (deepEqualIgnoring(existing, next, ["updatedAt", "data"])) {
+      return existing;
+    }
+    const saved = touch(next);
     await db.assets.put(saved);
     return saved;
   }
@@ -1392,7 +1439,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
     }
 
-    const savedAsset = touch({ ...existing, title: nextTitle, data: existing.data });
+    // Renaming to the asset's current title is a no-op for the asset row itself — the blocks/drafts/
+    // templates loops above already skip entities where the title reference didn't actually change.
+    const savedAsset = existing.title === nextTitle ? existing : touch({ ...existing, title: nextTitle, data: existing.data });
     await db.transaction("rw", db.assets, db.blocks, db.recordDrafts, db.templates, async () => {
       await db.assets.put(savedAsset);
       if (renamedBlocks.length > 0) {

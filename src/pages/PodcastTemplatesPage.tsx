@@ -83,13 +83,17 @@ export const PodcastTemplatesPage = ({ settings, onChanged }: PodcastTemplatesPa
   };
 
   const savePodcastModes = async () => {
-    const normalized = podcastModes.map((mode, order) => ({
-      ...mode,
-      title: mode.title.trim(),
-      prompt: mode.prompt.trim(),
-      order,
-      updatedAt: new Date().toISOString(),
-    }));
+    const previousModes = settings.knowledgePodcastModeTemplates ?? [];
+    const normalized = podcastModes.map((mode, order) => {
+      const trimmedTitle = mode.title.trim();
+      const trimmedPrompt = mode.prompt.trim();
+      const existing = previousModes.find((item) => item.id === mode.id);
+      const unchanged = existing
+        && existing.order === order
+        && existing.title === trimmedTitle
+        && existing.prompt === trimmedPrompt;
+      return unchanged ? existing : { ...mode, title: trimmedTitle, prompt: trimmedPrompt, order, updatedAt: new Date().toISOString() };
+    });
     const invalidMode = normalized.find((mode) => !mode.title || !mode.prompt || validatePodcastModeTemplate(mode.prompt).length);
     if (invalidMode) {
       const unsupported = validatePodcastModeTemplate(invalidMode.prompt);
