@@ -38,6 +38,14 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
         voice: "cmn-CN-Wavenet-A",
         languageCode: "cmn-CN",
       };
+    case "doubao":
+      return {
+        ...base,
+        providerId,
+        providerName: "豆包语音 2.0",
+        model: "seed-tts-2.0",
+        voice: "zh_female_yingyujiaoxue_uranus_bigtts",
+      };
   }
 };
 
@@ -45,7 +53,7 @@ export const createDefaultTtsProviders = (): TtsProviderProfile[] => [createTtsP
 
 export const normalizeTtsProvider = (profile: Partial<TtsProviderProfile>): TtsProviderProfile => {
   const providerId: TtsProviderId =
-    profile.providerId === "aliyun" || profile.providerId === "tencent" || profile.providerId === "google"
+    profile.providerId === "aliyun" || profile.providerId === "tencent" || profile.providerId === "google" || profile.providerId === "doubao"
       ? profile.providerId
       : "fish-audio";
   const fallback = createTtsProviderTemplate(providerId);
@@ -114,6 +122,7 @@ export const TTS_PROVIDER_LABELS: Record<TtsProviderId, string> = {
   aliyun: "阿里云百炼",
   tencent: "腾讯云",
   google: "Google Cloud",
+  doubao: "豆包语音",
 };
 
 /** Whether this provider needs a key pair (SecretId + SecretKey) instead of a single API key. */

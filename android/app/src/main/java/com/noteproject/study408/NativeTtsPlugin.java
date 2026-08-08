@@ -43,6 +43,7 @@ public class NativeTtsPlugin extends Plugin {
                     case "aliyun": synthesizeAliyun(call, apiKey, model, voiceId, text); break;
                     case "tencent": synthesizeTencent(call, apiKey, apiKeySecondary, voiceId, text, region); break;
                     case "google": synthesizeGoogle(call, apiKey, voiceId, text, languageCode); break;
+                    case "doubao": synthesizeDoubao(call, apiKey, model, voiceId, text); break;
                     default: synthesizeFishAudio(call, apiKey, model, voiceId, text); break;
                 }
             } catch (Exception error) {
@@ -109,6 +110,50 @@ public class NativeTtsPlugin extends Plugin {
             return;
         }
         resolveAudio(call, audioBytes);
+    }
+
+    private void synthesizeDoubao(PluginCall call, String apiKey, String model, String voiceId, String text) throws Exception {
+        String resourceId = model.isEmpty() ? "seed-tts-2.0" : model;
+        JSONObject payload = new JSONObject();
+        JSONObject request = new JSONObject();
+        request.put("text", text);
+        request.put("speaker", voiceId);
+        JSONObject audioParams = new JSONObject();
+        audioParams.put("format", "mp3");
+        audioParams.put("sample_rate", 24000);
+        request.put("audio_params", audioParams);
+        payload.put("req_params", request);
+        HttpURLConnection conn = openPost("https://openspeech.bytedance.com/api/v3/tts/unidirectional");
+        conn.setRequestProperty("X-Api-Key", apiKey);
+        conn.setRequestProperty("X-Api-Resource-Id", resourceId);
+        conn.setRequestProperty("X-Api-Request-Id", UUID.randomUUID().toString());
+        conn.setRequestProperty("Accept", "application/json");
+        writeBody(conn, payload.toString());
+        int code = conn.getResponseCode();
+        byte[] responseBytes = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+        if (code < 200 || code >= 300) {
+            call.reject("豆包 TTS 请求失败（" + code + "）：" + truncate(new String(responseBytes, StandardCharsets.UTF_8)));
+            return;
+        }
+        ByteArrayOutputStream audio = new ByteArrayOutputStream();
+        String responseText = new String(responseBytes, StandardCharsets.UTF_8);
+        for (String line : responseText.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            JSONObject item = new JSONObject(trimmed);
+            Object itemCode = item.opt("code");
+            if (itemCode != null && !"0".equals(String.valueOf(itemCode))) {
+                throw new IllegalStateException("豆包 TTS 请求失败：" + item.optString("message", "错误码 " + itemCode));
+            }
+            String data = item.optString("data", "");
+            if (!data.isEmpty()) audio.write(Base64.decode(data, Base64.DEFAULT));
+        }
+        byte[] result = audio.toByteArray();
+        if (result.length == 0) {
+            call.reject("豆包 TTS 未返回音频数据。");
+            return;
+        }
+        resolveAudio(call, result);
     }
 
     private void synthesizeTencent(PluginCall call, String secretId, String secretKey, String voiceId, String text, String region) throws Exception {

@@ -88,6 +88,26 @@ const firebaseStorageObjectUploadUrl = (objectPath) =>
 
 const responseDetail = async (response) => (await response.text()).replace(/\s+/g, " ").slice(0, 240);
 
+const decodeDoubaoTtsNdjson = (payload) => {
+  const chunks = [];
+  for (const line of payload.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let item;
+    try {
+      item = JSON.parse(trimmed);
+    } catch {
+      throw new Error("豆包 TTS 返回了无法解析的响应。");
+    }
+    if (item.code !== undefined && item.code !== 0 && String(item.code) !== "0") {
+      throw new Error(`豆包 TTS 请求失败：${typeof item.message === "string" ? item.message : `错误码 ${String(item.code)}`}`);
+    }
+    if (typeof item.data === "string" && item.data) chunks.push(Buffer.from(item.data, "base64"));
+  }
+  if (!chunks.length) throw new Error("豆包 TTS 未返回音频数据。");
+  return Buffer.concat(chunks);
+};
+
 const fetchFirebaseStorageObject = async (uid, objectPath, idToken) => {
   if (!isAllowedFirebaseStoragePath(uid, objectPath) || typeof idToken !== "string" || !idToken) {
     throw new Error("Firebase Storage 下载请求无效。");
@@ -536,6 +556,25 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
   const region = typeof options?.region === "string" ? options.region.trim() : "ap-guangzhou";
   const languageCode = typeof options?.languageCode === "string" ? options.languageCode.trim() : "cmn-CN";
   if (!apiKey || !voiceId || !text.trim()) throw new Error("TTS 请求配置不完整。");
+
+  if (providerId === "doubao") {
+    const resourceId = model || "seed-tts-2.0";
+    const resp = await net.fetch("https://openspeech.bytedance.com/api/v3/tts/unidirectional", {
+      method: "POST",
+      headers: {
+        "X-Api-Key": apiKey,
+        "X-Api-Resource-Id": resourceId,
+        "X-Api-Request-Id": randomUUID(),
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ req_params: { text, speaker: voiceId, audio_params: { format: "mp3", sample_rate: 24000 } } }),
+    });
+    const payload = await resp.text();
+    if (!resp.ok) throw new Error(`豆包 TTS 请求失败（${resp.status}）：${payload.replace(/\s+/g, " ").slice(0, 240)}`);
+    const buffer = decodeDoubaoTtsNdjson(payload);
+    return { data: buffer.toString("base64"), mimeType: "audio/mpeg" };
+  }
 
   if (providerId === "aliyun") {
     const aliyunModel = model || "qwen3-tts-flash";

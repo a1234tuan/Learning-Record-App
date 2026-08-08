@@ -418,7 +418,7 @@ export interface AiCompletionResult {
   requestId?: string;
 }
 
-export type TtsProviderId = "fish-audio" | "aliyun" | "tencent" | "google";
+export type TtsProviderId = "fish-audio" | "aliyun" | "tencent" | "google" | "doubao";
 
 export interface TtsProviderProfile {
   id: EntityId;

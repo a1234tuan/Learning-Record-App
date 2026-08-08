@@ -323,6 +323,7 @@ public final class PodcastTtsForegroundService extends Service {
                     case "aliyun": result = requestAliyun(apiKey, model, voiceId, text); break;
                     case "tencent": result = requestTencent(apiKey, apiKeySecondary, voiceId, text, region); break;
                     case "google": result = requestGoogle(apiKey, voiceId, text, languageCode); break;
+                    case "doubao": result = requestDoubao(apiKey, model, voiceId, text); break;
                     default: {
                         String fishModel = model.isEmpty() ? "s2.1-pro-free" : model;
                         connection = (HttpURLConnection) new URL("https://api.fish.audio/v1/tts").openConnection();
@@ -413,6 +414,51 @@ public final class PodcastTtsForegroundService extends Service {
         activeConnection = null;
         if (audioCode < 200 || audioCode >= 300) throw new IllegalStateException("阿里云音频下载失败（" + audioCode + "）");
         return audioBytes;
+    }
+
+    private byte[] requestDoubao(String apiKey, String model, String voiceId, String text) throws Exception {
+        String resourceId = model.isEmpty() ? "seed-tts-2.0" : model;
+        JSONObject request = new JSONObject();
+        request.put("text", text);
+        request.put("speaker", voiceId);
+        JSONObject audioParams = new JSONObject();
+        audioParams.put("format", "mp3");
+        audioParams.put("sample_rate", 24000);
+        request.put("audio_params", audioParams);
+        JSONObject payload = new JSONObject();
+        payload.put("req_params", request);
+        HttpURLConnection conn = openPost("https://openspeech.bytedance.com/api/v3/tts/unidirectional");
+        activeConnection = conn;
+        try {
+            conn.setRequestProperty("X-Api-Key", apiKey);
+            conn.setRequestProperty("X-Api-Resource-Id", resourceId);
+            conn.setRequestProperty("X-Api-Request-Id", UUID.randomUUID().toString());
+            conn.setRequestProperty("Accept", "application/json");
+            writeBody(conn, payload.toString());
+            int code = conn.getResponseCode();
+            byte[] responseBytes = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+            if (code < 200 || code >= 300) {
+                throw new IllegalStateException("豆包 TTS 请求失败（" + code + "）：" + truncate(new String(responseBytes, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim(), 180));
+            }
+            ByteArrayOutputStream audio = new ByteArrayOutputStream();
+            for (String line : new String(responseBytes, StandardCharsets.UTF_8).split("\\r?\\n")) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) continue;
+                JSONObject item = new JSONObject(trimmed);
+                Object itemCode = item.opt("code");
+                if (itemCode != null && !"0".equals(String.valueOf(itemCode))) {
+                    throw new IllegalStateException("豆包 TTS 请求失败：" + item.optString("message", "错误码 " + itemCode));
+                }
+                String data = item.optString("data", "");
+                if (!data.isEmpty()) audio.write(Base64.decode(data, Base64.DEFAULT));
+            }
+            byte[] result = audio.toByteArray();
+            if (result.length == 0) throw new IllegalStateException("豆包 TTS 未返回音频数据。");
+            return result;
+        } finally {
+            conn.disconnect();
+            activeConnection = null;
+        }
     }
 
     private byte[] requestTencent(String secretId, String secretKey, String voiceId, String text, String region) throws Exception {

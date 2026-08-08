@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 
 import type { AppSettings, TtsProviderConfig, TtsProviderId, TtsProviderProfile } from "../types";
 import {
-  TTS_PROVIDER_LABELS,
   createTtsProviderTemplate,
   getCurrentTtsProvider,
   normalizeTtsConfig,
@@ -16,7 +15,22 @@ interface TtsSettingsPanelProps {
   onChanged: () => Promise<void> | void;
 }
 
-const PROVIDER_TEMPLATES: TtsProviderId[] = ["fish-audio", "aliyun", "tencent", "google"];
+const PROVIDER_TEMPLATES: Array<{ providerId: TtsProviderId; label: string; patch?: Partial<TtsProviderProfile> }> = [
+  { providerId: "fish-audio", label: "Fish Audio" },
+  { providerId: "aliyun", label: "阿里云百炼" },
+  { providerId: "tencent", label: "腾讯云" },
+  { providerId: "google", label: "Google Cloud" },
+  {
+    providerId: "doubao",
+    label: "豆包语音 2.0（Tina老师）",
+    patch: { providerName: "豆包语音 2.0", model: "seed-tts-2.0", voice: "zh_female_yingyujiaoxue_uranus_bigtts" },
+  },
+  {
+    providerId: "doubao",
+    label: "豆包语音 1.0（暖心学姐）",
+    patch: { providerName: "豆包语音 1.0", model: "seed-tts-1.0", voice: "ICL_zh_female_nuanxinxuejie_tob" },
+  },
+];
 
 export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps) => {
   const [open, setOpen] = useState(true);
@@ -52,8 +66,8 @@ export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps)
     }));
   };
 
-  const addProvider = (providerId: TtsProviderId) => {
-    const profile = createTtsProviderTemplate(providerId);
+  const addProvider = (providerId: TtsProviderId, patch?: Partial<TtsProviderProfile>) => {
+    const profile = { ...createTtsProviderTemplate(providerId), ...patch };
     setConfig((current) => ({
       ...current,
       currentProviderId: profile.id,
@@ -110,7 +124,7 @@ export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps)
       <button type="button" className="ai-settings-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span>
           <strong>文本转语音（TTS）设置</strong>
-          <small>配置 Fish Audio、阿里云百炼、腾讯云或 Google Cloud TTS，用于知识播客音频生成</small>
+          <small>配置 Fish Audio、阿里云百炼、腾讯云、Google Cloud 或豆包语音 TTS，用于知识播客音频生成</small>
         </span>
         <ChevronDown size={17} />
       </button>
@@ -125,10 +139,10 @@ export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps)
           </header>
 
           <div className="provider-template-row">
-            {PROVIDER_TEMPLATES.map((providerId) => (
-              <button key={providerId} type="button" className="secondary-button" onClick={() => addProvider(providerId)}>
+            {PROVIDER_TEMPLATES.map((template, index) => (
+              <button key={`${template.providerId}-${index}`} type="button" className="secondary-button" onClick={() => addProvider(template.providerId, template.patch)}>
                 <Plus size={16} />
-                {TTS_PROVIDER_LABELS[providerId]}
+                {template.label}
               </button>
             ))}
           </div>
@@ -166,17 +180,17 @@ export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps)
 
                     {profile.providerId !== "tencent" && (
                       <label>
-                        模型
+                        {profile.providerId === "doubao" ? "模型 / Resource ID" : "模型"}
                         <input
                           value={profile.model}
                           onChange={(e) => updateProvider(profile.id, { model: e.target.value })}
-                          placeholder={profile.providerId === "fish-audio" ? "s2.1-pro-free" : profile.providerId === "aliyun" ? "qwen3-tts-flash" : ""}
+                          placeholder={profile.providerId === "fish-audio" ? "s2.1-pro-free" : profile.providerId === "aliyun" ? "qwen3-tts-flash" : profile.providerId === "doubao" ? "seed-tts-2.0" : ""}
                         />
                       </label>
                     )}
 
                     <label>
-                      {profile.providerId === "tencent" ? "VoiceType（数字）" : "音色 / Voice ID"}
+                      {profile.providerId === "tencent" ? "VoiceType（数字）" : profile.providerId === "doubao" ? "Voice_Type / 音色 ID" : "音色 / Voice ID"}
                       <input
                         value={profile.voice}
                         onChange={(e) => updateProvider(profile.id, { voice: e.target.value })}
@@ -184,6 +198,7 @@ export const TtsSettingsPanel = ({ settings, onChanged }: TtsSettingsPanelProps)
                           profile.providerId === "fish-audio" ? "Fish Audio reference_id" :
                           profile.providerId === "aliyun" ? "Cherry / Ethan / Dylan" :
                           profile.providerId === "tencent" ? "101001" :
+                          profile.providerId === "doubao" ? "zh_female_yingyujiaoxue_uranus_bigtts" :
                           "cmn-CN-Wavenet-A"
                         }
                       />

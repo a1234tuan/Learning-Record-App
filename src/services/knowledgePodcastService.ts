@@ -17,6 +17,7 @@ import { getCurrentAiProvider } from "../lib/aiProviders";
 import { calculateAiRequestBudget, sendChatCompletionDetailed } from "./aiClientService";
 import { storage } from "./storageAdapter";
 import { signTencentRequest } from "../lib/tencentSigning";
+import { decodeDoubaoTtsNdjson } from "../lib/doubaoTts";
 import { synthesizeOnHost } from "./nativeTts";
 
 export const FISH_AUDIO_PROVIDER_ID = "fish-audio";
@@ -726,11 +727,51 @@ export class GoogleTtsProvider implements TextToSpeechProvider {
   }
 }
 
+export class DoubaoTtsProvider implements TextToSpeechProvider {
+  constructor(private readonly profile: TtsProviderProfile, private readonly apiKey: string) {}
+
+  async synthesize(text: string, options: { signal?: AbortSignal }): Promise<Blob> {
+    const hosted = await synthesizeOnHost({ providerId: "doubao", apiKey: this.apiKey, model: this.profile.model, voiceId: this.profile.voice, text, format: "mp3" }, options.signal);
+    if (hosted) return hosted;
+    const resourceId = this.profile.model.trim() || "seed-tts-2.0";
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let response: Response;
+    try {
+      response = await fetch("https://openspeech.bytedance.com/api/v3/tts/unidirectional", {
+        method: "POST",
+        headers: {
+          "X-Api-Key": this.apiKey.trim(),
+          "X-Api-Resource-Id": resourceId,
+          "X-Api-Request-Id": requestId,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          req_params: {
+            text,
+            speaker: this.profile.voice,
+            audio_params: { format: "mp3", sample_rate: 24000 },
+          },
+        }),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new Error(`豆包 TTS 请求失败：${error instanceof Error ? error.message : "网络错误"}`);
+    }
+    const payload = await response.text();
+    if (!response.ok) throw new Error(`豆包 TTS 请求失败（${response.status}）：${payload.replace(/\s+/g, " ").slice(0, 240)}`);
+    const audio = decodeDoubaoTtsNdjson(payload);
+    return new Blob([audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer], { type: "audio/mpeg" });
+  }
+}
+
 export const createTtsProvider = (profile: TtsProviderProfile, apiKey: string, apiKeySecondary?: string): TextToSpeechProvider => {
   switch (profile.providerId) {
     case "aliyun": return new AliyunTtsProvider(profile, apiKey);
     case "tencent": return new TencentTtsProvider(profile, apiKey, apiKeySecondary ?? "");
     case "google": return new GoogleTtsProvider(profile, apiKey);
+    case "doubao": return new DoubaoTtsProvider(profile, apiKey);
     default: return new FishAudioTtsProvider(profile, apiKey);
   }
 };
