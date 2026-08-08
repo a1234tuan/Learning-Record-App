@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 // Firebase web configuration values identify this public client. They are not
@@ -17,5 +17,27 @@ const firebaseConfig = {
 export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const firebaseAuth = getAuth(firebaseApp);
 export const googleAuthProvider = new GoogleAuthProvider();
-export const firestore = getFirestore(firebaseApp);
+
+/**
+ * Firestore's default transport is a WebSocket/gRPC streaming connection, which some networks
+ * (corporate proxies, certain carriers/VPNs, and — notably for this app's userbase — mainland
+ * China's access to Google-hosted services) silently drop or block without ever returning an
+ * error: the request just hangs. `experimentalAutoDetectLongPolling` makes the SDK probe for that
+ * case and fall back to plain HTTP long-polling, which tunnels through the same restrictive
+ * networks far more reliably. It only kicks in when the streaming connection actually fails to
+ * establish, so it's a no-op on a normal network.
+ *
+ * `initializeFirestore` throws if this app already has a Firestore instance — which happens on a
+ * Vite HMR reload of this module in dev, since `firebaseApp` above resolves to the same
+ * already-initialized app. Fall back to `getFirestore` (returns the existing instance) instead of
+ * crashing the module in that case.
+ */
+export const firestore = (() => {
+  try {
+    return initializeFirestore(firebaseApp, { experimentalAutoDetectLongPolling: true });
+  } catch {
+    return getFirestore(firebaseApp);
+  }
+})();
+
 export const firebaseStorage = getStorage(firebaseApp);
