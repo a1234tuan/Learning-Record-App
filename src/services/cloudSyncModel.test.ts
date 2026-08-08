@@ -8,8 +8,10 @@ import {
   hashValue,
   hasConflictingChanges,
   materializeCloudSyncSnapshot,
+  mergeCloudSyncSmallEntity,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
+  preserveLocalChangesForCloudWins,
   stripUpdatedAt,
   withCloudPayloadDocument,
 } from "./cloudSyncModel";
@@ -148,6 +150,104 @@ describe("cloud sync model", () => {
 
     expect(blockOriginal?.payload.updatedAt).toBe(blockEdited?.payload.updatedAt);
     expect(blockOriginal?.contentHash).not.toBe(blockEdited?.contentHash);
+  });
+
+  it("three-way merges settings changes made to different fields", () => {
+    const base = { id: "settings", examDate: "2026-12-27", theme: "system", accentColor: "#2f6f5e", lastBackupAt: "old" };
+    const local = { entityType: "settings" as const, payload: { ...base, theme: "dark" }, deleted: false };
+    const remote = { entityType: "settings" as const, payload: { ...base, accentColor: "#aa0000", lastBackupAt: "new" }, deleted: false };
+    const result = mergeCloudSyncSmallEntity(local, remote, base);
+    expect(result.conflicts).toEqual([]);
+    expect(result.payload.theme).toBe("dark");
+    expect(result.payload.accentColor).toBe("#aa0000");
+    expect(result.payload.lastBackupAt).toBe("new");
+  });
+
+  it("reports a field conflict when both sides change the same template field", () => {
+    const base = { id: "template-1", createdAt: stamp, title: "原题", contentHtml: "<p>基线</p>" };
+    const local = { entityType: "template" as const, payload: { ...base, contentHtml: "<p>本机</p>" }, deleted: false };
+    const remote = { entityType: "template" as const, payload: { ...base, contentHtml: "<p>云端</p>" }, deleted: false };
+    expect(mergeCloudSyncSmallEntity(local, remote, base).conflicts).toEqual(["contentHtml"]);
+  });
+
+  it("applies a remote-only deletion without creating an empty live entity", () => {
+    const base = { id: "template-1", createdAt: stamp, title: "原题", contentHtml: "<p>基线</p>" };
+    const result = mergeCloudSyncSmallEntity(
+      { entityType: "template", payload: base, deleted: false },
+      { entityType: "template", payload: {}, deleted: true },
+      base,
+    );
+    expect(result).toEqual({ payload: {}, deleted: true, conflicts: [] });
+  });
+
+  it("reports a deletion conflict when the other side edits content", () => {
+    const base = { id: "template-1", createdAt: stamp, title: "原题", contentHtml: "<p>基线</p>" };
+    const result = mergeCloudSyncSmallEntity(
+      { entityType: "template", payload: { ...base, contentHtml: "<p>本机</p>" }, deleted: false },
+      { entityType: "template", payload: {}, deleted: true },
+      base,
+    );
+    expect(result.conflicts).toEqual(["contentHtml", "deletedAt"]);
+  });
+
+  it("treats template identity edits as conflicts and missing bases conservatively", () => {
+    const base = { id: "template-1", createdAt: stamp, title: "原题", contentHtml: "<p>基线</p>" };
+    const changedId = mergeCloudSyncSmallEntity(
+      { entityType: "template", payload: { ...base, id: "other" }, deleted: false },
+      { entityType: "template", payload: { ...base, title: "云端" }, deleted: false },
+      base,
+    );
+    expect(changedId.conflicts).toContain("id");
+    expect(mergeCloudSyncSmallEntity(
+      { entityType: "settings", payload: { ...base }, deleted: false },
+      { entityType: "settings", payload: { ...base, theme: "dark" }, deleted: false },
+      undefined,
+    ).conflicts).toEqual(["entity"]);
+  });
+
+  it("keeps local additions when choosing the cloud version", () => {
+    const localAddition = {
+      key: "block:local-only",
+      entityType: "block" as const,
+      entityId: "local-only",
+      contentHash: "local-hash",
+      payload: { id: "local-only" },
+    };
+    expect(preserveLocalChangesForCloudWins(
+      [localAddition],
+      [{ key: "block:cloud", entityType: "block", entityId: "cloud", contentHash: "cloud-hash", payload: { id: "cloud" } }],
+      new Set(),
+    )).toEqual([localAddition]);
+  });
+
+  it("does not carry a local tombstone into an unchanged cloud entity", () => {
+    const localDelete = {
+      key: "block:record-a",
+      entityType: "block" as const,
+      entityId: "record-a",
+      contentHash: "deleted:old-hash",
+      payload: {},
+      deleted: true,
+    };
+    const remoteEntity = {
+      key: "block:record-a",
+      entityType: "block" as const,
+      entityId: "record-a",
+      contentHash: "old-hash",
+      payload: { id: "record-a", title: "云端记录" },
+    };
+    expect(preserveLocalChangesForCloudWins([localDelete], [remoteEntity], new Set())).toEqual([]);
+  });
+
+  it("does not preserve a local change for a key changed by the cloud", () => {
+    const localEdit = {
+      key: "block:record-b",
+      entityType: "block" as const,
+      entityId: "record-b",
+      contentHash: "local-hash",
+      payload: { id: "record-b", title: "本机" },
+    };
+    expect(preserveLocalChangesForCloudWins([localEdit], [localEdit], new Set([localEdit.key]))).toEqual([]);
   });
 });
 

@@ -812,6 +812,8 @@ export interface CloudSyncStateRecord {
   lastPulledRevision: number;
   lastReviewEventRevision: number;
   lastSyncedAt?: ISODateTime;
+  /** Monotonic local write epoch used to prevent a remote restore overwriting a newer edit. */
+  mutationEpoch?: number;
 }
 
 /** Local-only knowledge of the last cloud version of one synchronized entity. */
@@ -822,6 +824,38 @@ export interface CloudSyncLedgerRecord {
   contentHash: string;
   cloudRevision: number;
   assetHash?: string;
+  /** Last common payload for small entities that support three-way field merging. */
+  basePayload?: Record<string, unknown>;
+}
+
+export type CloudSyncOperationStatus = "pending" | "succeeded" | "failed" | "unknown";
+export type CloudSyncOperationPhase = "acquiring" | "uploading" | "committing" | "releasing" | "reconciling";
+
+export interface CloudSyncExpectedValue {
+  key: string;
+  contentHash: string;
+}
+
+/** Durable context for a publish whose network result may be unknown after a timeout. */
+export interface CloudSyncOperationRecord {
+  id: string;
+  operationId: string;
+  userId: string;
+  deviceId: string;
+  revision: number;
+  previousHeadRevision: number;
+  expectedEntities: CloudSyncExpectedValue[];
+  expectedEvents: CloudSyncExpectedValue[];
+  phase: CloudSyncOperationPhase;
+  status: CloudSyncOperationStatus;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+  errorMessage?: string;
+}
+
+export interface CloudSyncMutationRecord {
+  id: "local";
+  epoch: number;
 }
 
 export type BackupAssetMeta = Omit<Asset, "data">;
@@ -960,9 +994,11 @@ export interface StorageAdapter {
   discardRecordTransfer(sessionId: string): Promise<void>;
   createSnapshot(): Promise<StorageSnapshot>;
   createCloudSyncSnapshot(): Promise<StorageSnapshot>;
+  getCloudSyncMutationEpoch(): Promise<number>;
   createStreamableSnapshot(): Promise<StreamableBackupSnapshot>;
   restoreSnapshot(snapshot: StorageSnapshot): Promise<void>;
   restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void>;
+  restoreCloudSyncSnapshotIfUnchanged(snapshot: StorageSnapshot, expectedEpoch: number): Promise<void>;
   restoreStreamableSnapshot(
     snapshot: StreamableBackupSnapshot,
     readAsset: StreamedAssetReader,

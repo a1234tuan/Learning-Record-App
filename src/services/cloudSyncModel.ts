@@ -42,11 +42,9 @@ export interface CloudSyncExport {
 }
 
 /**
- * Entity types excluded from cross-device conflict detection because their
- * content changes on its own (review scheduling state, or settings fields
- * like autoBackup bookkeeping) without representing a genuine user edit.
- * Touching one of these on both sides should never force a manual "keep
- * local or cloud" choice — whichever side syncs last simply wins.
+ * Entity types excluded from the coarse entity-level conflict check. Review
+ * projections are mergeable by event/state semantics, while settings/templates
+ * are checked separately by `mergeCloudSyncSmallEntity` at field granularity.
  */
 export const NON_CONFLICTING_ENTITY_TYPES = new Set<CloudSyncEntityType>(["review-state", "review-day-stat", "settings", "template"]);
 
@@ -283,6 +281,97 @@ export const mergeCloudSyncEntities = (
   const byKey = new Map(current.map((entity) => [entity.key, entity]));
   updates.forEach((entity) => byKey.set(entity.key, entity));
   return [...byKey.values()];
+};
+
+/**
+ * Select local changes that remain eligible after the user chooses "cloud
+ * wins". A local tombstone is ignored when the cloud still has the entity and
+ * did not change it; otherwise it would turn a cloud snapshot restore into an
+ * accidental delete. Local additions and edits on keys untouched by the cloud
+ * are retained for the follow-up upload.
+ */
+export const preserveLocalChangesForCloudWins = (
+  localChanges: CloudSyncEntity[],
+  remoteEntities: CloudSyncEntity[],
+  remoteChangedKeys: Set<string>,
+) => {
+  const remoteByKey = new Map(remoteEntities.map((entity) => [entity.key, entity]));
+  return localChanges.filter((entity) => {
+    if (remoteChangedKeys.has(entity.key)) return false;
+    const remoteEntity = remoteByKey.get(entity.key);
+    if (entity.deleted && remoteEntity && !remoteEntity.deleted) return false;
+    return true;
+  });
+};
+
+export interface CloudSyncSmallEntityMerge {
+  payload: Record<string, unknown>;
+  deleted: boolean;
+  conflicts: string[];
+}
+
+/**
+ * Three-way merge for the two small entities whose fields are independently editable.
+ * A missing base is deliberately conservative: old ledgers have no common ancestor and
+ * therefore still use entity-level conflict handling.
+ */
+export const mergeCloudSyncSmallEntity = (
+  local: Pick<CloudSyncEntity, "entityType" | "payload" | "deleted">,
+  remote: Pick<CloudSyncEntity, "entityType" | "payload" | "deleted">,
+  basePayload: Record<string, unknown> | undefined,
+): CloudSyncSmallEntityMerge => {
+  if (local.entityType !== remote.entityType || (local.entityType !== "settings" && local.entityType !== "template")) {
+    return { payload: remote.payload, deleted: Boolean(remote.deleted), conflicts: ["entity"] };
+  }
+  if (!basePayload) return { payload: remote.payload, deleted: Boolean(remote.deleted), conflicts: ["entity"] };
+
+  const localDeleted = Boolean(local.deleted);
+  const remoteDeleted = Boolean(remote.deleted);
+  const ignored = new Set(local.entityType === "settings" ? ["updatedAt", "lastBackupAt"] : ["updatedAt"]);
+  const allowed = local.entityType === "template" ? new Set(["title", "contentHtml"]) : undefined;
+  const keys = new Set([
+    ...Object.keys(basePayload),
+    ...(localDeleted ? [] : Object.keys(local.payload)),
+    ...(remoteDeleted ? [] : Object.keys(remote.payload)),
+  ].filter((key) => !ignored.has(key)));
+  const conflicts: string[] = [];
+  const merged: Record<string, unknown> = { ...(remoteDeleted ? {} : remote.payload) };
+  const localChangedKeys = new Set<string>();
+  const remoteChangedKeys = new Set<string>();
+  let localContentChanged = false;
+  let remoteContentChanged = false;
+  for (const key of keys) {
+    const baseValue = basePayload[key];
+    // A tombstone has no payload; compare it to the common base as unchanged
+    // content and handle the deletion separately below.
+    const localValue = localDeleted ? baseValue : local.payload[key];
+    const remoteValue = remoteDeleted ? baseValue : remote.payload[key];
+    const localChanged = stableJson(localValue) !== stableJson(baseValue);
+    const remoteChanged = stableJson(remoteValue) !== stableJson(baseValue);
+    if (localChanged) localContentChanged = true;
+    if (remoteChanged) remoteContentChanged = true;
+    if (localChanged) localChangedKeys.add(key);
+    if (remoteChanged) remoteChangedKeys.add(key);
+    if (allowed && !allowed.has(key)) {
+      if (localChanged || remoteChanged) conflicts.push(key);
+      continue;
+    }
+    if (localChanged && remoteChanged && stableJson(localValue) !== stableJson(remoteValue)) {
+      conflicts.push(key);
+      continue;
+    }
+    if (localChanged && !remoteChanged) merged[key] = localValue;
+  }
+
+  // A deletion and a content edit are a conflict. Deleting an unchanged entity is safe and
+  // follows the side that actually performed the deletion. Treat a tombstone's empty payload
+  // as unchanged content so a remote-only delete cannot become an empty live entity.
+  if (localDeleted !== remoteDeleted) {
+    if (localDeleted && remoteContentChanged) conflicts.push(...remoteChangedKeys, "deletedAt");
+    if (remoteDeleted && localContentChanged) conflicts.push(...localChangedKeys, "deletedAt");
+    if (conflicts.length === 0) return { payload: {}, deleted: true, conflicts: [] };
+  }
+  return { payload: merged, deleted: remoteDeleted, conflicts: [...new Set(conflicts)] };
 };
 
 /**

@@ -40,6 +40,8 @@ export const CloudSyncButton = ({ onSignedOut, onRestored, className = "" }: Clo
       if (result.kind === "conflict") {
         cloudSyncStore.setConflict(result.conflict);
         cloudSyncStore.setMessage("检测到本机和云端都存在未同步的数据，请选择保留哪一侧。");
+      } else if (result.kind === "uncertain") {
+        cloudSyncStore.setMessage(result.message);
       } else {
         cloudSyncStore.setMessage(`同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`);
         if (result.restored) await onRestored();

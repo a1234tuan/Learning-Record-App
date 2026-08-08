@@ -15,7 +15,7 @@ vi.mock("./firebase", () => ({
 // (getRemoteState, acquireLock/releaseLock, getRemoteChanges, batch commits, snapshot listing,
 // etc.) — testing it directly covers all of them without mocking each call site's own dependency
 // chain (db/storage/cloudSyncModel/nativeFirebaseStorage), which would make the test fragile.
-const { mapWithConcurrency, withTimeout } = await import("./cloudSyncService");
+const { isUnsupportedStorageListError, lockMatches, mapWithConcurrency, withTimeout } = await import("./cloudSyncService");
 
 describe("withTimeout", () => {
   it("rejects with the given message once the timeout elapses, for a promise that never settles", async () => {
@@ -78,5 +78,32 @@ describe("mapWithConcurrency", () => {
 
     expect(maximumActive).toBe(2);
     expect(result).toEqual([0, 2, 4, 6, 8, 10, 12]);
+  });
+});
+
+describe("Android Storage list fallback classification", () => {
+  it.each([403, 404, 405])("falls back for an unsupported HTTP %s response", (status) => {
+    expect(isUnsupportedStorageListError(new Error(`Firebase Storage 原生列表失败（HTTP ${status}）`))).toBe(true);
+  });
+
+  it("does not hide a timeout or authentication failure behind metadata fallback", () => {
+    expect(isUnsupportedStorageListError(new Error("检查云端资源超时，请检查网络连接后重试。"))).toBe(false);
+    expect(isUnsupportedStorageListError(new Error("Firebase Storage 原生列表失败（HTTP 500）"))).toBe(false);
+    expect(isUnsupportedStorageListError(new Error("Firebase Storage 原生列表失败（HTTP 401）"))).toBe(false);
+  });
+});
+
+describe("revision-scoped lock matching", () => {
+  const lock = { deviceId: "device-a", operationId: "operation-1", revision: 7, expiresAt: Date.now() + 60_000 };
+
+  it("requires device, operation, and revision to match", () => {
+    expect(lockMatches(lock, "device-a", "operation-1", 7)).toBe(true);
+    expect(lockMatches(lock, "device-a", "operation-2", 7)).toBe(false);
+    expect(lockMatches(lock, "device-a", "operation-1", 8)).toBe(false);
+    expect(lockMatches(lock, "device-b", "operation-1", 7)).toBe(false);
+  });
+
+  it("does not treat a legacy device-only lock as the current operation", () => {
+    expect(lockMatches({ deviceId: "device-a", expiresAt: Date.now() + 60_000 }, "device-a", "operation-1", 7)).toBe(false);
   });
 });

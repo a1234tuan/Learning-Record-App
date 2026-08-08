@@ -159,6 +159,32 @@ const assertSnapshotIntegrity = (
   }
 };
 
+export class CloudSyncLocalMutationError extends Error {
+  constructor() {
+    super("同步期间本机发生了新编辑，未覆盖本地内容，请重新同步。");
+    this.name = "CloudSyncLocalMutationError";
+  }
+}
+
+const cloudSyncMutationEpoch = async (): Promise<number> => {
+  const table = (db as typeof db & { cloudSyncMutation?: typeof db.cloudSyncMutation }).cloudSyncMutation;
+  if (!table) return 0;
+  const record = await table.get("local");
+  return record?.epoch ?? 0;
+};
+
+const markCloudSyncMutation = async (): Promise<number> => {
+  const table = (db as typeof db & { cloudSyncMutation?: typeof db.cloudSyncMutation }).cloudSyncMutation;
+  if (!table) return 0;
+  const write = async () => {
+    const current = await table.get("local");
+    const epoch = (current?.epoch ?? 0) + 1;
+    await table.put({ id: "local", epoch });
+    return epoch;
+  };
+  return typeof db.transaction === "function" ? db.transaction("rw", table, write) : write();
+};
+
 const isSuccessfulRecordReviewRating = (rating: RecordReviewRating): boolean => {
   const normalized = normalizeLegacyRating(rating);
   return normalized === "good" || normalized === "easy";
@@ -249,6 +275,10 @@ const reviewActionLog = (
 };
 
 export class DexieStorageAdapter implements StorageAdapter {
+  async getCloudSyncMutationEpoch(): Promise<number> {
+    return cloudSyncMutationEpoch();
+  }
+
   async initialize(): Promise<void> {
     await db.open();
     // Staging is only meaningful while the current JS process is committing a
@@ -339,6 +369,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     previous: RecordReviewState | undefined,
     next: RecordReviewState,
   ): Promise<void> {
+    await markCloudSyncMutation();
     await db.transaction("rw", db.recordReviews, db.recordReviewLogs, async () => {
       await db.recordReviews.put(next);
       await db.recordReviewLogs.put(reviewActionLog(eventType, previous, next));
@@ -617,6 +648,7 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async saveSettings(settings: AppSettings): Promise<void> {
+    await markCloudSyncMutation();
     await db.settings.put(ensureSettingsSubjects(settings, await this.recordBlocks()));
   }
 
@@ -672,6 +704,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       session.subject === normalizedOld ? { ...session, subject: normalizedNew, updatedAt: nowISO() } : session,
     );
 
+    await markCloudSyncMutation();
     await db.transaction("rw", db.settings, db.blocks, db.studySessions, async () => {
       await db.blocks.bulkPut(renamedBlocks);
       await db.studySessions.bulkPut(renamedStudySessions);
@@ -690,6 +723,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const entry = createDayEntry(date);
+    await markCloudSyncMutation();
     await db.entries.put(entry);
     return entry;
   }
@@ -711,6 +745,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = touch(entry);
+    await markCloudSyncMutation();
     await db.entries.put(saved);
     return saved;
   }
@@ -731,6 +766,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       && existingBlock.type === normalized.type
       && deepEqualIgnoring(existingBlock, normalized, ["updatedAt"]);
     const saved = isUnchangedBlock ? existingBlock : touch(normalized);
+    if (!isUnchangedBlock || saved.type === "studySession") await markCloudSyncMutation();
     await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
       await db.blocks.put(saved);
       if (saved.type === "record") {
@@ -774,11 +810,13 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = touch(normalized);
+    await markCloudSyncMutation();
     await db.templates.put(saved);
     return saved;
   }
 
   async deleteTemplate(templateId: string): Promise<void> {
+    await markCloudSyncMutation();
     await db.templates.delete(templateId);
   }
 
@@ -797,11 +835,13 @@ export class DexieStorageAdapter implements StorageAdapter {
       draft: syncRecordRefsFromContent({ ...draft.draft, mistakeRefs: [] }),
       updatedAt: nowISO(),
     };
+    await markCloudSyncMutation();
     await db.recordDrafts.put(saved);
     return saved;
   }
 
   async deleteRecordDraft(recordId: string): Promise<void> {
+    await markCloudSyncMutation();
     await db.recordDrafts.delete(recordId);
   }
 
@@ -928,6 +968,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       goodCount: 0,
       easyCount: 0,
     };
+    await markCloudSyncMutation();
     await db.recordReviewDayStats.put(stat);
     return stat;
   }
@@ -950,6 +991,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     const hasEvaluationTextArgument = arguments.length >= 4;
     const normalizedEvaluationText = normalizeReviewEvaluationText(evaluationText);
 
+    await markCloudSyncMutation();
     const result = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
       const current = await db.recordReviews.get(recordId);
       if (!current || current.status !== "active") {
@@ -1086,7 +1128,8 @@ export class DexieStorageAdapter implements StorageAdapter {
       return undefined;
     }
 
-    return db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+    await markCloudSyncMutation();
+    const result = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
       const [current, currentLog, recordLogs] = await Promise.all([
         db.recordReviews.get(token.recordId),
         db.recordReviewLogs.get(token.reviewLogId),
@@ -1120,6 +1163,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
       return token.previousReview;
     });
+    return result;
   }
 
   async listRecordReviewLogs(recordId?: string): Promise<RecordReviewLog[]> {
@@ -1187,6 +1231,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (!block) {
       return;
     }
+    await markCloudSyncMutation();
     await db.transaction("rw", db.blocks, db.recordDrafts, db.recordReviews, async () => {
       await db.blocks.put({ ...block, deletedAt: nowISO(), updatedAt: nowISO() });
       await db.recordDrafts.delete(blockId);
@@ -1211,6 +1256,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const { deletedAt: _deletedAt, ...restored } = block;
     const saved = { ...restored, updatedAt: nowISO() };
+    await markCloudSyncMutation();
     await db.blocks.put(saved);
     return saved;
   }
@@ -1222,6 +1268,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
     const draft = await db.recordDrafts.get(blockId);
 
+    await markCloudSyncMutation();
     await db.transaction("rw", [db.blocks, db.recordDrafts, db.assets, db.studySessions, db.recordReviews, db.recordReviewLogs], async () => {
       await db.blocks.delete(blockId);
       await db.recordDrafts.delete(blockId);
@@ -1260,11 +1307,13 @@ export class DexieStorageAdapter implements StorageAdapter {
       return block;
     }
     const saved = { ...block, favorite, updatedAt: nowISO() };
+    await markCloudSyncMutation();
     await db.blocks.put(saved);
     return saved;
   }
 
   async reorderBlocks(date: string, blockIds: string[]): Promise<void> {
+    await markCloudSyncMutation();
     await db.transaction("rw", db.blocks, async () => {
       for (const [order, blockId] of blockIds.entries()) {
         const block = await db.blocks.get(blockId);
@@ -1311,6 +1360,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       ...createBaseEntity(),
       name: normalized,
     };
+    await markCloudSyncMutation();
     await db.tags.put(tag);
     return tag;
   }
@@ -1331,6 +1381,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = touch(session);
+    await markCloudSyncMutation();
     await db.studySessions.put(saved);
     return saved;
   }
@@ -1345,6 +1396,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       kind,
       data: file,
     };
+    await markCloudSyncMutation();
     await db.assets.put(asset);
     return asset;
   }
@@ -1391,6 +1443,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = touch(next);
+    await markCloudSyncMutation();
     await db.assets.put(saved);
     return saved;
   }
@@ -1442,6 +1495,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     // Renaming to the asset's current title is a no-op for the asset row itself — the blocks/drafts/
     // templates loops above already skip entities where the title reference didn't actually change.
     const savedAsset = existing.title === nextTitle ? existing : touch({ ...existing, title: nextTitle, data: existing.data });
+    await markCloudSyncMutation();
     await db.transaction("rw", db.assets, db.blocks, db.recordDrafts, db.templates, async () => {
       await db.assets.put(savedAsset);
       if (renamedBlocks.length > 0) {
@@ -1471,6 +1525,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
 
+    await markCloudSyncMutation();
     await db.assets.bulkPut(
       assets.map((asset) =>
         touch({
@@ -1488,6 +1543,7 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async deleteAsset(id: string): Promise<void> {
+    await markCloudSyncMutation();
     await db.assets.delete(id);
   }
 
@@ -1509,6 +1565,7 @@ export class DexieStorageAdapter implements StorageAdapter {
 
   async commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary> {
     try {
+      await markCloudSyncMutation();
       return await db.transaction("rw", [db.entries, db.blocks, db.assets, db.settings, db.restoreStagingAssets], async () => {
         const staged = await db.restoreStagingAssets.where("sessionId").equals(sessionId).toArray();
         const stagedAssets = staged.map((entry) => entry.asset);
@@ -1752,7 +1809,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     };
   }
 
-  async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
+  private async restoreSnapshotData(snapshot: StorageSnapshot, expectedEpoch?: number): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
     const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
@@ -1774,8 +1831,13 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.settings,
         db.assets,
         db.knowledgePodcasts,
+        db.cloudSyncMutation,
       ],
       async () => {
+        const currentEpoch = await db.cloudSyncMutation.get("local");
+        if (expectedEpoch !== undefined && (currentEpoch?.epoch ?? 0) !== expectedEpoch) {
+          throw new CloudSyncLocalMutationError();
+        }
         await Promise.all([
           db.entries.clear(),
           db.blocks.clear(),
@@ -1806,11 +1868,16 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
           db.assets.bulkPut(snapshot.assets),
           db.knowledgePodcasts.bulkPut(normalizeSnapshotPodcasts(snapshot.payload.podcasts)),
+          db.cloudSyncMutation.put({ id: "local", epoch: (currentEpoch?.epoch ?? 0) + 1 }),
         ]);
       },
     );
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
+  }
+
+  async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
+    await this.restoreSnapshotData(snapshot);
   }
 
   async restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void> {
@@ -1830,6 +1897,22 @@ export class DexieStorageAdapter implements StorageAdapter {
       ],
     };
     await this.restoreSnapshot(mergedSnapshot);
+  }
+
+  async restoreCloudSyncSnapshotIfUnchanged(snapshot: StorageSnapshot, expectedEpoch: number): Promise<void> {
+    const [existingPodcasts, podcastAudioAssets] = await Promise.all([
+      db.knowledgePodcasts.toArray(),
+      db.assets.filter((a) => a.generatedBy === "knowledge-podcast").toArray(),
+    ]);
+    const mergedSnapshot: StorageSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, podcasts: existingPodcasts },
+      assets: [
+        ...snapshot.assets.filter((a) => a.generatedBy !== "knowledge-podcast"),
+        ...podcastAudioAssets,
+      ],
+    };
+    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch);
   }
 
   async restoreStreamableSnapshot(
@@ -1865,6 +1948,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
 
       options.onProgress?.({ stage: "restoring", message: "资源校验完成，正在一次性恢复数据。" });
+      await markCloudSyncMutation();
       await db.transaction(
         "rw",
         [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.restoreStagingAssets],
@@ -1901,6 +1985,11 @@ export class DexieStorageAdapter implements StorageAdapter {
   async clearAll(): Promise<void> {
     await db.delete();
     await this.initialize();
+    // `db.delete()` removes the mutation table itself, so bump the epoch only
+    // after the fresh database has been initialized. This keeps a clear-all
+    // operation visible to an in-flight cloud restore instead of resetting the
+    // epoch back to zero and accidentally allowing the restore to proceed.
+    await markCloudSyncMutation();
   }
 
   async listAiSessions(): Promise<AiChatSession[]> {

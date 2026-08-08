@@ -41,6 +41,10 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
         cloudSyncStore.setMessage("云端状态已变化，请重新选择同步策略。");
         return;
       }
+      if (result.kind === "uncertain") {
+        cloudSyncStore.setMessage(result.message);
+        return;
+      }
       cloudSyncStore.setConflict(undefined);
       if (choice === "cloud") {
         await onRestored();
@@ -55,6 +59,8 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
           cloudSyncStore.setMessage(
             `同步完成：上传 ${result.uploaded + finalResult.uploaded} 项，下载 ${result.downloaded + finalResult.downloaded} 项。`,
           );
+        } else if (finalResult.kind === "uncertain") {
+          cloudSyncStore.setMessage(finalResult.message);
         } else {
           cloudSyncStore.setConflict(finalResult.conflict);
           cloudSyncStore.setMessage("已恢复云端数据，但上传本机数据时再次遇到冲突，请重新选择策略。");
@@ -87,9 +93,26 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
           云同步冲突
         </p>
         <h2 id="cloud-sync-conflict-title">
-          {conflict.reason === "legacy-snapshot" ? "检测到旧版完整云端备份" : "检测到双端并发编辑"}
+          {conflict.reason === "legacy-snapshot"
+            ? "检测到旧版完整云端备份"
+            : conflict.reason === "local-changed-during-sync"
+              ? "同步期间本机发生了新编辑"
+              : "检测到双端并发编辑"}
         </h2>
-        <p>本机 {conflict.localChanges} 项，云端 {conflict.remoteChanges} 项。选择前会自动保留恢复点。</p>
+        <p>
+          {conflict.reason === "local-changed-during-sync"
+            ? "本次同步未覆盖本机内容，请重新检查更改后再同步。"
+            : `本机 ${conflict.localChanges} 项，云端 ${conflict.remoteChanges} 项。选择前会自动保留恢复点。`}
+        </p>
+        {conflict.conflicts?.length ? (
+          <ul className="cloud-sync-conflict-fields">
+            {conflict.conflicts.map((item) => (
+              <li key={item.key}>
+                {item.key}{item.fields?.length ? `：${item.fields.join("、")}` : ""}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {message ? <p className="cloud-sync-conflict-status" role="status">{message}</p> : null}
         <div className="cloud-sync-conflict-actions">
           <button type="button" className="primary-button" onClick={() => void resolve("local")} disabled={busy !== null}>

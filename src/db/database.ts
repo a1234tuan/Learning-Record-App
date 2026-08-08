@@ -9,6 +9,8 @@ import type {
   Asset,
   AutoBackupStateRecord,
   CloudSyncLedgerRecord,
+  CloudSyncOperationRecord,
+  CloudSyncMutationRecord,
   CloudSyncStateRecord,
   Block,
   ContentTemplate,
@@ -52,6 +54,8 @@ export class StudyJournalDatabase extends Dexie {
   knowledgePodcasts!: Table<KnowledgePodcast, string>;
   cloudSyncState!: Table<CloudSyncStateRecord, string>;
   cloudSyncLedger!: Table<CloudSyncLedgerRecord, string>;
+  cloudSyncOperations!: Table<CloudSyncOperationRecord, string>;
+  cloudSyncMutation!: Table<CloudSyncMutationRecord, string>;
   autoBackupState!: Table<AutoBackupStateRecord, string>;
 
   constructor() {
@@ -231,6 +235,32 @@ export class StudyJournalDatabase extends Dexie {
       knowledgePodcasts: "id, updatedAt, createdAt, scriptStatus, audioStatus",
       cloudSyncState: "id, userId",
       cloudSyncLedger: "id, entityType, cloudRevision",
+      autoBackupState: "id",
+    });
+    this.version(11).stores({
+      entries: "id, date, updatedAt, pinned, favorite",
+      blocks: "id, date, type, order, updatedAt",
+      templates: "id, title, updatedAt, createdAt",
+      recordDrafts: "id, recordId, updatedAt",
+      recordReviews: "id, recordId, status, nextReviewDate, lastReviewDate, updatedAt, [status+nextReviewDate]",
+      recordReviewLogs: "id, recordId, reviewedAt, rating",
+      recordReviewDayStats: "id, date, updatedAt, completedAt",
+      mistakes: "id, subject, chapter, mastery, nextReviewAt, updatedAt, pinned, favorite",
+      reviews: "id, mistakeId, dueAt, completedAt, stage",
+      tags: "id, &name, parent",
+      assets: "id, kind, fileName, updatedAt, generatedBy",
+      studySessions: "id, date, subject, blockId",
+      settings: "id",
+      aiSessions: "id, sourceDate, updatedAt, createdAt",
+      aiMessages: "id, sessionId, role, createdAt, updatedAt",
+      aiAttachments: "id, sessionId, messageId, createdAt, updatedAt",
+      aiSecrets: "id",
+      restoreStagingAssets: "stagingId, sessionId, asset.id",
+      knowledgePodcasts: "id, updatedAt, createdAt, scriptStatus, audioStatus",
+      cloudSyncState: "id, userId",
+      cloudSyncLedger: "id, entityType, cloudRevision",
+      cloudSyncOperations: "id, operationId, userId, status, revision, updatedAt",
+      cloudSyncMutation: "id",
       autoBackupState: "id",
     });
   }
