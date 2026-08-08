@@ -181,7 +181,7 @@ const progress = (options: CloudSyncOptions, stage: CloudSyncProgress["stage"], 
  * operation stopped. This does not cancel the underlying SDK request, so callers must still avoid
  * mutating local state until the raced promise has resolved.
  */
-const withTimeout = <T>(promise: PromiseLike<T>, ms: number, message: string): Promise<T> => {
+export const withTimeout = <T>(promise: PromiseLike<T>, ms: number, message: string): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(message)), ms);
@@ -190,6 +190,18 @@ const withTimeout = <T>(promise: PromiseLike<T>, ms: number, message: string): P
     if (timeoutId) clearTimeout(timeoutId);
   });
 };
+
+/**
+ * Firestore's long-lived connection can wedge after a network/proxy change (the same Android
+ * WebView class of issue the Storage calls below already guard against) — a read or transaction
+ * then neither resolves nor rejects, so the UI watchdog is the only thing that ever notices,
+ * minutes later. These give the same "explicit error over silent hang" treatment to every
+ * Firestore call in this file. Document reads/writes have no legitimate reason to take long, so
+ * the window is much shorter than the Storage timeouts (which must tolerate large file transfers).
+ */
+const FIRESTORE_READ_TIMEOUT_MS = 20_000;
+const FIRESTORE_LOCK_TIMEOUT_MS = 20_000;
+const FIRESTORE_BATCH_TIMEOUT_MS = 30_000;
 
 const parseLegacySnapshotInfo = (value: unknown): CloudSnapshotInfo | undefined => {
   if (!value || typeof value !== "object") return undefined;
@@ -289,16 +301,20 @@ const localChanges = async (exported: CloudSyncExport, ledger: CloudSyncLedgerRe
 const hasRecoverableLocalData = (exported: CloudSyncExport) => exported.entities.some((entity) => entity.entityType !== "settings") || exported.reviewEvents.length > 0;
 
 const getRemoteState = async (uid: string) => {
-  const snapshot = await getDoc(stateRef(uid));
+  const snapshot = await withTimeout(getDoc(stateRef(uid)), FIRESTORE_READ_TIMEOUT_MS, "检查云端同步状态超时，请确认网络可连接后重试。");
   return { exists: snapshot.exists(), state: parseRemoteState(snapshot.data()) };
 };
 
 const getRemoteChanges = async (uid: string, afterRevision: number, state: RemoteSyncState) => {
   if (state.headRevision <= afterRevision) return { entities: [] as RemoteEntity[], reviewEvents: [] as RemoteReviewEvent[] };
-  const [entities, reviewEvents] = await Promise.all([
-    getDocs(query(entitiesRef(uid), where("revision", ">", afterRevision), where("revision", "<=", state.headRevision), orderBy("revision"))),
-    getDocs(query(reviewEventsRef(uid), where("revision", ">", afterRevision), where("revision", "<=", state.headRevision), orderBy("revision"))),
-  ]);
+  const [entities, reviewEvents] = await withTimeout(
+    Promise.all([
+      getDocs(query(entitiesRef(uid), where("revision", ">", afterRevision), where("revision", "<=", state.headRevision), orderBy("revision"))),
+      getDocs(query(reviewEventsRef(uid), where("revision", ">", afterRevision), where("revision", "<=", state.headRevision), orderBy("revision"))),
+    ]),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "拉取云端更改超时，请确认网络可连接后重试。",
+  );
   return {
     entities: entities.docs.map((item) => parseRemoteEntity(item.id, item.data())).filter((item): item is RemoteEntity => Boolean(item)),
     reviewEvents: reviewEvents.docs.map((item) => parseRemoteReviewEvent(item.id, item.data())).filter((item): item is RemoteReviewEvent => Boolean(item)),
@@ -306,7 +322,11 @@ const getRemoteChanges = async (uid: string, afterRevision: number, state: Remot
 };
 
 const getAllRemote = async (uid: string, state: RemoteSyncState) => {
-  const [entities, reviewEvents] = await Promise.all([getDocs(entitiesRef(uid)), getDocs(reviewEventsRef(uid))]);
+  const [entities, reviewEvents] = await withTimeout(
+    Promise.all([getDocs(entitiesRef(uid)), getDocs(reviewEventsRef(uid))]),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "读取云端全部数据超时，请确认网络可连接后重试。",
+  );
   return {
     entities: entities.docs
       .map((item) => parseRemoteEntity(item.id, item.data()))
@@ -407,46 +427,54 @@ const applyRemote = async (
   await storage.restoreCloudSyncSnapshot(materializeCloudSyncSnapshot(mergedEntities, mergedEvents, assetBlobs));
 };
 
-const acquireLock = async (uid: string, deviceId: string) => runTransaction(firestore, async (transaction) => {
-  const reference = stateRef(uid);
-  const current = parseRemoteState((await transaction.get(reference)).data());
-  const now = Date.now();
-  if (current.protocolVersion !== PROTOCOL_VERSION) {
-    throw new Error("云端同步协议版本不兼容，请先使用新版应用完成迁移。");
-  }
-  if (current.lock && current.lock.deviceId !== deviceId && current.lock.expiresAt > now) {
-    throw new Error("另一台设备正在同步，请稍后再试。");
-  }
-  const revision = Math.max(current.nextRevision, current.headRevision) + 1;
-  transaction.set(reference, {
-    ...current,
-    protocolVersion: PROTOCOL_VERSION,
-    nextRevision: revision,
-    lock: { deviceId, expiresAt: now + LOCK_DURATION_MS },
-  });
-  return { revision, previousHead: current.headRevision };
-});
+const acquireLock = async (uid: string, deviceId: string) => withTimeout(
+  runTransaction(firestore, async (transaction) => {
+    const reference = stateRef(uid);
+    const current = parseRemoteState((await transaction.get(reference)).data());
+    const now = Date.now();
+    if (current.protocolVersion !== PROTOCOL_VERSION) {
+      throw new Error("云端同步协议版本不兼容，请先使用新版应用完成迁移。");
+    }
+    if (current.lock && current.lock.deviceId !== deviceId && current.lock.expiresAt > now) {
+      throw new Error("另一台设备正在同步，请稍后再试。");
+    }
+    const revision = Math.max(current.nextRevision, current.headRevision) + 1;
+    transaction.set(reference, {
+      ...current,
+      protocolVersion: PROTOCOL_VERSION,
+      nextRevision: revision,
+      lock: { deviceId, expiresAt: now + LOCK_DURATION_MS },
+    });
+    return { revision, previousHead: current.headRevision };
+  }),
+  FIRESTORE_LOCK_TIMEOUT_MS,
+  "获取云同步锁超时，请确认网络可连接后重试。",
+);
 
-const releaseLock = async (uid: string, deviceId: string, revision: number, publish: boolean) => runTransaction(firestore, async (transaction) => {
-  const reference = stateRef(uid);
-  const current = parseRemoteState((await transaction.get(reference)).data());
-  if (current.lock?.deviceId !== deviceId) {
-    throw new Error("同步锁已失效，未发布的数据将留待重试。");
-  }
-  transaction.set(reference, {
-    ...current,
-    protocolVersion: PROTOCOL_VERSION,
-    headRevision: publish ? revision : current.headRevision,
-    nextRevision: Math.max(current.nextRevision, revision),
-    lock: null,
-  });
-});
+const releaseLock = async (uid: string, deviceId: string, revision: number, publish: boolean) => withTimeout(
+  runTransaction(firestore, async (transaction) => {
+    const reference = stateRef(uid);
+    const current = parseRemoteState((await transaction.get(reference)).data());
+    if (current.lock?.deviceId !== deviceId) {
+      throw new Error("同步锁已失效，未发布的数据将留待重试。");
+    }
+    transaction.set(reference, {
+      ...current,
+      protocolVersion: PROTOCOL_VERSION,
+      headRevision: publish ? revision : current.headRevision,
+      nextRevision: Math.max(current.nextRevision, revision),
+      lock: null,
+    });
+  }),
+  FIRESTORE_LOCK_TIMEOUT_MS,
+  "释放云同步锁超时，请确认网络可连接后重试。",
+);
 
 const writeInBatches = async (writes: Array<(batch: WriteBatch) => void>) => {
   for (let index = 0; index < writes.length; index += MAX_BATCH_WRITES) {
     const batch = writeBatch(firestore);
     writes.slice(index, index + MAX_BATCH_WRITES).forEach((write) => write(batch));
-    await batch.commit();
+    await withTimeout(batch.commit(), FIRESTORE_BATCH_TIMEOUT_MS, "提交同步数据超时，请确认网络可连接后重试。");
   }
 };
 
@@ -691,10 +719,18 @@ const makeRemoteSnapshot = async (uid: string, label: string, entities: RemoteEn
     ...snapshotEntities.map((entity) => (batch: WriteBatch) => batch.set(doc(snapshotEntitiesRef(uid, id), entity.key), snapshotEntityDocument(entity))),
     ...events.map((event) => (batch: WriteBatch) => batch.set(doc(snapshotEntitiesRef(uid, id), `review-event:${event.id}`), { ...event, kind: "review-event" })),
   ]);
-  const snapshots = await getDocs(query(snapshotsRef(uid), orderBy("createdAt", "desc")));
+  const snapshots = await withTimeout(
+    getDocs(query(snapshotsRef(uid), orderBy("createdAt", "desc"))),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "检查云端恢复快照超时，请确认网络可连接后重试。",
+  );
   const expired = snapshots.docs.slice(SNAPSHOT_LIMIT);
   for (const item of expired) {
-    const children = await getDocs(snapshotEntitiesRef(uid, item.id));
+    const children = await withTimeout(
+      getDocs(snapshotEntitiesRef(uid, item.id)),
+      FIRESTORE_READ_TIMEOUT_MS,
+      "读取过期恢复快照超时，请确认网络可连接后重试。",
+    );
     await writeInBatches([
       ...children.docs.map((child) => (batch: WriteBatch) => batch.delete(child.ref)),
       (batch: WriteBatch) => batch.delete(item.ref),
@@ -712,8 +748,16 @@ const referencedAssetHash = (entity: CloudSyncEntity) =>
     : undefined;
 
 const collectSnapshotEntities = async (uid: string) => {
-  const snapshots = await getDocs(snapshotsRef(uid));
-  const children = await Promise.all(snapshots.docs.map((snapshot) => getDocs(snapshotEntitiesRef(uid, snapshot.id))));
+  const snapshots = await withTimeout(
+    getDocs(snapshotsRef(uid)),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "读取恢复快照列表超时，请确认网络可连接后重试。",
+  );
+  const children = await withTimeout(
+    Promise.all(snapshots.docs.map((snapshot) => getDocs(snapshotEntitiesRef(uid, snapshot.id)))),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "读取恢复快照内容超时，请确认网络可连接后重试。",
+  );
   return children.flatMap((items) => items.docs
     .map((item) => parseRemoteEntity(item.id, item.data()))
     .filter((item): item is RemoteEntity => Boolean(item)));
@@ -842,7 +886,11 @@ export const signOutOfCloudSync = async (): Promise<void> => {
 };
 
 export const getCloudSnapshotInfo = async (uid: string): Promise<CloudSnapshotInfo | undefined> => {
-  const snapshot = await getDoc(legacyMetadataRef(uid));
+  const snapshot = await withTimeout(
+    getDoc(legacyMetadataRef(uid)),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "检查云端旧版备份信息超时，请确认网络可连接后重试。",
+  );
   return snapshot.exists() ? parseLegacySnapshotInfo(snapshot.data()) : undefined;
 };
 
@@ -853,7 +901,7 @@ export const getCloudSyncStatus = async (user: User): Promise<CloudSyncStatus> =
     getCloudSnapshotInfo(user.uid),
     exportCloudSync(await storage.createCloudSyncSnapshot()),
     ledgerFor(),
-    getDocs(snapshotsRef(user.uid)),
+    withTimeout(getDocs(snapshotsRef(user.uid)), FIRESTORE_READ_TIMEOUT_MS, "检查云端恢复快照列表超时，请确认网络可连接后重试。"),
   ]);
   const changed = await localChanges(exported, ledger);
   const remoteChanges = remote.exists ? await getRemoteChanges(user.uid, local.lastPulledRevision, remote.state) : { entities: [], reviewEvents: [] };
@@ -1013,7 +1061,11 @@ export const resolveCloudSyncConflict = async (
 };
 
 export const listCloudRecoverySnapshots = async (uid: string): Promise<CloudRecoverySnapshot[]> => {
-  const snapshots = await getDocs(query(snapshotsRef(uid), orderBy("createdAt", "desc")));
+  const snapshots = await withTimeout(
+    getDocs(query(snapshotsRef(uid), orderBy("createdAt", "desc"))),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "获取云端恢复快照列表超时，请确认网络可连接后重试。",
+  );
   return snapshots.docs.map((item) => {
     const value = item.data() as Record<string, unknown>;
     return {
@@ -1027,7 +1079,11 @@ export const listCloudRecoverySnapshots = async (uid: string): Promise<CloudReco
 };
 
 export const restoreCloudRecoverySnapshot = async (user: User, id: string, options: CloudSyncOptions = {}) => {
-  const items = await getDocs(snapshotEntitiesRef(user.uid, id));
+  const items = await withTimeout(
+    getDocs(snapshotEntitiesRef(user.uid, id)),
+    FIRESTORE_READ_TIMEOUT_MS,
+    "读取恢复快照超时，请确认网络可连接后重试。",
+  );
   if (items.empty) throw new Error("恢复快照不存在或已被清理。");
   let entities = items.docs
     .map((item) => parseRemoteEntity(item.id, item.data()))
