@@ -43,10 +43,55 @@ public class NativeFirebaseStoragePlugin extends Plugin {
     private static class DownloadSession {
         final File file;
         final String contentType;
+        final RandomAccessFile input;
+        final long size;
+        private long offset;
 
-        DownloadSession(File file, String contentType) {
+        DownloadSession(File file, String contentType) throws Exception {
             this.file = file;
             this.contentType = contentType;
+            this.input = new RandomAccessFile(file, "r");
+            this.size = input.length();
+        }
+
+        synchronized DownloadChunk readChunk(int length) throws Exception {
+            if (offset < 0 || offset > size) {
+                throw new IllegalStateException("Firebase Storage 下载会话位置无效。");
+            }
+            int bytesToRead = (int) Math.min(length, size - offset);
+            byte[] buffer = new byte[bytesToRead];
+            int bytesRead = bytesToRead == 0 ? 0 : input.read(buffer);
+            if (bytesRead < 0) bytesRead = 0;
+            if (bytesRead == 0 && offset < size) {
+                throw new IllegalStateException("Firebase Storage 下载缓存读取不完整。");
+            }
+            offset += bytesRead;
+            return new DownloadChunk(
+                bytesRead == buffer.length ? buffer : java.util.Arrays.copyOf(buffer, bytesRead),
+                bytesRead,
+                offset >= size
+            );
+        }
+
+        synchronized void close() {
+            try {
+                input.close();
+            } catch (Exception ignored) {
+                // The temporary file is no longer needed even if its descriptor was already closed.
+            }
+            file.delete();
+        }
+    }
+
+    private static class DownloadChunk {
+        final byte[] bytes;
+        final int bytesRead;
+        final boolean done;
+
+        DownloadChunk(byte[] bytes, int bytesRead, boolean done) {
+            this.bytes = bytes;
+            this.bytesRead = bytesRead;
+            this.done = done;
         }
     }
 
@@ -199,10 +244,17 @@ public class NativeFirebaseStoragePlugin extends Plugin {
                     while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
                 }
                 String sessionId = UUID.randomUUID().toString();
-                downloadSessions.put(sessionId, new DownloadSession(file, connection.getContentType()));
+                DownloadSession session;
+                try {
+                    session = new DownloadSession(file, connection.getContentType());
+                } catch (Exception error) {
+                    file.delete();
+                    throw error;
+                }
+                downloadSessions.put(sessionId, session);
                 JSObject result = new JSObject();
                 result.put("sessionId", sessionId);
-                result.put("size", file.length());
+                result.put("size", session.size);
                 String contentType = connection.getContentType();
                 if (contentType != null && !contentType.trim().isEmpty()) result.put("contentType", contentType);
                 call.resolve(result);
@@ -218,20 +270,14 @@ public class NativeFirebaseStoragePlugin extends Plugin {
     public void readDownloadChunk(PluginCall call) {
         DownloadSession session = downloadSession(call);
         if (session == null) return;
-        long offset = call.getLong("offset", 0L);
         int length = Math.min(Math.max(call.getInt("length", 512 * 1024), 1), 768 * 1024);
         execute(() -> {
-            try (RandomAccessFile input = new RandomAccessFile(session.file, "r")) {
-                if (offset < 0 || offset > input.length()) throw new IllegalArgumentException("下载分块偏移量无效。");
-                input.seek(offset);
-                int bytesToRead = (int) Math.min(length, input.length() - offset);
-                byte[] buffer = new byte[bytesToRead];
-                int bytesRead = bytesToRead == 0 ? 0 : input.read(buffer);
-                if (bytesRead < 0) bytesRead = 0;
+            try {
+                DownloadChunk chunk = session.readChunk(length);
                 JSObject result = new JSObject();
-                result.put("base64", Base64.encodeToString(bytesRead == buffer.length ? buffer : java.util.Arrays.copyOf(buffer, bytesRead), Base64.NO_WRAP));
-                result.put("bytesRead", bytesRead);
-                result.put("done", offset + bytesRead >= input.length());
+                result.put("base64", Base64.encodeToString(chunk.bytes, Base64.NO_WRAP));
+                result.put("bytesRead", chunk.bytesRead);
+                result.put("done", chunk.done);
                 call.resolve(result);
             } catch (Exception error) {
                 call.reject(error.getMessage() != null ? error.getMessage() : "读取 Firebase Storage 下载分块失败。", error);
@@ -243,7 +289,7 @@ public class NativeFirebaseStoragePlugin extends Plugin {
     public void finishDownload(PluginCall call) {
         String sessionId = call.getString("sessionId", "");
         DownloadSession session = downloadSessions.remove(sessionId);
-        if (session != null) session.file.delete();
+        if (session != null) session.close();
         call.resolve();
     }
 

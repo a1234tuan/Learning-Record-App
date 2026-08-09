@@ -4,7 +4,7 @@ interface NativeFirebaseStoragePlugin {
   exists(options: { path: string; idToken: string }): Promise<{ exists: boolean }>;
   list(options: { prefix: string; idToken: string }): Promise<{ paths: string[] }>;
   beginDownload(options: { path: string; idToken: string }): Promise<{ sessionId: string; size: number; contentType?: string }>;
-  readDownloadChunk(options: { sessionId: string; offset: number; length: number }): Promise<{ base64: string; bytesRead: number; done: boolean }>;
+  readDownloadChunk(options: { sessionId: string; length: number }): Promise<{ base64: string; bytesRead: number; done: boolean }>;
   finishDownload(options: { sessionId: string }): Promise<void>;
   beginUpload(options: { path: string; idToken: string; contentType: string }): Promise<{ sessionId: string }>;
   appendUploadChunk(options: { sessionId: string; base64: string }): Promise<void>;
@@ -42,15 +42,19 @@ export const downloadNativeFirebaseStorageBlob = async (path: string, idToken: s
   const session = await NativeFirebaseStorage.beginDownload({ path, idToken });
   try {
     const chunks: ArrayBuffer[] = [];
-    let offset = 0;
+    let received = 0;
     let done = false;
     while (!done) {
-      const chunk = await NativeFirebaseStorage.readDownloadChunk({ sessionId: session.sessionId, offset, length: CHUNK_SIZE });
+      const chunk = await NativeFirebaseStorage.readDownloadChunk({ sessionId: session.sessionId, length: CHUNK_SIZE });
       if (chunk.bytesRead === 0 && !chunk.done) throw new Error("原生 Firebase Storage 下载未返回数据。");
-      chunks.push(decodeBase64(chunk.base64));
-      offset += chunk.bytesRead;
+      const bytes = decodeBase64(chunk.base64);
+      if (bytes.byteLength !== chunk.bytesRead) throw new Error("原生 Firebase Storage 下载分块长度不一致。");
+      received += chunk.bytesRead;
+      if (received > session.size) throw new Error("原生 Firebase Storage 下载长度超出预期。");
+      chunks.push(bytes);
       done = chunk.done;
     }
+    if (received !== session.size) throw new Error("原生 Firebase Storage 下载长度不完整。");
     return new Blob(chunks, { type: session.contentType || "application/octet-stream" });
   } finally {
     await NativeFirebaseStorage.finishDownload({ sessionId: session.sessionId }).catch(() => undefined);
