@@ -2,6 +2,7 @@ import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore, initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 
 // Firebase web configuration values identify this public client. They are not
 // service-account credentials and are protected by Authentication and Rules.
@@ -41,3 +42,4 @@ export const firestore = (() => {
 })();
 
 export const firebaseStorage = getStorage(firebaseApp);
+export const firebaseFunctions = getFunctions(firebaseApp, "us-central1");

@@ -59,7 +59,7 @@ public class NativeTtsPlugin extends Plugin {
         payload.put("reference_id", voiceId);
         payload.put("format", "mp3");
         payload.put("normalize", true);
-        payload.put("mp3_bitrate", 128);
+        payload.put("mp3_bitrate", 64);
         payload.put("latency", "normal");
         payload.put("chunk_length", 300);
         HttpURLConnection conn = openPost("https://api.fish.audio/v1/tts");
@@ -84,7 +84,7 @@ public class NativeTtsPlugin extends Plugin {
         input.put("voice", voiceId);
         JSONObject parameters = new JSONObject();
         parameters.put("format", "mp3");
-        parameters.put("sample_rate", 24000);
+        parameters.put("sample_rate", 16000);
         JSONObject payload = new JSONObject();
         payload.put("model", aliyunModel);
         payload.put("input", input);
@@ -120,7 +120,7 @@ public class NativeTtsPlugin extends Plugin {
         request.put("speaker", voiceId);
         JSONObject audioParams = new JSONObject();
         audioParams.put("format", "mp3");
-        audioParams.put("sample_rate", 24000);
+        audioParams.put("sample_rate", 16000);
         request.put("audio_params", audioParams);
         payload.put("req_params", request);
         HttpURLConnection conn = openPost("https://openspeech.bytedance.com/api/v3/tts/unidirectional");
@@ -219,6 +219,7 @@ public class NativeTtsPlugin extends Plugin {
         voice.put("name", voiceId);
         JSONObject audioConfig = new JSONObject();
         audioConfig.put("audioEncoding", "MP3");
+        audioConfig.put("sampleRateHertz", 16000);
         JSONObject payload = new JSONObject();
         payload.put("input", input);
         payload.put("voice", voice);

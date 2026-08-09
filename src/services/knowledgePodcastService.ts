@@ -604,7 +604,7 @@ export class FishAudioTtsProvider implements TextToSpeechProvider {
             reference_id: this.profile.voice,
             format: "mp3",
             normalize: true,
-            mp3_bitrate: 128,
+            mp3_bitrate: 64,
             latency: "normal",
             chunk_length: 300,
           }),
@@ -642,7 +642,7 @@ export class AliyunTtsProvider implements TextToSpeechProvider {
       response = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio", {
         method: "POST",
         headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.profile.model, input: { text, voice: this.profile.voice }, parameters: { format: "mp3", sample_rate: 22050 } }),
+        body: JSON.stringify({ model: this.profile.model, input: { text, voice: this.profile.voice }, parameters: { format: "mp3", sample_rate: 16000 } }),
         signal: options.signal,
       });
     } catch (error) {
@@ -710,7 +710,7 @@ export class GoogleTtsProvider implements TextToSpeechProvider {
       response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(this.apiKey)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: { text }, voice: { languageCode: this.profile.languageCode ?? "cmn-CN", name: this.profile.voice }, audioConfig: { audioEncoding: "MP3" } }),
+        body: JSON.stringify({ input: { text }, voice: { languageCode: this.profile.languageCode ?? "cmn-CN", name: this.profile.voice }, audioConfig: { audioEncoding: "MP3", sampleRateHertz: 16000 } }),
         signal: options.signal,
       });
     } catch (error) {
@@ -750,7 +750,7 @@ export class DoubaoTtsProvider implements TextToSpeechProvider {
           req_params: {
             text,
             speaker: this.profile.voice,
-            audio_params: { format: "mp3", sample_rate: 24000 },
+            audio_params: { format: "mp3", sample_rate: 16000 },
           },
         }),
         signal: options.signal,

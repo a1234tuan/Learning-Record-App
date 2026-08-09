@@ -120,7 +120,17 @@ export const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       chunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+      // Leaving MediaRecorder() without options hands bitrate/codec choice to the browser, which
+      // is typically tuned for music rather than voice and inflates recording size. Opus at
+      // 32kbps stays clearly intelligible for speech. Try a few codecs a browser might support
+      // before falling back to whatever MediaRecorder() picks on its own — that unconstrained
+      // fallback still exists for browsers that reject every explicit mimeType below, but it's a
+      // last resort rather than the common case.
+      const candidateMimeTypes = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+      const supportedMimeType = candidateMimeTypes.find((type) => MediaRecorder.isTypeSupported?.(type));
+      const recorder = supportedMimeType
+        ? new MediaRecorder(stream, { mimeType: supportedMimeType, audioBitsPerSecond: 32000 })
+        : new MediaRecorder(stream);
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
@@ -128,9 +138,13 @@ export const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>
       };
       recorder.onerror = () => setError("录音过程出错，请重新授权麦克风或改用上传音频。");
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        // Name the file to match what was actually recorded instead of assuming .webm — Safari's
+        // fallback path, for instance, produces audio/mp4.
+        const extension = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
         const file = blob.size > 0
-          ? new File([blob], `recording-${Date.now()}.webm`, { type: blob.type })
+          ? new File([blob], `recording-${Date.now()}.${extension}`, { type: blob.type })
           : null;
         if (!file) {
           setError("没有录到声音，请检查麦克风权限。");

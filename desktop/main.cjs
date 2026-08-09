@@ -568,7 +568,10 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ req_params: { text, speaker: voiceId, audio_params: { format: "mp3", sample_rate: 24000 } } }),
+      // Voice-only speech is fully intelligible well below the 24kHz/default bitrate these
+      // providers ship with — lowering it here shrinks every generated podcast asset before it
+      // ever reaches storage or cloud sync, without touching already-synced audio.
+      body: JSON.stringify({ req_params: { text, speaker: voiceId, audio_params: { format: "mp3", sample_rate: 16000 } } }),
     });
     const payload = await resp.text();
     if (!resp.ok) throw new Error(`豆包 TTS 请求失败（${resp.status}）：${payload.replace(/\s+/g, " ").slice(0, 240)}`);
@@ -581,7 +584,7 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
     const resp = await net.fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audio", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: aliyunModel, input: { text, voice: voiceId }, parameters: { format: "mp3", sample_rate: 24000 } }),
+      body: JSON.stringify({ model: aliyunModel, input: { text, voice: voiceId }, parameters: { format: "mp3", sample_rate: 16000 } }),
     });
     const json = await resp.json();
     if (!resp.ok) throw new Error(`阿里云 TTS 请求失败（${resp.status}）：${JSON.stringify(json).slice(0, 200)}`);
@@ -639,7 +642,7 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
     const resp = await net.fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ input: { text }, voice: { languageCode, name: voiceId }, audioConfig: { audioEncoding: "MP3" } }),
+      body: JSON.stringify({ input: { text }, voice: { languageCode, name: voiceId }, audioConfig: { audioEncoding: "MP3", sampleRateHertz: 16000 } }),
     });
     const json = await resp.json();
     if (!resp.ok) throw new Error(`Google TTS 请求失败（${resp.status}）：${JSON.stringify(json).slice(0, 200)}`);
@@ -653,7 +656,7 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
   const response = await net.fetch("https://api.fish.audio/v1/tts", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "audio/mpeg", model: fishModel },
-    body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", normalize: true, mp3_bitrate: 128, latency: "normal", chunk_length: 300 }),
+    body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", normalize: true, mp3_bitrate: 64, latency: "normal", chunk_length: 300 }),
   });
   const buffer = Buffer.from(await response.arrayBuffer());
   if (!response.ok) throw new Error(`Fish Audio 请求失败（${response.status}）：${buffer.toString("utf8").slice(0, 200)}`);

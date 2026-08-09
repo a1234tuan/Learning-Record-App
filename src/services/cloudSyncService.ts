@@ -131,6 +131,11 @@ export interface CloudSyncStatus {
   lastSnapshotMaintenanceFailedAt?: string;
   lastSnapshotMaintenanceStatus?: "completed" | "deferred-cost" | "failed";
   lastSnapshotMaintenanceDeferredAt?: string;
+  /** Deduplicated Firebase Storage bytes/objects for the currently visible revision. */
+  storageBytes: number;
+  storageObjectCount: number;
+  /** False when the active revision predates storage-summary tracking (older sync history). */
+  storageKnown: boolean;
 }
 
 export interface CloudRecoverySnapshot {
@@ -2071,6 +2076,9 @@ export const getCloudSyncStatus = async (user: User): Promise<CloudSyncStatus> =
       estimateCount(reviewEventsRef(user.uid), local.lastPulledRevision, remote.state.headRevision),
     ])
     : [0, 0];
+  const storageEstimate = remote.exists
+    ? remoteStorageEstimate(remote.state)
+    : { storageObjectCount: 0, storageBytes: 0, storageKnown: false };
   return {
     protocolVersion: remote.state.protocolVersion,
     cloudRevision: remote.state.headRevision,
@@ -2083,6 +2091,9 @@ export const getCloudSyncStatus = async (user: User): Promise<CloudSyncStatus> =
     lastSnapshotMaintenanceFailedAt: local.lastSnapshotMaintenanceFailedAt,
     lastSnapshotMaintenanceStatus: local.lastSnapshotMaintenanceStatus,
     lastSnapshotMaintenanceDeferredAt: local.lastSnapshotMaintenanceDeferredAt,
+    storageBytes: storageEstimate.storageBytes,
+    storageObjectCount: storageEstimate.storageObjectCount,
+    storageKnown: storageEstimate.storageKnown,
   };
 };
 

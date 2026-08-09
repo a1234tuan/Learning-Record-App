@@ -24,3 +24,5 @@ desktop/oauth-config.cjs
 *.pem
 .qoder/
 android/app/google-services.json
+functions/lib/
+.firebase/

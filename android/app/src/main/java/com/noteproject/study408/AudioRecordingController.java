@@ -38,8 +38,12 @@ final class AudioRecordingController {
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
             recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioEncodingBitRate(128000);
-            recorder.setAudioSamplingRate(44100);
+            // Voice-only recordings don't need music-grade quality. 32kbps AAC at 16kHz stays
+            // clearly intelligible while cutting file size to roughly a quarter of the previous
+            // 128kbps/44.1kHz setting — this only affects newly captured audio, so existing
+            // recordings and their cloud-sync content hashes are unaffected.
+            recorder.setAudioEncodingBitRate(32000);
+            recorder.setAudioSamplingRate(16000);
             recorder.setOutputFile(outputFile.getAbsolutePath());
             recorder.prepare();
             recorder.start();
