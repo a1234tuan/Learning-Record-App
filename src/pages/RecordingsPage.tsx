@@ -12,6 +12,7 @@ import {
   Repeat1,
   Rewind,
   Search,
+  Shuffle,
   SkipBack,
   SkipForward,
   X,
@@ -19,7 +20,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Asset, Block, KnowledgePodcast, SubjectConfig } from "../types";
+import type { RecordingPlayerQueueSource } from "../lib/tabNavigation";
 import { PageHeader } from "../components/ui";
+import { usePlayback } from "../components/PlaybackProvider";
+import type { PlaybackMode } from "../services/nativeMediaPlayback";
 import { getRecordBlocks } from "../lib/journalSelectors";
 import {
   formatAudioDuration,
@@ -37,10 +41,11 @@ interface RecordingsPageProps {
   subjects: SubjectConfig[];
   selectedFolderId?: string;
   playerAssetId?: string;
+  playerQueueSource?: RecordingPlayerQueueSource;
   query: string;
   searchOpen: boolean;
   onSelectedFolderChange: (folderId: string | undefined) => void;
-  onPlayerChange: (assetId: string | undefined) => void;
+  onPlayerChange: (assetId: string | undefined, source?: RecordingPlayerQueueSource) => void;
   onQueryChange: (query: string) => void;
   onSearchOpenChange: (open: boolean) => void;
   onBack?: () => void;
@@ -50,16 +55,16 @@ interface RecordingsPageProps {
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
 type PlaybackSpeed = (typeof SPEEDS)[number];
-type PlayMode = "single" | "folder" | "order";
+type PlayMode = PlaybackMode;
 
 const PLAY_MODE_LABELS: Record<PlayMode, string> = {
   single: "单录音循环",
-  folder: "文件夹循环",
   order: "顺序播放",
+  shuffle: "随机播放",
 };
 
 const nextMode = (mode: PlayMode): PlayMode =>
-  mode === "single" ? "folder" : mode === "folder" ? "order" : "single";
+  mode === "order" ? "single" : mode === "single" ? "shuffle" : "order";
 
 const clampTime = (value: number, duration: number) => Math.min(Math.max(value, 0), Number.isFinite(duration) ? duration : value);
 
@@ -236,7 +241,7 @@ const RecordingPlayerPage = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
-  const [mode, setMode] = useState<PlayMode>("single");
+  const [mode, setMode] = useState<PlayMode>("order");
   const [message, setMessage] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playRequestIdRef = useRef(0);
@@ -342,7 +347,7 @@ const RecordingPlayerPage = ({
       goToIndex(currentIndex - 1);
       return;
     }
-    if (mode !== "order" && queue.length > 0) {
+    if (mode === "shuffle" && queue.length > 0) {
       goToIndex(queue.length - 1);
     }
   };
@@ -352,7 +357,7 @@ const RecordingPlayerPage = ({
       goToIndex(currentIndex + 1);
       return;
     }
-    if (mode !== "order" && queue.length > 0) {
+    if (mode === "shuffle" && queue.length > 0) {
       goToIndex(0);
     }
   };
@@ -393,8 +398,9 @@ const RecordingPlayerPage = ({
       goToIndex(currentIndex + 1);
       return;
     }
-    if (mode === "folder" && queue.length > 0) {
-      goToIndex(0);
+    if (mode === "shuffle" && queue.length > 1) {
+      const candidates = queue.map((_, index) => index).filter((index) => index !== currentIndex);
+      goToIndex(candidates[Math.floor(Math.random() * candidates.length)]);
       return;
     }
     playRequestIdRef.current += 1;
@@ -447,7 +453,7 @@ const RecordingPlayerPage = ({
           ))}
         </div>
         <button type="button" className="play-mode-button" onClick={() => setMode((value) => nextMode(value))}>
-          {mode === "single" ? <Repeat1 size={18} /> : mode === "folder" ? <Repeat size={18} /> : <Mic2 size={18} />}
+          {mode === "single" ? <Repeat1 size={18} /> : mode === "shuffle" ? <Shuffle size={18} /> : <Repeat size={18} />}
           {PLAY_MODE_LABELS[mode]}
         </button>
         <div className="transport-row">
@@ -472,6 +478,104 @@ const RecordingPlayerPage = ({
   );
 };
 
+const NativeRecordingPlayerPage = ({
+  initialAssetId,
+  queue,
+  onBack,
+  onDurationKnown,
+}: {
+  initialAssetId: string;
+  queue: RecordingItem[];
+  onBack: () => void;
+  onDurationKnown: (assetId: string, durationSeconds: number) => Promise<void> | void;
+}) => {
+  const playback = usePlayback();
+  const [message, setMessage] = useState("");
+  const startedKeyRef = useRef<string>();
+  const queueKey = `${initialAssetId}:${queue.map((item) => item.assetId).join(",")}`;
+  const nativeQueueId = `recordings:${queueKey}`;
+  const nativeSessionActive = playback.nativeAvailable && playback.state.queueId === nativeQueueId;
+
+  useEffect(() => {
+    if (!playback.nativeAvailable || startedKeyRef.current === queueKey) return;
+    startedKeyRef.current = queueKey;
+    setMessage("");
+    void playback.startQueue({
+      queueId: nativeQueueId,
+      items: queue.map((item) => ({
+        asset: item.asset,
+        title: item.title,
+        subtitle: item.recordTitle,
+      })),
+      initialAssetId,
+    }).catch((error) => {
+      if (startedKeyRef.current === queueKey) {
+        setMessage(error instanceof Error ? error.message : "无法准备后台播放。");
+      }
+    });
+  }, [initialAssetId, playback, queue, queueKey]);
+
+  const currentIndex = Math.max(0, queue.findIndex((item) => item.assetId === (nativeSessionActive ? playback.state.itemId : initialAssetId)));
+  const current = queue[currentIndex] ?? queue.find((item) => item.assetId === initialAssetId) ?? queue[0];
+  const duration = nativeSessionActive ? playback.state.durationSeconds || current?.durationSeconds || 0 : current?.durationSeconds || 0;
+  const currentTime = nativeSessionActive && playback.state.itemId === current?.assetId ? playback.state.positionSeconds : 0;
+  const playing = nativeSessionActive && playback.state.status === "playing";
+
+  useEffect(() => {
+    if (!current || !duration || Math.round(duration) === current.durationSeconds) return;
+    void Promise.resolve(onDurationKnown(current.assetId, Math.round(duration))).catch(() => undefined);
+  }, [current, duration, onDurationKnown]);
+
+  if (!current) {
+    return (
+      <main className="page recordings-page">
+        <button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={18} />返回</button>
+        <div className="empty-state"><h2>录音不存在</h2></div>
+      </main>
+    );
+  }
+
+  const togglePlay = async () => {
+    try {
+      if (playing) await playback.pause(); else await playback.play();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "播放控制失败。");
+    }
+  };
+
+  return (
+    <main className="page recording-player-page">
+      <header className="recording-player-topbar">
+        <button type="button" className="secondary-button" onClick={onBack}><ArrowLeft size={18} />返回</button>
+        <div><p className="eyebrow">{current.folderTitle}</p><h1>{current.title}</h1></div>
+      </header>
+      <section className="recording-player-stage">
+        <div className="recording-time-display">{formatPlayerTime(duration ? Math.min(currentTime, duration) : currentTime)}</div>
+        <small>{formatAudioDuration(duration || current.durationSeconds)} / {current.recordTitle}</small>
+        {playback.preparing.active && <p className="status-message">正在准备后台播放 {playback.preparing.totalBytes ? Math.round((playback.preparing.writtenBytes / playback.preparing.totalBytes) * 100) : 0}%</p>}
+        {playback.notificationUnavailable && <p className="status-message">通知权限未授予，播放将无法显示在通知栏或锁屏界面。</p>}
+        {message && <p className="status-message">{message}</p>}
+      </section>
+      <section className="recording-player-controls">
+        <div className="speed-row" aria-label="播放倍速">
+          {SPEEDS.map((item) => <button key={item} type="button" className={playback.state.speed === item ? "active" : ""} onClick={() => void playback.setSpeed(item)}>{item}x</button>)}
+        </div>
+        <button type="button" className="play-mode-button" onClick={() => void playback.setMode(nextMode(playback.state.mode))}>
+          {playback.state.mode === "single" ? <Repeat1 size={18} /> : playback.state.mode === "shuffle" ? <Shuffle size={18} /> : <Repeat size={18} />}
+          {PLAY_MODE_LABELS[playback.state.mode]}
+        </button>
+        <div className="transport-row">
+          <button type="button" className="icon-button" title="上一首" onClick={() => void playback.previous()}><SkipBack size={22} /></button>
+          <button type="button" className="icon-button" title="快退 10 秒" onClick={() => void playback.seekBy(-10)}><Rewind size={24} /></button>
+          <button type="button" className="player-play-button" title={playing ? "暂停" : "播放"} onClick={() => void togglePlay()}>{playing ? <Pause size={30} /> : <Play size={30} />}</button>
+          <button type="button" className="icon-button" title="快进 10 秒" onClick={() => void playback.seekBy(10)}><FastForward size={24} /></button>
+          <button type="button" className="icon-button" title="下一首" onClick={() => void playback.next()}><SkipForward size={22} /></button>
+        </div>
+      </section>
+    </main>
+  );
+};
+
 export const RecordingsPage = ({
   blocks,
   assets,
@@ -479,6 +583,7 @@ export const RecordingsPage = ({
   subjects,
   selectedFolderId,
   playerAssetId,
+  playerQueueSource,
   query,
   searchOpen,
   onSelectedFolderChange,
@@ -489,24 +594,31 @@ export const RecordingsPage = ({
   onRenameAudio,
   onDurationKnown,
 }: RecordingsPageProps) => {
+  const playback = usePlayback();
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const folders = useMemo(() => getRecordingFolders(records, assets, subjects, podcasts), [assets, podcasts, records, subjects]);
   const searchResults = useMemo(() => searchRecordingItems(folders, query), [folders, query]);
   const allItems = useMemo(() => folders.flatMap((folder) => folder.items), [folders]);
   const playerItem = playerAssetId ? allItems.find((item) => item.assetId === playerAssetId) : undefined;
   const playerFolder = playerItem ? folders.find((folder) => folder.id === playerItem.folderId) : undefined;
+  const playerQueue = playerQueueSource?.kind === "search"
+    ? searchResults
+    : playerQueueSource?.kind === "folder"
+      ? folders.find((folder) => folder.id === playerQueueSource.folderId)?.items ?? []
+      : playerFolder?.items ?? [];
   const selectedFolder: RecordingFolder | undefined = selectedFolderId
     ? folders.find((folder) => folder.id === selectedFolderId)
     : undefined;
 
-  if (playerAssetId && playerItem && playerFolder) {
+  if (playerAssetId && playerItem && playerQueue.length > 0) {
     return (
-      <RecordingPlayerPage
-        initialAssetId={playerAssetId}
-        queue={playerFolder.items}
-        onBack={() => onPlayerChange(undefined)}
-        onDurationKnown={onDurationKnown}
-      />
+      <>
+        {playback.nativeAvailable ? (
+          <NativeRecordingPlayerPage initialAssetId={playerAssetId} queue={playerQueue} onBack={() => onPlayerChange(undefined)} onDurationKnown={onDurationKnown} />
+        ) : (
+          <RecordingPlayerPage initialAssetId={playerAssetId} queue={playerQueue} onBack={() => onPlayerChange(undefined)} onDurationKnown={onDurationKnown} />
+        )}
+      </>
     );
   }
 
@@ -534,7 +646,7 @@ export const RecordingsPage = ({
               <RecordingRow
                 key={item.id}
                 item={item}
-                onOpen={() => onPlayerChange(item.assetId)}
+                onOpen={() => onPlayerChange(item.assetId, { kind: "folder", folderId: selectedFolder.id })}
                 onRename={onRenameAudio}
                 onDurationKnown={onDurationKnown}
               />
@@ -595,7 +707,7 @@ export const RecordingsPage = ({
               <RecordingRow
                 key={item.id}
                 item={item}
-                onOpen={() => onPlayerChange(item.assetId)}
+                onOpen={() => onPlayerChange(item.assetId, { kind: "search", query })}
                 onRename={onRenameAudio}
                 onDurationKnown={onDurationKnown}
               />

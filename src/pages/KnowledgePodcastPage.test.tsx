@@ -58,7 +58,7 @@ describe("KnowledgePodcastPage", () => {
 
   it("renders the mobile-safe two-row player control structure", () => {
     const { container } = render(<KnowledgePodcastPage {...props} />);
-    expect(container.querySelector(".podcast-player-actions")?.children).toHaveLength(4);
+    expect(container.querySelector(".podcast-player-actions")?.children).toHaveLength(6);
     expect(container.querySelector(".podcast-player-options")).toBeInTheDocument();
     expect(screen.getByRole("slider")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "播放速度" })).toBeInTheDocument();

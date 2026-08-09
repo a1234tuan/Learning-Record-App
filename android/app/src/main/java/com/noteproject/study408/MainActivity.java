@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeFirebaseStoragePlugin.class);
         registerPlugin(NativeTtsPlugin.class);
         registerPlugin(NativePodcastTtsPlugin.class);
+        registerPlugin(NativeMediaPlaybackPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

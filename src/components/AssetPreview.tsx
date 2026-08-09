@@ -6,6 +6,7 @@ import { storage } from "../services/storageAdapter";
 import { downloadAsset } from "../services/assetDownloadService";
 import { runOcrForAsset } from "../services/ocrJobService";
 import { describeOcrForAi } from "../services/ocrDiagnostics";
+import { usePlayback } from "./PlaybackProvider";
 
 type AssetPreviewProps = {
   assetRef?: RecordAssetRef;
@@ -35,6 +36,7 @@ const formatSize = (size: number): string => {
 };
 
 export const AssetPreview = (props: AssetPreviewProps) => {
+  const playback = usePlayback();
   const {
     assetRef,
     assetId,
@@ -111,6 +113,10 @@ export const AssetPreview = (props: AssetPreviewProps) => {
   }
 
   const title = editableTitle ?? resolvedRef.title ?? asset.title ?? asset.fileName;
+  const nativeAudio = asset.kind === "audio" && playback.nativeAvailable;
+  const activeNativeItem = nativeAudio && playback.state.queueId === `preview:${asset.id}` && playback.state.itemId === asset.id;
+  const effectivePlaying = activeNativeItem ? playback.state.status === "playing" : playing;
+  const activeSpeed = nativeAudio && activeNativeItem ? playback.state.speed : speed;
   const handleDownload = async () => {
     try {
       setMessage(await downloadAsset(asset));
@@ -141,6 +147,25 @@ export const AssetPreview = (props: AssetPreviewProps) => {
   };
 
   const toggleAudio = async () => {
+    if (nativeAudio) {
+      setPlayerOpen(true);
+      setMessage("");
+      try {
+        if (activeNativeItem) {
+          if (playback.state.status === "playing") await playback.pause(); else await playback.play();
+        } else {
+          await playback.startQueue({
+            queueId: `preview:${asset.id}`,
+            items: [{ asset, title, subtitle: "笔记录音" }],
+            initialAssetId: asset.id,
+            speed,
+          });
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "无法准备后台播放。");
+      }
+      return;
+    }
     setPlayerOpen(true);
     const audio = audioRef.current;
     if (!audio) {
@@ -205,13 +230,17 @@ export const AssetPreview = (props: AssetPreviewProps) => {
               <strong>{viewTitle || "录音"}</strong>
             </div>
             <div className="compact-asset-actions">
-              <button type="button" className="icon-button" title={playing ? "暂停" : "播放"} onClick={() => void toggleAudio()}>
-                {playing ? <Pause size={16} /> : <Play size={16} />}
+              <button type="button" className="icon-button" title={effectivePlaying ? "暂停" : "播放"} onClick={() => void toggleAudio()}>
+                {effectivePlaying ? <Pause size={16} /> : <Play size={16} />}
               </button>
               <select
-                value={speed}
+                value={activeSpeed}
                 aria-label="播放倍速"
-                onChange={(event) => setSpeed(Number(event.target.value) as (typeof SPEEDS)[number])}
+                onChange={(event) => {
+                  const nextSpeed = Number(event.target.value) as (typeof SPEEDS)[number];
+                  setSpeed(nextSpeed);
+                  if (nativeAudio) void playback.setSpeed(nextSpeed);
+                }}
               >
                 {SPEEDS.map((item) => (
                   <option key={item} value={item}>{item}x</option>
@@ -224,20 +253,20 @@ export const AssetPreview = (props: AssetPreviewProps) => {
           </div>
           {playerOpen && (
             <div className="compact-audio-player">
-              <audio
-                ref={audioRef}
-                src={url}
-                controls
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                onEnded={() => setPlaying(false)}
-              />
+              {nativeAudio ? (
+                <>
+                  <input type="range" min={0} max={Math.max(1, playback.state.durationSeconds || asset.durationSeconds || 1)} value={Math.min(playback.state.positionSeconds, playback.state.durationSeconds || asset.durationSeconds || 1)} onChange={(event) => void playback.seekTo(Number(event.target.value))} />
+                  <small>{Math.floor(playback.state.positionSeconds)} 秒</small>
+                </>
+              ) : (
+                <audio ref={audioRef} src={url} controls onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
+              )}
               <button
                 type="button"
                 className="icon-button"
                 title="关闭播放器"
                 onClick={() => {
-                  audioRef.current?.pause();
+                  if (nativeAudio) void playback.stop(); else audioRef.current?.pause();
                   setPlaying(false);
                   setPlayerOpen(false);
                 }}
@@ -371,26 +400,26 @@ export const AssetPreview = (props: AssetPreviewProps) => {
       {asset.kind === "audio" && (
         <div className="audio-asset">
           <button type="button" className="secondary-button" onClick={() => void toggleAudio()}>
-            {playing ? <Pause size={17} /> : <Play size={17} />}
-            {playing ? "暂停" : "播放"}
+            {effectivePlaying ? <Pause size={17} /> : <Play size={17} />}
+            {effectivePlaying ? "暂停" : "播放"}
           </button>
           {playerOpen && (
             <div className="audio-player-panel">
               <div className="audio-player-controls">
-                <audio
-                  ref={audioRef}
-                  src={url}
-                  controls
-                  onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onEnded={() => setPlaying(false)}
-                />
+                {nativeAudio ? (
+                  <>
+                    <input type="range" min={0} max={Math.max(1, playback.state.durationSeconds || asset.durationSeconds || 1)} value={Math.min(playback.state.positionSeconds, playback.state.durationSeconds || asset.durationSeconds || 1)} onChange={(event) => void playback.seekTo(Number(event.target.value))} />
+                    <small>{Math.floor(playback.state.positionSeconds)} 秒</small>
+                  </>
+                ) : (
+                  <audio ref={audioRef} src={url} controls onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
+                )}
                 <button
                   type="button"
                   className="icon-button"
                   title="关闭播放器"
                   onClick={() => {
-                    audioRef.current?.pause();
+                    if (nativeAudio) void playback.stop(); else audioRef.current?.pause();
                     setPlaying(false);
                     setPlayerOpen(false);
                   }}
@@ -403,8 +432,11 @@ export const AssetPreview = (props: AssetPreviewProps) => {
                   <button
                     key={item}
                     type="button"
-                    className={speed === item ? "active" : ""}
-                    onClick={() => setSpeed(item)}
+                    className={activeSpeed === item ? "active" : ""}
+                    onClick={() => {
+                      setSpeed(item);
+                      if (nativeAudio) void playback.setSpeed(item);
+                    }}
                   >
                     {item}x
                   </button>

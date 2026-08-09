@@ -42,6 +42,7 @@ import { PageTransition } from "./components/PageTransition";
 import { CloudSyncButton } from "./components/CloudSyncButton";
 import { CloudSyncConflictDialog } from "./components/CloudSyncConflictDialog";
 import { CloudSyncStatusToast } from "./components/CloudSyncStatusToast";
+import { PlaybackProvider } from "./components/PlaybackProvider";
 import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
 import { createAiSessionForScope } from "./services/aiSessionService";
@@ -65,6 +66,7 @@ import {
   reviewQueueReferenceOpenError,
   type AiWorkspaceScreen,
   type MoreSubRoute,
+  type RecordingPlayerQueueSource,
   type TabKey,
   type TabMemory,
 } from "./lib/tabNavigation";
@@ -777,6 +779,7 @@ export const App = () => {
             subjects={app.subjects}
             selectedFolderId={tabMemory.more.recordingsState.selectedFolderId}
             playerAssetId={tabMemory.more.recordingsState.playerAssetId}
+            playerQueueSource={tabMemory.more.recordingsState.playerQueueSource}
             query={tabMemory.more.recordingsState.query}
             searchOpen={tabMemory.more.recordingsState.searchOpen}
             onSelectedFolderChange={(selectedFolderId) => {
@@ -799,13 +802,18 @@ export const App = () => {
                 },
               });
             }}
-            onPlayerChange={(playerAssetId) => {
+            onPlayerChange={(playerAssetId, playerQueueSource?: RecordingPlayerQueueSource) => {
               const current = navigationStateRef.current;
               if (!playerAssetId && current.tabMemory.more.recordingsState.playerAssetId) {
                 popCurrentTabDepth();
                 return;
               }
-              if (current.tabMemory.more.recordingsState.playerAssetId === playerAssetId) {
+              if (
+                current.tabMemory.more.recordingsState.playerAssetId === playerAssetId
+                && current.tabMemory.more.recordingsState.playerQueueSource?.kind === playerQueueSource?.kind
+                && (playerQueueSource?.kind !== "folder" || current.tabMemory.more.recordingsState.playerQueueSource?.kind !== "folder" || current.tabMemory.more.recordingsState.playerQueueSource.folderId === playerQueueSource.folderId)
+                && (playerQueueSource?.kind !== "search" || current.tabMemory.more.recordingsState.playerQueueSource?.kind !== "search" || current.tabMemory.more.recordingsState.playerQueueSource.query === playerQueueSource.query)
+              ) {
                 return;
               }
               commitNavigation({
@@ -814,7 +822,7 @@ export const App = () => {
                   ...current.tabMemory,
                   more: {
                     ...current.tabMemory.more,
-                    recordingsState: { ...current.tabMemory.more.recordingsState, playerAssetId },
+                    recordingsState: { ...current.tabMemory.more.recordingsState, playerAssetId, playerQueueSource },
                   },
                 },
               });
@@ -1302,6 +1310,7 @@ export const App = () => {
     && !(activeTab === "more" && (tabMemory.more.subRoute === "recordings" || tabMemory.more.subRoute === "ai" || tabMemory.more.subRoute === "podcasts" || tabMemory.more.subRoute === "aiTools" || tabMemory.more.subRoute === "aiExport"));
 
   return (
+    <PlaybackProvider>
     <div className={shellClassName}>
       <aside className="sidebar">
         <div className="brand">
@@ -1401,5 +1410,6 @@ export const App = () => {
         })}
       </nav>
     </div>
+    </PlaybackProvider>
   );
 };

@@ -56,6 +56,7 @@ public class NativeAudioRecorderPlugin extends Plugin {
             return;
         }
         try {
+            MediaPlaybackService.pauseForRecording(getContext());
             RecordingForegroundService.start(getContext());
             waitForRecordingStart(call, 0);
         } catch (Exception error) {

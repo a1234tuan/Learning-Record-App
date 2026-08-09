@@ -21,6 +21,9 @@ export type MoreSubRoute =
 export type AiWorkspaceScreen = "chat" | "scope";
 export type PodcastWorkspaceScreen = "editor" | "scope";
 export type ReviewMode = "queue" | "manage";
+export type RecordingPlayerQueueSource =
+  | { kind: "folder"; folderId: string }
+  | { kind: "search"; query: string };
 
 export type ReviewSessionProgress = {
   total: number;
@@ -101,6 +104,7 @@ export type TabMemory = {
     recordingsState: {
       selectedFolderId?: string;
       playerAssetId?: EntityId;
+      playerQueueSource?: RecordingPlayerQueueSource;
       query: string;
       searchOpen: boolean;
     };
@@ -359,7 +363,7 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
             ...memory,
             more: {
               ...memory.more,
-              recordingsState: { ...memory.more.recordingsState, playerAssetId: undefined },
+              recordingsState: { ...memory.more.recordingsState, playerAssetId: undefined, playerQueueSource: undefined },
             },
           };
         }

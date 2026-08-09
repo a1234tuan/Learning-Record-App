@@ -222,7 +222,7 @@ describe("RecordingsPage", () => {
     renderPage({ selectedFolderId: recordingFolderIdForSubject("OS"), playerAssetId: "audio-1" });
 
     expect(screen.getByText("00:00:00")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /单录音循环/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /顺序播放/ })).toBeInTheDocument();
     expect(screen.getByTitle("快退 10 秒")).toBeInTheDocument();
     expect(screen.getByTitle("快进 10 秒")).toBeInTheDocument();
   });
@@ -252,6 +252,6 @@ describe("RecordingsPage", () => {
     const audio = document.querySelector("audio") as HTMLAudioElement;
     fireEvent.loadedMetadata(audio);
     await waitFor(() => expect(playMock).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: /单录音循环/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /顺序播放/ })).toBeInTheDocument();
   });
 });

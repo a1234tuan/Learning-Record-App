@@ -243,6 +243,13 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
         selectedFolderId: optionalString(recordings.selectedFolderId)
           ?? (optionalString(recordings.selectedSubject) ? `subject:${optionalString(recordings.selectedSubject)}` : undefined),
         playerAssetId: optionalString(recordings.playerAssetId),
+        playerQueueSource: recordings.playerQueueSource && isObject(recordings.playerQueueSource)
+          ? recordings.playerQueueSource.kind === "folder" && typeof recordings.playerQueueSource.folderId === "string"
+            ? { kind: "folder", folderId: recordings.playerQueueSource.folderId }
+            : recordings.playerQueueSource.kind === "search" && typeof recordings.playerQueueSource.query === "string"
+              ? { kind: "search", query: recordings.playerQueueSource.query }
+              : undefined
+          : undefined,
         query: optionalString(recordings.query) ?? "",
         searchOpen: optionalBoolean(recordings.searchOpen) ?? false,
       },
