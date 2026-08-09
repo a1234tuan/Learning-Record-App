@@ -14,14 +14,21 @@ import type {
   StudySession,
   Tag,
 } from "../types";
-import { DEFAULT_SETTINGS } from "../db/defaults";
+import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import { nowISO } from "../lib/date";
+import { sha256 as javascriptSha256 } from "@noble/hashes/sha256";
+
+export type CloudHashAlgorithm = "sha256" | "fnv1a";
 
 export interface CloudSyncEntity {
   key: string;
   entityType: CloudSyncEntityType;
   entityId: string;
   contentHash: string;
+  /** Hash format used for this entity. Older Firestore documents omit this field. */
+  contentHashVersion?: number;
+  /** Algorithm used for contentHash. Older documents infer this from the hash prefix. */
+  contentHashAlgorithm?: CloudHashAlgorithm;
   payload: Record<string, unknown>;
   deleted?: boolean;
   /** Content-addressed Storage object for payloads too large for Firestore. */
@@ -42,6 +49,32 @@ export interface CloudSyncExport {
 }
 
 /**
+ * A fresh device contains only settings and the built-in tag guide. Those
+ * values are not user-authored data and must not compete with an existing
+ * cloud snapshot during the first pull.
+ */
+export const isBootstrapOnlyCloudData = (exported: CloudSyncExport): boolean => {
+  if (exported.reviewEvents.length > 0) return false;
+  const settings = exported.entities.filter((entity) => entity.entityType === "settings" && !entity.deleted);
+  if (settings.length !== 1) return false;
+  const tags = exported.entities.filter((entity) => entity.entityType === "tag");
+  if (tags.some((entity) => entity.deleted)) return false;
+  const names = tags
+    .map((entity) => typeof entity.payload.name === "string" ? entity.payload.name.trim() : "")
+    .filter(Boolean)
+    .sort();
+  const defaultNames = [...DEFAULT_TAGS].sort();
+  if (names.length !== defaultNames.length || names.some((name, index) => name !== defaultNames[index])) return false;
+  if (exported.entities.some((entity) => !["settings", "tag"].includes(entity.entityType))) return false;
+
+  const normalizeSettings = (payload: Record<string, unknown>) => {
+    const { schemaVersion: _schemaVersion, lastBackupAt: _lastBackupAt, syncFolderName: _syncFolderName, ...rest } = payload;
+    return rest;
+  };
+  return stableJson(normalizeSettings(settings[0].payload)) === stableJson(normalizeSettings(DEFAULT_SETTINGS as unknown as Record<string, unknown>));
+};
+
+/**
  * Entity types excluded from the coarse entity-level conflict check. Review
  * projections are mergeable by event/state semantics, while settings/templates
  * are checked separately by `mergeCloudSyncSmallEntity` at field granularity.
@@ -51,6 +84,9 @@ export const NON_CONFLICTING_ENTITY_TYPES = new Set<CloudSyncEntityType>(["revie
 type JsonRecord = Record<string, unknown>;
 
 export const CLOUD_DOCUMENT_THRESHOLD_BYTES = 750 * 1024;
+export const ASSET_CONTENT_HASH_VERSION = 2;
+export const BLOCK_CONTENT_HASH_VERSION = 2;
+export const ASSET_OPERATIONAL_FIELDS = ["ocrStatus", "ocrError", "ocrJobId", "ocrUpdatedAt", "ocrResultSummary"] as const;
 
 export interface CloudPayloadDocument {
   hash: string;
@@ -85,13 +121,20 @@ const fallbackHash = (value: string) => {
   return `fnv-${(hash >>> 0).toString(16)}`;
 };
 
-const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
+/** Legacy-only compatibility path. New content must never use this 32-bit hash. */
+export const legacyFnvHashValue = (value: unknown) => fallbackHash(stableJson(value));
+
+const hex = (bytes: ArrayBuffer | Uint8Array) => Array.from(
+  bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+  (value) => value.toString(16).padStart(2, "0"),
+).join("");
 
 const digest = async (bytes: ArrayBuffer, fallbackSource: string) => {
   if (globalThis.crypto?.subtle) {
     return hex(await globalThis.crypto.subtle.digest("SHA-256", bytes));
   }
-  return fallbackHash(fallbackSource);
+  void fallbackSource;
+  return hex(javascriptSha256(new Uint8Array(bytes)));
 };
 
 export const stableJson = (value: unknown) => JSON.stringify(sortValue(value));
@@ -119,6 +162,64 @@ export const stripUpdatedAt = (value: unknown): unknown => {
 };
 
 /**
+ * OCR queue state and derived result summaries are device-local bookkeeping.
+ * The OCR text itself remains synchronized as user-visible content.
+ */
+export const stripAssetOperationalFields = (value: unknown): unknown => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const {
+    ocrStatus: _ocrStatus,
+    ocrError: _ocrError,
+    ocrJobId: _ocrJobId,
+    ocrUpdatedAt: _ocrUpdatedAt,
+    ocrResultSummary: _ocrResultSummary,
+    ...rest
+  } = value as JsonRecord;
+  return rest;
+};
+
+/** Keep OCR queue state local when a remote asset result is applied. */
+export const preserveAssetOperationalFields = (
+  current: CloudSyncEntity | undefined,
+  incoming: CloudSyncEntity,
+): CloudSyncEntity => {
+  if (
+    incoming.entityType !== "asset" || incoming.deleted ||
+    !current || current.entityType !== "asset" || current.deleted
+  ) return incoming;
+  const localOperational = ASSET_OPERATIONAL_FIELDS.reduce<JsonRecord>((result, key) => {
+    if (Object.prototype.hasOwnProperty.call(current.payload, key)) result[key] = current.payload[key];
+    return result;
+  }, {});
+  if (Object.keys(localOperational).length === 0) return incoming;
+  return { ...incoming, payload: { ...incoming.payload, ...localOperational } };
+};
+
+export const normalizeBlockHashPayload = (payload: unknown): unknown => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const record = payload as JsonRecord;
+  if (record.type !== "record" || Object.prototype.hasOwnProperty.call(record, "favorite")) return payload;
+  return { ...record, favorite: false };
+};
+
+/** Hash shape used by pre-v2 block ledgers that omitted the record favorite field. */
+export const legacyBlockHashPayload = (payload: unknown): unknown => {
+  const normalized = stripUpdatedAt(payload);
+  if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) return normalized;
+  const record = normalized as JsonRecord;
+  if (record.type !== "record") return normalized;
+  const { favorite: _favorite, ...withoutFavorite } = record;
+  return withoutFavorite;
+};
+
+export const syncHashPayload = (entityType: CloudSyncEntityType, payload: unknown): unknown => {
+  const withoutOperational = entityType === "asset" ? stripAssetOperationalFields(payload) : payload;
+  return stripUpdatedAt(entityType === "block" ? normalizeBlockHashPayload(withoutOperational) : withoutOperational);
+};
+
+export const legacyEntityHashPayload = (payload: unknown): unknown => stripUpdatedAt(payload);
+
+/**
  * Firestore documents have a 1 MiB ceiling. Keep a margin and store large
  * structured payloads in Storage, addressed by the same hash as the entity.
  */
@@ -127,12 +228,22 @@ export const createCloudPayloadDocument = async (entity: CloudSyncEntity): Promi
   const source = stableJson(entity.payload);
   const bytes = new TextEncoder().encode(source);
   if (bytes.byteLength <= CLOUD_DOCUMENT_THRESHOLD_BYTES) return undefined;
-  const hash = await hashValue(stripUpdatedAt(entity.payload));
-  if (hash !== entity.contentHash) {
+  const hash = await hashValue(syncHashPayload(entity.entityType, entity.payload));
+  const legacyHash = entity.entityType === "block"
+    ? await hashValue(legacyBlockHashPayload(entity.payload))
+    : undefined;
+  const legacyAlgorithmHash = legacyFnvHashValue(syncHashPayload(entity.entityType, entity.payload));
+  const legacyEntityAlgorithmHash = entity.entityType === "asset"
+    ? legacyFnvHashValue(legacyEntityHashPayload(entity.payload))
+    : undefined;
+  const legacyBlockAlgorithmHash = entity.entityType === "block"
+    ? legacyFnvHashValue(legacyBlockHashPayload(entity.payload))
+    : undefined;
+  if (hash !== entity.contentHash && legacyHash !== entity.contentHash && legacyAlgorithmHash !== entity.contentHash && legacyEntityAlgorithmHash !== entity.contentHash && legacyBlockAlgorithmHash !== entity.contentHash) {
     throw new Error(`同步实体 ${entity.key} 的内容哈希不一致。`);
   }
   return {
-    hash,
+    hash: entity.contentHash,
     byteSize: bytes.byteLength,
     blob: new Blob([bytes], { type: "application/json" }),
   };
@@ -170,7 +281,10 @@ const entity = async (
     key: `${entityType}:${value.id}`,
     entityType,
     entityId: value.id,
-    contentHash: await hashValue(stripUpdatedAt(payload)),
+    contentHash: await hashValue(syncHashPayload(entityType, payload)),
+    contentHashAlgorithm: "sha256",
+    ...(entityType === "asset" ? { contentHashVersion: ASSET_CONTENT_HASH_VERSION } : {}),
+    ...(entityType === "block" ? { contentHashVersion: BLOCK_CONTENT_HASH_VERSION } : {}),
     payload,
     deleted: Boolean(value.deletedAt),
   };
@@ -279,7 +393,7 @@ export const mergeCloudSyncEntities = (
   updates: CloudSyncEntity[],
 ) => {
   const byKey = new Map(current.map((entity) => [entity.key, entity]));
-  updates.forEach((entity) => byKey.set(entity.key, entity));
+  updates.forEach((entity) => byKey.set(entity.key, preserveAssetOperationalFields(byKey.get(entity.key), entity)));
   return [...byKey.values()];
 };
 
@@ -384,13 +498,22 @@ export const mergeCloudSyncSmallEntity = (
  * "keep local or cloud" prompt for something neither side actually disagrees about.
  */
 export const hasConflictingChanges = (
-  normalLocal: Pick<CloudSyncEntity, "key" | "contentHash">[],
-  normalRemote: Pick<CloudSyncEntity, "key" | "contentHash">[],
+  normalLocal: Pick<CloudSyncEntity, "key" | "entityType" | "contentHash">[],
+  normalRemote: Pick<CloudSyncEntity, "key" | "entityType" | "contentHash">[],
 ): boolean => {
-  if (normalLocal.length === 0) return false;
-  const localHashByKey = new Map(normalLocal.map((entity) => [entity.key, entity.contentHash]));
-  return normalRemote.some((entity) => {
-    const localHash = localHashByKey.get(entity.key);
-    return localHash !== undefined && localHash !== entity.contentHash;
-  });
+  return findConflictingChanges(normalLocal, normalRemote).length > 0;
+};
+
+export const findConflictingChanges = (
+  normalLocal: Pick<CloudSyncEntity, "key" | "entityType" | "contentHash">[],
+  normalRemote: Pick<CloudSyncEntity, "key" | "entityType" | "contentHash">[],
+) => {
+  if (normalLocal.length === 0) return [] as Array<{ key: string; entityType: CloudSyncEntityType }>;
+  const localByKey = new Map(normalLocal.map((entity) => [entity.key, entity]));
+  return normalRemote
+    .filter((entity) => {
+      const local = localByKey.get(entity.key);
+      return Boolean(local && local.contentHash !== entity.contentHash);
+    })
+    .map((entity) => ({ key: entity.key, entityType: entity.entityType }));
 };

@@ -140,7 +140,10 @@ describe("DexieStorageAdapter record review invariants", () => {
     const restored = await adapter.undoRecordReview(result!.undoToken);
 
     expect(restored).toEqual(originalReview);
-    expect(await fakeDb.recordReviewLogs.toArray()).toEqual([]);
+    const logs = await fakeDb.recordReviewLogs.toArray();
+    expect(logs).toHaveLength(2);
+    expect(logs.some((log) => log.eventType === "rating" && log.rating === "good")).toBe(true);
+    expect(logs.some((log) => log.eventType === "rating-undone" && log.revertedEventId === result!.undoToken.reviewLogId)).toBe(true);
     expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({
       dueCountAtFirstOpen: 1,
       reviewedCount: 0,
@@ -162,8 +165,13 @@ describe("DexieStorageAdapter record review invariants", () => {
     await adapter.undoRecordReview(correction!.undoToken);
 
     const logs = await fakeDb.recordReviewLogs.toArray();
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({ rating: "good", evaluationText: "第一次评价" });
+    expect(logs).toHaveLength(3);
+    expect(logs.filter((log) => log.eventType === "rating")).toHaveLength(2);
+    expect(logs.find((log) => log.eventType === "rating-undone")).toMatchObject({
+      revertedEventId: correction!.undoToken.reviewLogId,
+    });
+    expect(await adapter.listRecordReviewLogs("record-1")).toHaveLength(1);
+    expect((await adapter.listRecordReviewLogs("record-1"))[0]).toMatchObject({ rating: "good", evaluationText: "第一次评价" });
     expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({
       reviewedCount: 1,
       goodCount: 1,

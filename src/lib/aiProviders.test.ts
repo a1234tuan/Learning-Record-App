@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createAiProviderTemplate, normalizeAiConfig, normalizeAiProvider } from "./aiProviders";
+import { createAiProviderTemplate, createDefaultAiProviders, normalizeAiConfig, normalizeAiProvider } from "./aiProviders";
 import { createDefaultAiPresets } from "../db/defaults";
 
 describe("aiProviders", () => {
@@ -21,6 +21,10 @@ describe("aiProviders", () => {
       baseUrl: "https://api.vectorengine.ai",
       model: "",
     });
+  });
+
+  it("uses a stable identity for the built-in provider", () => {
+    expect(createDefaultAiProviders()).toEqual(createDefaultAiProviders());
   });
 
   it("migrates legacy single-provider AI settings into provider profiles", () => {

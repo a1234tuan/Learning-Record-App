@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { createTtsProviderTemplate, normalizeTtsProvider } from "./ttsProviders";
+import { createDefaultTtsProviders, createTtsProviderTemplate, normalizeTtsProvider } from "./ttsProviders";
 
 describe("Doubao TTS provider configuration", () => {
+  it("uses a stable identity for the built-in provider", () => {
+    expect(createDefaultTtsProviders()).toEqual(createDefaultTtsProviders());
+  });
+
   it("defaults to the Doubao 2.0 Tina voice", () => {
     expect(createTtsProviderTemplate("doubao")).toMatchObject({
       providerId: "doubao",

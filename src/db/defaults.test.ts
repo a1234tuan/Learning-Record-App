@@ -21,6 +21,7 @@ describe("default AI settings", () => {
 
   it("creates the five built-in learning coach prompts", () => {
     const presets = createDefaultAiPresets();
+    expect(presets).toEqual(createDefaultAiPresets());
 
     expect(presets.map((preset) => preset.title)).toEqual([
       "白纸复述测试",

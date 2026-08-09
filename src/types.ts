@@ -10,7 +10,7 @@ export type RecordReviewKind = "overview" | "memory";
 export type RecordReviewScheduler = "overview-v1" | "fsrs-v6" | "sm2-legacy";
 export type RecordReviewRating = "forgot" | "fuzzy" | "good" | "easy" | "remembered";
 export type RecordReviewStatus = "active" | "mastered" | "removed";
-export type RecordReviewEventType = "rating" | "added" | "reset" | "removed" | "kind-changed";
+export type RecordReviewEventType = "rating" | "added" | "reset" | "removed" | "kind-changed" | "rating-undone";
 export type ExportKind = "full-backup" | "subject-markdown" | "knowledge-json" | "plain-text";
 export type ImportProgressStage =
   | "choosing"
@@ -116,6 +116,8 @@ export interface RecordReviewLog extends BaseEntity {
   rating: RecordReviewRating;
   /** Non-rating operations are immutable sync events and are hidden from rating history. */
   eventType?: RecordReviewEventType;
+  /** The rating event neutralized by a synchronized undo action. */
+  revertedEventId?: EntityId;
   normalizedRating?: Exclude<RecordReviewRating, "remembered">;
   reviewKind?: RecordReviewKind;
   scheduler?: RecordReviewScheduler;
@@ -814,6 +816,18 @@ export interface CloudSyncStateRecord {
   lastSyncedAt?: ISODateTime;
   /** Monotonic local write epoch used to prevent a remote restore overwriting a newer edit. */
   mutationEpoch?: number;
+  /** The revision through which the local ledger represents the complete remote key set. */
+  remoteDatasetCompleteThroughRevision?: number;
+  /** Last time background recovery-snapshot maintenance completed successfully. */
+  lastSnapshotMaintenanceAt?: ISODateTime;
+  /** Most recent non-blocking recovery-snapshot maintenance failure, shown in cloud sync settings. */
+  lastSnapshotMaintenanceError?: string;
+  /** When the current recovery-snapshot maintenance failure was recorded. */
+  lastSnapshotMaintenanceFailedAt?: ISODateTime;
+  /** Last automatic recovery-snapshot maintenance outcome. */
+  lastSnapshotMaintenanceStatus?: "completed" | "deferred-cost" | "failed";
+  /** When automatic maintenance was deferred because the account was too large. */
+  lastSnapshotMaintenanceDeferredAt?: ISODateTime;
 }
 
 /** Local-only knowledge of the last cloud version of one synchronized entity. */
@@ -822,13 +836,17 @@ export interface CloudSyncLedgerRecord {
   entityType: CloudSyncEntityType | "review-event";
   entityId: string;
   contentHash: string;
+  /** Hash format used for this ledger row. Older rows omit this field. */
+  contentHashVersion?: number;
+  /** Algorithm used for contentHash. Older rows infer this from the hash prefix. */
+  contentHashAlgorithm?: "sha256" | "fnv1a";
   cloudRevision: number;
   assetHash?: string;
   /** Last common payload for small entities that support three-way field merging. */
   basePayload?: Record<string, unknown>;
 }
 
-export type CloudSyncOperationStatus = "pending" | "succeeded" | "failed" | "unknown";
+export type CloudSyncOperationStatus = "pending" | "succeeded" | "failed" | "unknown" | "superseded";
 export type CloudSyncOperationPhase = "acquiring" | "uploading" | "committing" | "releasing" | "reconciling";
 
 export interface CloudSyncExpectedValue {
@@ -851,6 +869,14 @@ export interface CloudSyncOperationRecord {
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
   errorMessage?: string;
+  /** A later visible revision safely replaced an operation whose final response was lost. */
+  supersededByRevision?: number;
+  reconciliationReason?: string;
+  reconciledAt?: ISODateTime;
+  /** Last error encountered while releasing or recovering the operation lock. */
+  lockReleaseError?: string;
+  lockReleaseErrorAt?: ISODateTime;
+  lockReleaseAttempts?: number;
 }
 
 export interface CloudSyncMutationRecord {
@@ -983,7 +1009,11 @@ export interface StorageAdapter {
   listStudySessions(): Promise<StudySession[]>;
   saveStudySession(session: StudySession): Promise<StudySession>;
   saveAsset(file: File, kind: Asset["kind"], title?: string): Promise<Asset>;
-  patchAsset(id: EntityId, patch: Partial<Omit<Asset, "id" | "data">>): Promise<Asset | undefined>;
+  patchAsset(
+    id: EntityId,
+    patch: Partial<Omit<Asset, "id" | "data">>,
+    options?: { mutation?: "content" | "operational" },
+  ): Promise<Asset | undefined>;
   renameAssetTitle(assetId: EntityId, title: string): Promise<void>;
   resetStaleOcrJobs?(maxAgeMs: number): Promise<void>;
   listAssets(): Promise<Asset[]>;

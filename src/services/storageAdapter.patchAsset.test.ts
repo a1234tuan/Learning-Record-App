@@ -15,6 +15,26 @@ class AssetTable {
     this.rows.set(asset.id, asset);
     return asset.id;
   }
+
+  async bulkPut(assets: Asset[]): Promise<void> {
+    for (const asset of assets) await this.put(asset);
+  }
+
+  filter(predicate: (asset: Asset) => boolean) {
+    return { toArray: async () => Array.from(this.rows.values()).filter(predicate) };
+  }
+}
+
+class MutationTable {
+  private record: { id: "local"; epoch: number } | undefined;
+
+  async get(_id: string) {
+    return this.record;
+  }
+
+  async put(record: { id: "local"; epoch: number }) {
+    this.record = record;
+  }
 }
 
 class BlockTable {
@@ -62,17 +82,19 @@ const setup = async () => {
   const blocks = new BlockTable();
   const recordDrafts = new RecordDraftTable();
   const templates = new TemplateTable();
+  const cloudSyncMutation = new MutationTable();
   vi.doMock("../db/database", () => ({
     db: {
       assets,
       blocks,
       recordDrafts,
       templates,
+      cloudSyncMutation,
       transaction: async (_mode: string, ...args: unknown[]) => (args.at(-1) as () => Promise<unknown>)(),
     },
   }));
   const { DexieStorageAdapter } = await import("./storageAdapter");
-  return { adapter: new DexieStorageAdapter(), assets };
+  return { adapter: new DexieStorageAdapter(), assets, cloudSyncMutation };
 };
 
 beforeEach(() => {
@@ -119,6 +141,45 @@ describe("DexieStorageAdapter patchAsset", () => {
     const resaved = await adapter.patchAsset("asset-1", { ocrStatus: "done" });
 
     expect(resaved?.updatedAt).toBe("2026-06-22T00:00:00.000Z");
+  });
+
+  it("does not bump the cloud mutation epoch for operational OCR state", async () => {
+    const { adapter, assets, cloudSyncMutation } = await setup();
+    await assets.put(asset({ ocrStatus: "running" }));
+
+    await adapter.patchAsset("asset-1", {
+      ocrStatus: "failed",
+      ocrError: "上次 OCR 识别中断，可重新识别。",
+      ocrUpdatedAt: "2026-06-22T00:00:00.000Z",
+    }, { mutation: "operational" });
+
+    expect(await cloudSyncMutation.get("local")).toBeUndefined();
+  });
+
+  it("bumps the cloud mutation epoch when OCR text changes", async () => {
+    const { adapter, assets, cloudSyncMutation } = await setup();
+    await assets.put(asset({ ocrStatus: "running" }));
+
+    await adapter.patchAsset("asset-1", {
+      ocrStatus: "done",
+      ocrText: "图片文字",
+      ocrResultSummary: { textLength: 4, includedInAi: true, parserVersion: "test" },
+    });
+
+    expect(await cloudSyncMutation.get("local")).toEqual({ id: "local", epoch: 1 });
+  });
+
+  it("resets stale OCR jobs without creating a cloud mutation", async () => {
+    const { adapter, assets, cloudSyncMutation } = await setup();
+    await assets.put(asset({
+      ocrStatus: "running",
+      ocrUpdatedAt: "2026-06-20T00:00:00.000Z",
+    }));
+
+    await adapter.resetStaleOcrJobs(10 * 60 * 1000);
+
+    expect((await assets.get("asset-1"))?.ocrStatus).toBe("failed");
+    expect(await cloudSyncMutation.get("local")).toBeUndefined();
   });
 
   it("preserves the original Blob reference when the patch is a no-op", async () => {

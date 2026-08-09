@@ -1,7 +1,16 @@
 import { useSyncExternalStore } from "react";
-import type { CloudSyncConflict } from "./cloudSyncService";
+import type { CloudSyncConflict, CloudSyncConflictChoice, CloudSyncReadEstimate } from "./cloudSyncService";
 
 export type BusyAction = "sign-in" | "sign-out" | "sync" | "restore" | "resolve" | null;
+
+/** Result of the most recently finished sync/resolve operation, shown in a small toast so a
+ *  click on the sync button always produces visible feedback — not just when there's a conflict. */
+export type SyncOutcomeStatus = "success" | "no-change" | "error" | "uncertain";
+
+export interface SyncOutcome {
+  status: SyncOutcomeStatus;
+  message: string;
+}
 
 interface CloudSyncState {
   busy: BusyAction;
@@ -11,6 +20,11 @@ interface CloudSyncState {
    *  async call check `isCurrent(token)` before writing results, so an interrupted/superseded sync
    *  can never clobber state set by a later one. */
   token: number;
+  /** Result of the last completed operation, rendered by CloudSyncStatusToast. Cleared when a new
+   *  operation starts, dismissed manually, or auto-dismissed a few seconds after a benign result. */
+  outcome: SyncOutcome | undefined;
+  readBudget: CloudSyncReadEstimate | undefined;
+  readBudgetChoice: CloudSyncConflictChoice | undefined;
 }
 
 /**
@@ -21,12 +35,44 @@ interface CloudSyncState {
  */
 export const CLOUD_SYNC_WATCHDOG_MS = 6 * 60_000;
 
-let state: CloudSyncState = { busy: null, message: "", conflict: undefined, token: 0 };
+let state: CloudSyncState = { busy: null, message: "", conflict: undefined, token: 0, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined };
 const listeners = new Set<() => void>();
 let watchdogTimer: number | undefined;
 let backgroundedWhileBusy = false;
+let outcomeTimer: number | undefined;
+let outcomeToken = 0;
+
+/** Benign results (nothing to report, or a normal upload/download) clear themselves so the toast
+ *  doesn't linger. Failures and unresolved network states stay until the user dismisses them —
+ *  the whole point is to stop the user from editing on top of a sync they didn't notice failed. */
+export const AUTO_DISMISS_MS = 5000;
 
 const notify = () => listeners.forEach((l) => l());
+
+const clearOutcomeTimer = () => {
+  if (outcomeTimer !== undefined) {
+    window.clearTimeout(outcomeTimer);
+    outcomeTimer = undefined;
+  }
+};
+
+/** Shared by the public setOutcome() and the watchdog/background guards below, so every path that
+ *  force-clears a stuck sync also leaves behind a visible (non-auto-dismissing) outcome. */
+const applyOutcome = (status: SyncOutcomeStatus, message: string) => {
+  clearOutcomeTimer();
+  outcomeToken += 1;
+  const token = outcomeToken;
+  state = { ...state, outcome: { status, message } };
+  notify();
+  if (status === "success" || status === "no-change") {
+    outcomeTimer = window.setTimeout(() => {
+      if (outcomeToken === token) {
+        state = { ...state, outcome: undefined };
+        notify();
+      }
+    }, AUTO_DISMISS_MS);
+  }
+};
 
 const clearWatchdog = () => {
   if (watchdogTimer !== undefined) {
@@ -39,10 +85,21 @@ const armWatchdog = (token: number) => {
   clearWatchdog();
   watchdogTimer = window.setTimeout(() => {
     if (state.token === token && state.busy !== null) {
-      state = { ...state, busy: null, token: state.token + 1, message: "同步未在预期时间内完成，可能是应用被系统挂起，请重新点击同步。" };
-      notify();
+      const message = "同步结果未知，应用可能在后台中断，请点击同步核对上一次操作。";
+      state = { ...state, busy: null, token: state.token + 1, message, conflict: undefined };
+      backgroundedWhileBusy = false;
+      applyOutcome("uncertain", message);
     }
   }, CLOUD_SYNC_WATCHDOG_MS);
+};
+
+const finishBusy = (token: number) => {
+  if (state.token !== token) return false;
+  state = { ...state, busy: null };
+  backgroundedWhileBusy = false;
+  notify();
+  clearWatchdog();
+  return true;
 };
 
 export const cloudSyncStore = {
@@ -52,7 +109,15 @@ export const cloudSyncStore = {
     return () => { listeners.delete(listener); };
   },
   setBusy: (busy: BusyAction) => {
-    state = { ...state, busy, token: busy !== null ? state.token + 1 : state.token };
+    // A new operation starting supersedes whatever outcome toast was showing for the previous one.
+    if (busy !== null) {
+      clearOutcomeTimer();
+      backgroundedWhileBusy = typeof document !== "undefined" && document.visibilityState === "hidden";
+      state = { ...state, busy, token: state.token + 1, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined };
+    } else {
+      backgroundedWhileBusy = false;
+      state = { ...state, busy };
+    }
     notify();
     if (busy !== null) armWatchdog(state.token);
     else clearWatchdog();
@@ -64,6 +129,17 @@ export const cloudSyncStore = {
     notify();
   },
   setConflict: (conflict: CloudSyncConflict | undefined) => { state = { ...state, conflict }; notify(); },
+  setReadBudget: (estimate: CloudSyncReadEstimate | undefined) => { state = { ...state, readBudget: estimate }; notify(); },
+  setReadBudgetChoice: (choice: CloudSyncConflictChoice | undefined) => { state = { ...state, readBudgetChoice: choice }; notify(); },
+  /** Records the final result of a sync/resolve so CloudSyncStatusToast can show it. Success and
+   *  no-change auto-dismiss after a few seconds; error and uncertain stay until dismissOutcome(). */
+  setOutcome: (status: SyncOutcomeStatus, message: string) => applyOutcome(status, message),
+  dismissOutcome: () => {
+    clearOutcomeTimer();
+    state = { ...state, outcome: undefined };
+    notify();
+  },
+  finishBusy,
   /** Token for the operation just started by setBusy(). Capture right after setBusy and pass to isCurrent(). */
   currentToken: () => state.token,
   /** False once a newer operation started, or the watchdog/background guard force-cleared this one —
@@ -87,13 +163,10 @@ if (typeof document !== "undefined") {
     if (document.visibilityState === "visible") {
       if (backgroundedWhileBusy && state.busy !== null) {
         clearWatchdog();
-        state = {
-          ...state,
-          busy: null,
-          token: state.token + 1,
-          message: "应用切到后台时同步被中断，请重新点击同步。",
-        };
-        notify();
+        const message = "同步结果未知，应用切到后台时请求被中断，请点击同步核对上一次操作。";
+        state = { ...state, busy: null, token: state.token + 1, message, conflict: undefined };
+        backgroundedWhileBusy = false;
+        applyOutcome("uncertain", message);
       }
       backgroundedWhileBusy = false;
     }

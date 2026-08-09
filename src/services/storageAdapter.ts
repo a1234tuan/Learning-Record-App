@@ -44,6 +44,7 @@ import {
   DEFAULT_TAGS,
   createDayEntry,
   isCodeBiasedDefaultAiPresetSet,
+  isCurrentDefaultAiPresetSet,
   isCurrentDefaultAiPresetSetWithoutModes,
   isLegacyDefaultAiPresetSet,
 } from "../db/defaults";
@@ -239,6 +240,14 @@ const reviewStateBeforeLog = (current: RecordReviewState, log: RecordReviewLog):
 
 const isRatingReviewLog = (log: RecordReviewLog) => !log.eventType || log.eventType === "rating";
 
+const isRatingUndoReviewLog = (log: RecordReviewLog) =>
+  log.eventType === "rating-undone" && typeof log.revertedEventId === "string";
+
+const activeRatingReviewLogs = (logs: RecordReviewLog[]): RecordReviewLog[] => {
+  const undone = new Set(logs.filter(isRatingUndoReviewLog).map((log) => log.revertedEventId));
+  return logs.filter((log) => isRatingReviewLog(log) && !undone.has(log.id));
+};
+
 const reviewActionLog = (
   eventType: Exclude<NonNullable<RecordReviewLog["eventType"]>, "rating">,
   previous: RecordReviewState | undefined,
@@ -304,8 +313,9 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
     await this.compactOldReviewLogs();
+    // Do not create today's entry during startup. A sync check must observe the
+    // last confirmed local snapshot; the entry is created lazily by user flows.
     await this.resetStaleOcrJobs(10 * 60 * 1000);
-    await this.getOrCreateEntry(todayISO());
   }
 
   async recoverInterruptedKnowledgePodcastJobs(activePodcastIds: Set<string> = new Set()): Promise<void> {
@@ -382,7 +392,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
 
-    const logs = (await db.recordReviewLogs.toArray()).filter(isRatingReviewLog);
+    const logs = activeRatingReviewLogs(await db.recordReviewLogs.toArray());
     const latestLogByRecord = new Map<string, RecordReviewLog>();
     for (const log of logs) {
       const current = latestLogByRecord.get(log.recordId);
@@ -442,7 +452,8 @@ export class DexieStorageAdapter implements StorageAdapter {
   /** Rebuild projections from immutable cloud review events without exposing actions as ratings. */
   private async rebuildReviewProjectionFromEvents(): Promise<void> {
     const logs = await db.recordReviewLogs.toArray();
-    const projected = logs.filter((log) => log.stateAfter);
+    const undone = new Set(logs.filter(isRatingUndoReviewLog).map((log) => log.revertedEventId));
+    const projected = logs.filter((log) => log.stateAfter && (!isRatingReviewLog(log) || !undone.has(log.id)));
     if (projected.length === 0) return;
 
     const latestStateByRecord = new Map<string, RecordReviewLog>();
@@ -458,7 +469,7 @@ export class DexieStorageAdapter implements StorageAdapter {
 
     const existingStats = new Map((await db.recordReviewDayStats.toArray()).map((stat) => [stat.date, stat]));
     const finalRatingByRecordDay = new Map<string, RecordReviewLog>();
-    for (const log of logs.filter(isRatingReviewLog)) {
+    for (const log of activeRatingReviewLogs(logs)) {
       const date = isoDateTimeToLocalDate(log.reviewedAt);
       const key = `${log.recordId}:${date}`;
       const current = finalRatingByRecordDay.get(key);
@@ -563,7 +574,8 @@ export class DexieStorageAdapter implements StorageAdapter {
     const shouldReplacePresets = !currentAi?.presets?.length ||
       isLegacyDefaultAiPresetSet(currentAi.presets) ||
       isCurrentDefaultAiPresetSetWithoutModes(currentAi.presets) ||
-      isCodeBiasedDefaultAiPresetSet(currentAi.presets);
+      isCodeBiasedDefaultAiPresetSet(currentAi.presets) ||
+      isCurrentDefaultAiPresetSet(currentAi.presets);
     const legacyAi = currentAi as typeof currentAi & { baseUrl?: string; model?: string; providerName?: string };
     const legacyCompatibleAi = legacyAi?.baseUrl === "https://api.deepseek.com/v1" || legacyAi?.model === "deepseek-chat"
       ? {
@@ -997,9 +1009,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       if (!current || current.status !== "active") {
         return undefined;
       }
+      const recordLogs = await db.recordReviewLogs.where("recordId").equals(recordId).toArray();
       const correctionLog = current.lastReviewDate === reviewedDate
-        ? (await db.recordReviewLogs.where("recordId").equals(recordId).toArray())
-          .filter(isRatingReviewLog)
+        ? activeRatingReviewLogs(recordLogs)
           .filter((log) => isoDateTimeToLocalDate(log.reviewedAt) === reviewedDate)
           .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt) || b.updatedAt.localeCompare(a.updatedAt))[0]
         : undefined;
@@ -1135,8 +1147,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.recordReviewLogs.get(token.reviewLogId),
         db.recordReviewLogs.where("recordId").equals(token.recordId).toArray(),
       ]);
-      const latestLog = recordLogs
-        .filter(isRatingReviewLog)
+      const latestLog = activeRatingReviewLogs(recordLogs)
         .sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt) || b.updatedAt.localeCompare(a.updatedAt))[0];
       if (
         !current ||
@@ -1150,10 +1161,10 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
 
       await db.recordReviews.put(token.previousReview);
-      await db.recordReviewLogs.delete(token.reviewLogId);
-      if (token.previousLog) {
-        await db.recordReviewLogs.put(token.previousLog);
-      }
+      await db.recordReviewLogs.put({
+        ...reviewActionLog("rating-undone", current, token.previousReview),
+        revertedEventId: currentLog.id,
+      });
 
       const reviewedDate = isoDateTimeToLocalDate(token.reviewedAt);
       if (token.previousDayStat) {
@@ -1170,7 +1181,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     const logs = recordId
       ? await db.recordReviewLogs.where("recordId").equals(recordId).toArray()
       : await db.recordReviewLogs.toArray();
-    return logs.filter(isRatingReviewLog).sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
+    return activeRatingReviewLogs(logs).sort((a, b) => b.reviewedAt.localeCompare(a.reviewedAt));
   }
 
   async getRecordReviewStats(date = todayISO()): Promise<RecordReviewStats> {
@@ -1180,7 +1191,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       db.recordReviewLogs.toArray(),
       this.listDueRecordReviews(date),
     ]);
-    const ratingLogs = logs.filter(isRatingReviewLog);
+    const ratingLogs = activeRatingReviewLogs(logs);
     const active = reviews.filter((review) => review.status === "active");
     const mastered = reviews.filter((review) => review.status === "mastered");
     const overdueCount = dueReviews.filter((review) => review.nextReviewDate && review.nextReviewDate < date).length;
@@ -1431,7 +1442,11 @@ export class DexieStorageAdapter implements StorageAdapter {
     });
   }
 
-  async patchAsset(id: string, patch: Partial<Omit<Asset, "id" | "data">>): Promise<Asset | undefined> {
+  async patchAsset(
+    id: string,
+    patch: Partial<Omit<Asset, "id" | "data">>,
+    options: { mutation?: "content" | "operational" } = {},
+  ): Promise<Asset | undefined> {
     const existing = await db.assets.get(id);
     if (!existing) {
       return undefined;
@@ -1443,7 +1458,9 @@ export class DexieStorageAdapter implements StorageAdapter {
       return existing;
     }
     const saved = touch(next);
-    await markCloudSyncMutation();
+    if (options.mutation !== "operational") {
+      await markCloudSyncMutation();
+    }
     await db.assets.put(saved);
     return saved;
   }
@@ -1525,7 +1542,6 @@ export class DexieStorageAdapter implements StorageAdapter {
       return;
     }
 
-    await markCloudSyncMutation();
     await db.assets.bulkPut(
       assets.map((asset) =>
         touch({

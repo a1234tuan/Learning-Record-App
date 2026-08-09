@@ -41,6 +41,7 @@ import { TemplateLibraryPage } from "./pages/TemplateLibraryPage";
 import { PageTransition } from "./components/PageTransition";
 import { CloudSyncButton } from "./components/CloudSyncButton";
 import { CloudSyncConflictDialog } from "./components/CloudSyncConflictDialog";
+import { CloudSyncStatusToast } from "./components/CloudSyncStatusToast";
 import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
 import { createAiSessionForScope } from "./services/aiSessionService";
@@ -1378,6 +1379,7 @@ export const App = () => {
         </div>
       )}
       <CloudSyncConflictDialog onRestored={app.refresh} />
+      <CloudSyncStatusToast />
       <nav className="bottom-nav">
         {bottomNavItems.map((item) => {
           const Icon = item.icon;

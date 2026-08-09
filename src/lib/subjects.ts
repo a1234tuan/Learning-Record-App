@@ -5,6 +5,7 @@ import { newId } from "./entity";
 export const DEFAULT_SUBJECT_NAMES: Subject[] = ["读书笔记", "数学", "英语", "其他"];
 export const DEFAULT_SUBJECT = "读书笔记";
 const LEGACY_DEFAULT_SUBJECT_NAMES: Subject[] = ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"];
+const STABLE_BOOTSTRAP_TIME = "1970-01-01T00:00:00.000Z";
 
 export const normalizeSubjectName = (subject?: string): Subject => {
   const trimmed = subject?.trim();
@@ -38,13 +39,30 @@ export const createSubjectConfig = (name: Subject, order: number, archivedAt?: s
   };
 };
 
+const stableSubjectId = (prefix: string, name: Subject): string => `${prefix}:${encodeURIComponent(normalizeSubjectName(name))}`;
+
+const createStableSubjectConfig = (name: Subject, order: number, prefix: string): SubjectConfig => ({
+  id: stableSubjectId(prefix, name),
+  createdAt: STABLE_BOOTSTRAP_TIME,
+  updatedAt: STABLE_BOOTSTRAP_TIME,
+  name: normalizeSubjectName(name),
+  order,
+});
+
 export const createDefaultSubjects = (): SubjectConfig[] =>
-  DEFAULT_SUBJECT_NAMES.map((name, index) => createSubjectConfig(name, index));
+  DEFAULT_SUBJECT_NAMES.map((name, index) => createStableSubjectConfig(name, index, "default-subject"));
 
 const isLegacyDefaultSubjectSet = (subjects: SubjectConfig[]): boolean => {
   const names = subjects.map((subject) => normalizeSubjectName(subject.name));
   return names.length === LEGACY_DEFAULT_SUBJECT_NAMES.length &&
     LEGACY_DEFAULT_SUBJECT_NAMES.every((name, index) => names[index] === name);
+};
+
+const isCurrentDefaultSubjectSet = (subjects: SubjectConfig[] | undefined): boolean => {
+  if (!subjects || subjects.length !== DEFAULT_SUBJECT_NAMES.length || subjects.some((subject) => subject.archivedAt)) {
+    return false;
+  }
+  return DEFAULT_SUBJECT_NAMES.every((name, index) => normalizeSubjectName(subjects[index].name) === name);
 };
 
 const uniqueByName = (subjects: SubjectConfig[]): SubjectConfig[] => {
@@ -66,7 +84,7 @@ export const deriveSubjectsFromRecords = (
   settingsSubjects: SubjectConfig[] | undefined,
   records: RecordBlock[],
 ): SubjectConfig[] => {
-  const base = settingsSubjects && settingsSubjects.length > 0 && !isLegacyDefaultSubjectSet(settingsSubjects)
+  const base = settingsSubjects && settingsSubjects.length > 0 && !isLegacyDefaultSubjectSet(settingsSubjects) && !isCurrentDefaultSubjectSet(settingsSubjects)
     ? settingsSubjects
     : createDefaultSubjects();
   const subjects = uniqueByName(base);
@@ -75,7 +93,7 @@ export const deriveSubjectsFromRecords = (
     const name = normalizeSubjectName(record.subject);
     if (!known.has(name)) {
       known.add(name);
-      subjects.push(createSubjectConfig(name, subjects.length));
+      subjects.push(createStableSubjectConfig(name, subjects.length, "inferred-subject"));
     }
   }
   return uniqueByName(subjects);

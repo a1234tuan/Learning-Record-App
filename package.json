@@ -31,6 +31,7 @@
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/share": "^8.0.1",
     "@capawesome/capacitor-file-picker": "^8.0.2",
+    "@noble/hashes": "^1.8.0",
     "@tiptap/extension-code-block-lowlight": "^2.11.5",
     "@tiptap/extension-placeholder": "^2.11.5",
     "@tiptap/extension-task-item": "^2.11.5",

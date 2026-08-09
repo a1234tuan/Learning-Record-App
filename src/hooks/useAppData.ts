@@ -36,6 +36,7 @@ import {
 import { enqueueAutoOcrForRecord } from "../services/ocrJobService";
 import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupService";
 import { cancelAllKnowledgePodcastJobs, recoverKnowledgePodcastJobs, subscribeKnowledgePodcastJobs, syncNativeKnowledgePodcastTtsJobs } from "../services/knowledgePodcastJobService";
+import { cleanupCloudRecoverySnapshotsIfDue, getCurrentCloudUser } from "../services/cloudSyncService";
 
 export const useAppData = () => {
   const [initialized, setInitialized] = useState(false);
@@ -569,8 +570,16 @@ export const useAppData = () => {
 
   useEffect(() => {
     const syncOnVisible = () => {
-      if (document.visibilityState === "visible") void syncNativeKnowledgePodcastTtsJobs();
+      if (document.visibilityState === "visible") {
+        void syncNativeKnowledgePodcastTtsJobs();
+        const user = getCurrentCloudUser();
+        if (user) void cleanupCloudRecoverySnapshotsIfDue(user.uid);
+      }
     };
+    if (document.visibilityState === "visible") {
+      const user = getCurrentCloudUser();
+      if (user) void cleanupCloudRecoverySnapshotsIfDue(user.uid);
+    }
     document.addEventListener("visibilitychange", syncOnVisible);
     return () => document.removeEventListener("visibilitychange", syncOnVisible);
   }, []);

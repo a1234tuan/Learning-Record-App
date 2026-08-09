@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CloudSyncEntity, CloudSyncExport } from "./cloudSyncModel";
 
 // cloudSyncService.ts initializes real Firebase SDK clients (auth/firestore/storage) at module
 // load time via "./firebase". Importing it directly in a test would try to reach real Firebase
@@ -15,7 +16,18 @@ vi.mock("./firebase", () => ({
 // (getRemoteState, acquireLock/releaseLock, getRemoteChanges, batch commits, snapshot listing,
 // etc.) — testing it directly covers all of them without mocking each call site's own dependency
 // chain (db/storage/cloudSyncModel/nativeFirebaseStorage), which would make the test fragile.
-const { isUnsupportedStorageListError, lockMatches, mapWithConcurrency, withTimeout } = await import("./cloudSyncService");
+const {
+  cloudSyncReadRequiresConfirmation,
+  cloudStorageDownloadPlanFor,
+  cloudStorageSummaryFor,
+  isCloudSyncOperationSuperseded,
+  isUnsupportedStorageListError,
+  lockMatches,
+  isStaleRemoteLock,
+  mapWithConcurrency,
+  splitCloudSyncReadKeys,
+  withTimeout,
+} = await import("./cloudSyncService");
 
 describe("withTimeout", () => {
   it("rejects with the given message once the timeout elapses, for a promise that never settles", async () => {
@@ -105,5 +117,140 @@ describe("revision-scoped lock matching", () => {
 
   it("does not treat a legacy device-only lock as the current operation", () => {
     expect(lockMatches({ deviceId: "device-a", expiresAt: Date.now() + 60_000 }, "device-a", "operation-1", 7)).toBe(false);
+  });
+});
+
+describe("stale lock detection", () => {
+  it("does not classify an active heartbeat as stale", () => {
+    const now = 1_000_000;
+    expect(isStaleRemoteLock({
+      deviceId: "device-a",
+      operationId: "operation-1",
+      revision: 7,
+      acquiredAt: now - 60_000,
+      lastRenewedAt: now - 5 * 60_000,
+      expiresAt: now + 20 * 60_000,
+    }, now)).toBe(false);
+  });
+
+  it("classifies a lease stale only after two renewal intervals", () => {
+    const now = 1_000_000;
+    expect(isStaleRemoteLock({
+      deviceId: "device-a",
+      operationId: "operation-1",
+      revision: 7,
+      acquiredAt: now - 12 * 60_000,
+      lastRenewedAt: now - 10 * 60_000,
+      expiresAt: now + 20 * 60_000,
+    }, now)).toBe(true);
+  });
+
+  it("keeps legacy locks conservative until their expiry", () => {
+    const now = 1_000_000;
+    expect(isStaleRemoteLock({
+      deviceId: "device-a",
+      operationId: "operation-1",
+      revision: 7,
+      expiresAt: now + 20 * 60_000,
+    }, now)).toBe(false);
+  });
+});
+
+describe("cloud sync read budget", () => {
+  it("splits targeted document ids into Firestore-safe batches of 30", () => {
+    const batches = splitCloudSyncReadKeys(Array.from({ length: 61 }, (_, index) => `key-${index}`));
+    expect(batches.map((batch) => batch.length)).toEqual([30, 30, 1]);
+  });
+
+  it("pauses at the expensive-read threshold unless explicitly confirmed", () => {
+    const estimate = {
+      mode: "full" as const,
+      estimatedReads: 40_000,
+      entityReads: 39_000,
+      reviewEventReads: 900,
+      targetedReads: 0,
+      overheadReads: 100,
+      storageObjectCount: 0,
+      storageBytes: 0,
+      storageKnown: true,
+    };
+    expect(cloudSyncReadRequiresConfirmation(estimate)).toBe(true);
+    expect(cloudSyncReadRequiresConfirmation(estimate, true)).toBe(false);
+    expect(cloudSyncReadRequiresConfirmation({ ...estimate, estimatedReads: 39_999 })).toBe(false);
+  });
+
+  it("treats an unavailable estimate as high risk", () => {
+    expect(cloudSyncReadRequiresConfirmation({
+      mode: "full",
+      estimatedReads: Number.POSITIVE_INFINITY,
+      entityReads: 0,
+      reviewEventReads: 0,
+      targetedReads: 0,
+      overheadReads: 8,
+      storageObjectCount: 0,
+      storageBytes: 0,
+      storageKnown: true,
+    })).toBe(true);
+  });
+
+  it("requires confirmation when Storage object count or bytes crosses its threshold", () => {
+    const estimate = {
+      mode: "incremental" as const,
+      estimatedReads: 12,
+      entityReads: 2,
+      reviewEventReads: 1,
+      targetedReads: 1,
+      overheadReads: 8,
+      storageObjectCount: 500,
+      storageBytes: 0,
+      storageKnown: true,
+    };
+    expect(cloudSyncReadRequiresConfirmation(estimate)).toBe(true);
+    expect(cloudSyncReadRequiresConfirmation({ ...estimate, storageObjectCount: 1, storageBytes: 100 * 1024 * 1024 })).toBe(true);
+    expect(cloudSyncReadRequiresConfirmation(estimate, true)).toBe(false);
+  });
+
+  it("requires confirmation when the Storage footprint is unknown", () => {
+    expect(cloudSyncReadRequiresConfirmation({
+      mode: "full",
+      estimatedReads: 10,
+      entityReads: 1,
+      reviewEventReads: 1,
+      targetedReads: 0,
+      overheadReads: 8,
+      storageObjectCount: 0,
+      storageBytes: 0,
+      storageKnown: false,
+    })).toBe(true);
+  });
+});
+
+describe("cloud Storage summary and unknown-operation proofs", () => {
+  it("deduplicates asset and large-payload objects by hash", async () => {
+    const entities = [
+      { key: "asset:1", entityType: "asset", entityId: "1", contentHash: "entity-1", payload: { contentHash: "asset-hash", size: 12 } },
+      { key: "asset:2", entityType: "asset", entityId: "2", contentHash: "entity-2", payload: { contentHash: "asset-hash", size: 12 } },
+      { key: "block:1", entityType: "block", entityId: "1", contentHash: "block-1", payload: {}, payloadDocumentHash: "document-hash", payloadByteSize: 30 },
+    ] satisfies CloudSyncEntity[];
+    await expect(cloudStorageSummaryFor(entities, 9)).resolves.toEqual({
+      revision: 9,
+      assetObjectCount: 1,
+      assetBytes: 12,
+      payloadObjectCount: 1,
+      payloadBytes: 30,
+    });
+  });
+
+  it("counts only missing local Storage objects", async () => {
+    const entities = [{ key: "asset:1", entityType: "asset", entityId: "1", contentHash: "entity-1", payload: { contentHash: "asset-hash", size: 12 } }] satisfies CloudSyncEntity[];
+    const local: CloudSyncExport = { entities: [], reviewEvents: [], assetBlobs: new Map<string, Blob>() };
+    await expect(cloudStorageDownloadPlanFor(entities, local)).resolves.toEqual({ storageObjectCount: 1, storageBytes: 12, storageKnown: true });
+  });
+
+  it("proves an old operation is superseded only when every key is newer and visible", () => {
+    const operation = { revision: 4, expectedEntities: [{ key: "block:1", contentHash: "old" }], expectedEvents: [] };
+    expect(isCloudSyncOperationSuperseded(operation, { entities: [{ key: "block:1", revision: 6 }], events: [] }, 6)).toBe(true);
+    expect(isCloudSyncOperationSuperseded(operation, { entities: [{ key: "block:1", revision: 4 }], events: [] }, 6)).toBe(false);
+    expect(isCloudSyncOperationSuperseded(operation, { entities: [], events: [] }, 6)).toBe(false);
   });
 });

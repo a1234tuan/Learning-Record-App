@@ -1,5 +1,5 @@
 import type { AiProviderConfig, AiProviderProfile } from "../types";
-import { createBaseEntity } from "./entity";
+import { newId } from "./entity";
 
 export const DEFAULT_AI_MEMORY_TURNS = 12;
 export const DEFAULT_AI_CONTEXT_WINDOW_TOKENS = 65_536;
@@ -11,13 +11,16 @@ const baseProvider = (): Omit<AiProviderProfile, "id" | "providerName" | "baseUr
   memoryTurns: DEFAULT_AI_MEMORY_TURNS,
 });
 
-export const createAiProviderTemplate = (builtIn: NonNullable<AiProviderProfile["builtIn"]>): AiProviderProfile => {
+export const createAiProviderTemplate = (
+  builtIn: NonNullable<AiProviderProfile["builtIn"]>,
+  id = newId(),
+): AiProviderProfile => {
   const base = baseProvider();
   switch (builtIn) {
     case "deepseek":
       return {
         ...base,
-        ...createBaseEntity(),
+        id,
         providerName: "DeepSeek",
         baseUrl: "https://api.deepseek.com",
         model: "deepseek-v4-pro",
@@ -26,7 +29,7 @@ export const createAiProviderTemplate = (builtIn: NonNullable<AiProviderProfile[
     case "nvidia":
       return {
         ...base,
-        ...createBaseEntity(),
+        id,
         providerName: "NVIDIA",
         baseUrl: "https://integrate.api.nvidia.com/v1",
         model: "meta/llama-3.3-70b-instruct",
@@ -35,7 +38,7 @@ export const createAiProviderTemplate = (builtIn: NonNullable<AiProviderProfile[
     case "aliyun":
       return {
         ...base,
-        ...createBaseEntity(),
+        id,
         providerName: "阿里云百炼",
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         model: "qwen-plus",
@@ -44,7 +47,7 @@ export const createAiProviderTemplate = (builtIn: NonNullable<AiProviderProfile[
     case "custom-proxy":
       return {
         ...base,
-        ...createBaseEntity(),
+        id,
         providerName: "自定义中转 API",
         baseUrl: "https://api.vectorengine.ai",
         model: "",
@@ -54,7 +57,7 @@ export const createAiProviderTemplate = (builtIn: NonNullable<AiProviderProfile[
 };
 
 export const createDefaultAiProviders = (): AiProviderProfile[] => [
-  createAiProviderTemplate("deepseek"),
+  createAiProviderTemplate("deepseek", "default"),
 ];
 
 type LegacyAiConfig = Partial<AiProviderProfile> & Partial<AiProviderConfig>;

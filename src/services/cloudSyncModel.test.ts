@@ -1,22 +1,51 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { CloudSyncEntityType, RecordBlock, StorageSnapshot } from "../types";
+import type { CloudSyncEntityType, RecordBlock, StorageSnapshot, Tag } from "../types";
+import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import {
   CLOUD_DOCUMENT_THRESHOLD_BYTES,
+  ASSET_CONTENT_HASH_VERSION,
+  BLOCK_CONTENT_HASH_VERSION,
   createCloudPayloadDocument,
   exportCloudSync,
+  findConflictingChanges,
   hashValue,
   hasConflictingChanges,
+  isBootstrapOnlyCloudData,
+  legacyBlockHashPayload,
+  legacyEntityHashPayload,
+  legacyFnvHashValue,
   materializeCloudSyncSnapshot,
   mergeCloudSyncSmallEntity,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
+  preserveAssetOperationalFields,
   preserveLocalChangesForCloudWins,
   stripUpdatedAt,
+  syncHashPayload,
   withCloudPayloadDocument,
 } from "./cloudSyncModel";
 
 const stamp = "2026-08-05T00:00:00.000Z";
+
+describe("content hashing", () => {
+  it("uses SHA-256 when Web Crypto is unavailable instead of the legacy FNV fallback", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    try {
+      Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+      const hash = await hashValue({ stable: "payload" });
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(hash).not.toMatch(/^fnv-/);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "crypto", descriptor);
+      else Reflect.deleteProperty(globalThis, "crypto");
+    }
+  });
+
+  it("retains a deterministic helper only for legacy FNV migration", () => {
+    expect(legacyFnvHashValue({ stable: "payload" })).toMatch(/^fnv-/);
+  });
+});
 
 const record: RecordBlock = {
   id: "record-1",
@@ -121,6 +150,21 @@ describe("cloud sync model", () => {
     expect(referenced.payloadDocumentHash).toBe(document?.hash);
   });
 
+  it("accepts a legacy FNV large-payload reference only for compatibility migration", async () => {
+    const exported = await exportCloudSync(snapshot);
+    const block = exported.entities.find((entity) => entity.entityType === "block");
+    if (!block) throw new Error("expected block entity");
+    const large = {
+      ...block,
+      payload: { ...block.payload, contentHtml: "x".repeat(CLOUD_DOCUMENT_THRESHOLD_BYTES + 1) },
+      contentHashAlgorithm: "fnv1a" as const,
+    };
+    large.contentHash = legacyFnvHashValue(syncHashPayload("block", large.payload));
+
+    const document = await createCloudPayloadDocument(large);
+    expect(document?.hash).toBe(large.contentHash);
+  });
+
   it("computes the same contentHash for an entity re-saved with only updatedAt different", async () => {
     // Simulates re-saving a record where the visible content is identical but updatedAt ticked
     // forward (e.g. before the storageAdapter.ts guard runs, or any future save path that doesn't
@@ -150,6 +194,105 @@ describe("cloud sync model", () => {
 
     expect(blockOriginal?.payload.updatedAt).toBe(blockEdited?.payload.updatedAt);
     expect(blockOriginal?.contentHash).not.toBe(blockEdited?.contentHash);
+  });
+
+  it("ignores OCR operational state but keeps OCR results in the asset hash", async () => {
+    const running = await exportCloudSync({
+      ...snapshot,
+      assets: [{
+        ...snapshot.assets[0],
+        ocrStatus: "running",
+        ocrError: "正在识别",
+        ocrJobId: "job-1",
+        ocrUpdatedAt: "2026-08-06T00:00:00.000Z",
+      }],
+    });
+    const failed = await exportCloudSync({
+      ...snapshot,
+      assets: [{
+        ...snapshot.assets[0],
+        ocrStatus: "failed",
+        ocrError: "上次 OCR 识别中断，可重新识别。",
+        ocrJobId: "job-2",
+        ocrUpdatedAt: "2026-08-07T00:00:00.000Z",
+      }],
+    });
+    const summarized = await exportCloudSync({
+      ...snapshot,
+      assets: [{ ...snapshot.assets[0], ocrResultSummary: { textLength: 12, includedInAi: false, parserVersion: "v1" } }],
+    });
+    const withText = await exportCloudSync({
+      ...snapshot,
+      assets: [{ ...snapshot.assets[0], ocrStatus: "done", ocrText: "图片中的文字" }],
+    });
+    const runningAsset = running.entities.find((entity) => entity.entityType === "asset")!;
+    const failedAsset = failed.entities.find((entity) => entity.entityType === "asset")!;
+    const summarizedAsset = summarized.entities.find((entity) => entity.entityType === "asset")!;
+    const textAsset = withText.entities.find((entity) => entity.entityType === "asset")!;
+
+    expect(runningAsset.contentHashVersion).toBe(ASSET_CONTENT_HASH_VERSION);
+    expect(runningAsset.contentHash).toBe(failedAsset.contentHash);
+    expect(runningAsset.contentHash).toBe(summarizedAsset.contentHash);
+    expect(runningAsset.contentHash).not.toBe(textAsset.contentHash);
+  });
+
+  it("normalizes legacy record favorite omission without changing its content hash", async () => {
+    const withoutFavorite = { ...record };
+    delete (withoutFavorite as Partial<RecordBlock>).favorite;
+    const legacyExport = await exportCloudSync({ ...snapshot, payload: { ...snapshot.payload, blocks: [withoutFavorite] } });
+    const currentExport = await exportCloudSync({ ...snapshot, payload: { ...snapshot.payload, blocks: [{ ...record, favorite: false }] } });
+    const legacyBlock = legacyExport.entities.find((entity) => entity.entityType === "block")!;
+    const currentBlock = currentExport.entities.find((entity) => entity.entityType === "block")!;
+
+    expect(currentBlock.contentHashVersion).toBe(BLOCK_CONTENT_HASH_VERSION);
+    expect(currentBlock.contentHash).toBe(legacyBlock.contentHash);
+    expect(await hashValue(legacyBlockHashPayload(currentBlock.payload))).not.toBe(currentBlock.contentHash);
+  });
+
+  it("recognizes a fresh device containing only deterministic bootstrap data", async () => {
+    const tags: Tag[] = DEFAULT_TAGS.map((name, index) => ({
+      id: `tag-${index}`,
+      name,
+      createdAt: "2026-08-05T00:00:00.000Z",
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }));
+    const exported = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [], tags, settings: { ...DEFAULT_SETTINGS, schemaVersion: 4 } },
+      assets: [],
+    });
+    expect(isBootstrapOnlyCloudData(exported)).toBe(true);
+    const edited = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [], tags, settings: { ...DEFAULT_SETTINGS, theme: "dark", schemaVersion: 4 } },
+      assets: [],
+    });
+    expect(isBootstrapOnlyCloudData(edited)).toBe(false);
+  });
+
+  it("can derive the legacy asset hash for old ledger migration", async () => {
+    const asset = snapshot.assets[0];
+    const payload = { ...asset, data: undefined, ocrStatus: "running", ocrUpdatedAt: "2026-08-06T00:00:00.000Z" };
+    const legacy = await hashValue(legacyEntityHashPayload(payload));
+    const canonical = await hashValue(syncHashPayload("asset", payload));
+    expect(legacy).not.toBe(canonical);
+  });
+
+  it("keeps device-local OCR queue state while applying a remote OCR result", async () => {
+    const local = (await exportCloudSync({
+      ...snapshot,
+      assets: [{ ...snapshot.assets[0], ocrStatus: "running", ocrJobId: "desktop-job" }],
+    })).entities.find((entity) => entity.entityType === "asset")!;
+    const remote = (await exportCloudSync({
+      ...snapshot,
+      assets: [{ ...snapshot.assets[0], ocrStatus: "done", ocrText: "手机识别结果" }],
+    })).entities.find((entity) => entity.entityType === "asset")!;
+
+    const merged = preserveAssetOperationalFields(local, remote);
+    expect(merged.payload.ocrText).toBe("手机识别结果");
+    expect(merged.payload.ocrStatus).toBe("running");
+    expect(merged.payload.ocrJobId).toBe("desktop-job");
+    expect(merged.contentHash).toBe(remote.contentHash);
   });
 
   it("three-way merges settings changes made to different fields", () => {
@@ -328,5 +471,12 @@ describe("per-entity-key conflict detection", () => {
       [ent("block:a", "local-hash")],
       [ent("block:a", "remote-hash")],
     )).toBe(true);
+  });
+
+  it("returns the concrete entity key and type for a content conflict", () => {
+    expect(findConflictingChanges(
+      [ent("asset:a1", "local-hash", "asset")],
+      [ent("asset:a1", "remote-hash", "asset")],
+    )).toEqual([{ key: "asset:a1", entityType: "asset" }]);
   });
 });

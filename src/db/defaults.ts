@@ -6,6 +6,7 @@ import { createDefaultAiProviders } from "../lib/aiProviders";
 import { normalizeTtsConfig } from "../lib/ttsProviders";
 
 export const DEFAULT_EXAM_DATE = "2026-12-27";
+const STABLE_BOOTSTRAP_TIME = "1970-01-01T00:00:00.000Z";
 
 const DEFAULT_AI_PROMPTS: Array<Pick<AiPromptPreset, "title" | "prompt" | "mode">> = [
   {
@@ -114,7 +115,9 @@ C = 概念或方法明显不稳
 
 export const createDefaultAiPresets = (): AiPromptPreset[] =>
   DEFAULT_AI_PROMPTS.map((item, order) => ({
-    ...createBaseEntity(),
+    id: `default-ai-preset:${item.mode}`,
+    createdAt: STABLE_BOOTSTRAP_TIME,
+    updatedAt: STABLE_BOOTSTRAP_TIME,
     ...item,
     order,
   }));
@@ -138,6 +141,15 @@ export const isCurrentDefaultAiPresetSetWithoutModes = (presets: AiPromptPreset[
   }
   return DEFAULT_AI_PROMPTS.every((item) =>
     presets.some((preset) => preset.title === item.title && preset.prompt === item.prompt),
+  );
+};
+
+export const isCurrentDefaultAiPresetSet = (presets: AiPromptPreset[] | undefined): boolean => {
+  if (!presets || presets.length !== DEFAULT_AI_PROMPTS.length) {
+    return false;
+  }
+  return DEFAULT_AI_PROMPTS.every((item) =>
+    presets.some((preset) => preset.title === item.title && preset.prompt === item.prompt && preset.mode === item.mode),
   );
 };
 

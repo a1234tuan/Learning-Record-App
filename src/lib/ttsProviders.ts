@@ -1,12 +1,11 @@
 import type { TtsProviderConfig, TtsProviderId, TtsProviderProfile } from "../types";
-import { createBaseEntity } from "./entity";
+import { newId } from "./entity";
 
-export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProviderProfile => {
-  const base = createBaseEntity();
+export const createTtsProviderTemplate = (providerId: TtsProviderId, id = newId()): TtsProviderProfile => {
   switch (providerId) {
     case "fish-audio":
       return {
-        ...base,
+        id,
         providerId,
         providerName: "Fish Audio",
         model: "s2.1-pro-free",
@@ -14,7 +13,7 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
       };
     case "aliyun":
       return {
-        ...base,
+        id,
         providerId,
         providerName: "阿里云百炼",
         model: "qwen3-tts-flash",
@@ -22,7 +21,7 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
       };
     case "tencent":
       return {
-        ...base,
+        id,
         providerId,
         providerName: "腾讯云",
         model: "",
@@ -31,7 +30,7 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
       };
     case "google":
       return {
-        ...base,
+        id,
         providerId,
         providerName: "Google Cloud",
         model: "",
@@ -40,7 +39,7 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
       };
     case "doubao":
       return {
-        ...base,
+        id,
         providerId,
         providerName: "豆包语音 2.0",
         model: "seed-tts-2.0",
@@ -49,7 +48,7 @@ export const createTtsProviderTemplate = (providerId: TtsProviderId): TtsProvide
   }
 };
 
-export const createDefaultTtsProviders = (): TtsProviderProfile[] => [createTtsProviderTemplate("fish-audio")];
+export const createDefaultTtsProviders = (): TtsProviderProfile[] => [createTtsProviderTemplate("fish-audio", "default")];
 
 export const normalizeTtsProvider = (profile: Partial<TtsProviderProfile>): TtsProviderProfile => {
   const providerId: TtsProviderId =

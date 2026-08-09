@@ -30,10 +30,11 @@ const shouldAutoOcr = (asset: Asset): boolean =>
   asset.kind === "image" && (!asset.ocrStatus || asset.ocrStatus === "idle");
 
 const patchOcrAsset = async (assetId: string, patch: Partial<Omit<Asset, "id" | "data">>) => {
+  const hasResultChange = Object.prototype.hasOwnProperty.call(patch, "ocrText");
   const updated = await storage.patchAsset(assetId, {
     ...patch,
     ocrUpdatedAt: nowISO(),
-  });
+  }, { mutation: hasResultChange ? "content" : "operational" });
   await markAutoBackupDirty("ocr");
   return updated;
 };

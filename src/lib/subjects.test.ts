@@ -48,6 +48,13 @@ describe("dynamic subjects", () => {
     expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["读书笔记", "数学", "英语", "其他"]);
   });
 
+  it("exports defaults and inferred subjects deterministically", () => {
+    expect(createDefaultSubjects()).toEqual(createDefaultSubjects());
+    const first = ensureSettingsSubjects(settings(), [record("物理")]);
+    const second = ensureSettingsSubjects(settings(), [record("物理")]);
+    expect(first.subjects).toEqual(second.subjects);
+  });
+
   it("keeps other as a first-class default subject", () => {
     const migrated = ensureSettingsSubjects(settings(), [record("其他")]);
 
