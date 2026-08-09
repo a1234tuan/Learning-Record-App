@@ -369,23 +369,24 @@ const parseStorageSummary = (value: unknown): RemoteStorageSummary | null => {
 const parseRemoteState = (value: unknown): RemoteSyncState => {
   if (!value || typeof value !== "object") return emptyRemoteState();
   const data = value as Record<string, unknown>;
+  const lastLockRecovery = data.lastLockRecovery && typeof data.lastLockRecovery === "object" ? (() => {
+    const recovery = data.lastLockRecovery as Record<string, unknown>;
+    return typeof recovery.byDeviceId === "string" && typeof recovery.recoveredAt === "number" && typeof recovery.reason === "string"
+      ? {
+        byDeviceId: recovery.byDeviceId,
+        recoveredAt: recovery.recoveredAt,
+        reason: recovery.reason,
+        ...(typeof recovery.operationId === "string" ? { operationId: recovery.operationId } : {}),
+        ...(typeof recovery.revision === "number" ? { revision: recovery.revision } : {}),
+      }
+      : undefined;
+  })() : undefined;
   return {
     protocolVersion: typeof data.protocolVersion === "number" ? data.protocolVersion : PROTOCOL_VERSION,
     headRevision: typeof data.headRevision === "number" ? data.headRevision : 0,
     nextRevision: typeof data.nextRevision === "number" ? data.nextRevision : 0,
     storageSummary: parseStorageSummary(data.storageSummary),
-    lastLockRecovery: data.lastLockRecovery && typeof data.lastLockRecovery === "object" ? (() => {
-      const recovery = data.lastLockRecovery as Record<string, unknown>;
-      return typeof recovery.byDeviceId === "string" && typeof recovery.recoveredAt === "number" && typeof recovery.reason === "string"
-        ? {
-          byDeviceId: recovery.byDeviceId,
-          recoveredAt: recovery.recoveredAt,
-          reason: recovery.reason,
-          ...(typeof recovery.operationId === "string" ? { operationId: recovery.operationId } : {}),
-          ...(typeof recovery.revision === "number" ? { revision: recovery.revision } : {}),
-        }
-        : undefined;
-    })() : undefined,
+    ...(lastLockRecovery ? { lastLockRecovery } : {}),
     lock: data.lock && typeof data.lock === "object" ? (() => {
       const lock = data.lock as Record<string, unknown>;
       return typeof lock.deviceId === "string" && typeof lock.expiresAt === "number"
@@ -402,6 +403,24 @@ const parseRemoteState = (value: unknown): RemoteSyncState => {
     })() : null,
   };
 };
+
+/** Convert sync metadata to a Firestore-safe document without undefined optional fields. */
+export const remoteSyncStateDocument = (state: RemoteSyncState) => ({
+  protocolVersion: state.protocolVersion,
+  headRevision: state.headRevision,
+  nextRevision: state.nextRevision,
+  lock: state.lock ?? null,
+  storageSummary: state.storageSummary ?? null,
+  ...(state.lastLockRecovery ? {
+    lastLockRecovery: {
+      byDeviceId: state.lastLockRecovery.byDeviceId,
+      recoveredAt: state.lastLockRecovery.recoveredAt,
+      reason: state.lastLockRecovery.reason,
+      ...(typeof state.lastLockRecovery.operationId === "string" ? { operationId: state.lastLockRecovery.operationId } : {}),
+      ...(typeof state.lastLockRecovery.revision === "number" ? { revision: state.lastLockRecovery.revision } : {}),
+    },
+  } : {}),
+});
 
 const parseRemoteEntity = (id: string, value: unknown): RemoteEntity | undefined => {
   if (!value || typeof value !== "object") return undefined;
@@ -1210,21 +1229,21 @@ const acquireLock = async (uid: string, deviceId: string, operationId: string) =
       lastRenewedAt: now,
       expiresAt: now + LOCK_DURATION_MS,
     };
-    transaction.set(reference, {
+    transaction.set(reference, remoteSyncStateDocument({
       ...current,
       protocolVersion: PROTOCOL_VERSION,
       nextRevision: revision,
       lock: nextLock,
       ...(activeLock && isStaleRemoteLock(activeLock, now) ? {
         lastLockRecovery: {
-          operationId: activeLock.operationId,
-          revision: activeLock.revision,
           byDeviceId: deviceId,
           recoveredAt: now,
           reason: "lease-heartbeat-stale",
+          ...(typeof activeLock.operationId === "string" ? { operationId: activeLock.operationId } : {}),
+          ...(typeof activeLock.revision === "number" ? { revision: activeLock.revision } : {}),
         },
       } : {}),
-    });
+    }));
     return {
       operationId,
       revision,
@@ -1252,7 +1271,7 @@ const releaseLock = async (
       throw new CloudSyncLockLostError();
     }
     const headRevision = publish ? Math.max(current.headRevision, revision) : current.headRevision;
-    transaction.set(reference, {
+    transaction.set(reference, remoteSyncStateDocument({
       ...current,
       protocolVersion: PROTOCOL_VERSION,
       headRevision,
@@ -1261,7 +1280,7 @@ const releaseLock = async (
       // A summary is only useful when it describes the revision that remains visible after this
       // transaction. Never let an older operation publish a misleading summary for a newer head.
       ...(storageSummary && storageSummary.revision === headRevision ? { storageSummary } : {}),
-    });
+    }));
   }),
   FIRESTORE_LOCK_TIMEOUT_MS,
   "释放云同步锁超时，请确认网络可连接后重试。",
@@ -1299,7 +1318,7 @@ const renewLock = async (uid: string, deviceId: string, operationId: string, rev
     if (!lockMatches(current.lock, deviceId, operationId, revision) || current.lock!.expiresAt <= Date.now()) {
       throw new CloudSyncLockLostError();
     }
-    transaction.set(reference, {
+    transaction.set(reference, remoteSyncStateDocument({
       ...current,
       lock: {
         ...current.lock,
@@ -1310,7 +1329,7 @@ const renewLock = async (uid: string, deviceId: string, operationId: string, rev
         lastRenewedAt: Date.now(),
         expiresAt: Date.now() + LOCK_DURATION_MS,
       },
-    });
+    }));
   }),
   FIRESTORE_LOCK_TIMEOUT_MS,
   "续租云同步锁超时，请确认网络可连接后重试。",

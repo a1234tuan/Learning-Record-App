@@ -25,6 +25,7 @@ const {
   lockMatches,
   isStaleRemoteLock,
   mapWithConcurrency,
+  remoteSyncStateDocument,
   splitCloudSyncReadKeys,
   withTimeout,
 } = await import("./cloudSyncService");
@@ -153,6 +154,45 @@ describe("stale lock detection", () => {
       revision: 7,
       expiresAt: now + 20 * 60_000,
     }, now)).toBe(false);
+  });
+});
+
+describe("Firestore sync-state serialization", () => {
+  it("omits an absent lock recovery record instead of writing undefined", () => {
+    expect(remoteSyncStateDocument({
+      protocolVersion: 2,
+      headRevision: 4,
+      nextRevision: 5,
+      lock: null,
+      storageSummary: null,
+    })).toEqual({
+      protocolVersion: 2,
+      headRevision: 4,
+      nextRevision: 5,
+      lock: null,
+      storageSummary: null,
+    });
+  });
+
+  it("keeps only defined optional recovery fields", () => {
+    expect(remoteSyncStateDocument({
+      protocolVersion: 2,
+      headRevision: 4,
+      nextRevision: 5,
+      lock: null,
+      storageSummary: null,
+      lastLockRecovery: {
+        byDeviceId: "device-a",
+        recoveredAt: 1_000,
+        reason: "lease-heartbeat-stale",
+      },
+    })).toMatchObject({
+      lastLockRecovery: {
+        byDeviceId: "device-a",
+        recoveredAt: 1_000,
+        reason: "lease-heartbeat-stale",
+      },
+    });
   });
 });
 
