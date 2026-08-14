@@ -58,6 +58,7 @@ import {
   readClipboardImageFallback,
   readClipboardTextFallback,
   readNativeClipboardText,
+  writeNativeClipboardText,
 } from "../lib/clipboard";
 import {
   MAX_MARKDOWN_PASTE_LENGTH,
@@ -454,6 +455,59 @@ const serializeClipboardText = (slice: Slice): string =>
     }
     return node.type.spec.leafText?.(node) ?? "";
   });
+
+// A native drag selection can cross a contentEditable=false atom NodeView
+// without being reflected in ProseMirror's state selection. Read that range
+// directly when copying so atom nodes (including formulas) remain in the slice.
+const sliceFromNativeSelection = (view: EditorView): Slice | undefined => {
+  const selection = view.dom.ownerDocument.defaultView?.getSelection?.();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return undefined;
+  }
+  const range = selection.getRangeAt(0);
+  const containsEndpoint = (node: Node | null): boolean => {
+    if (!node) {
+      return false;
+    }
+    const target = node.nodeType === 3 ? node.parentNode : node;
+    return target ? view.dom.contains(target) : false;
+  };
+  if (!containsEndpoint(range.startContainer) || !containsEndpoint(range.endContainer)) {
+    return undefined;
+  }
+  const start = view.posAtDOM(range.startContainer, range.startOffset, 1);
+  const end = view.posAtDOM(range.endContainer, range.endOffset, -1);
+  let from = Math.min(start, end);
+  let to = Math.max(start, end);
+  if (from < 0 || to <= from || to > view.state.doc.content.size) {
+    return undefined;
+  }
+
+  // Chromium's range-to-editor-position conversion can step over a
+  // contentEditable=false NodeView during a drag selection. The DOM range
+  // still knows the atom was crossed, so expand the document slice to cover it.
+  view.state.doc.descendants((node, position) => {
+    if (node.type.name !== "recordInlineMath" && node.type.name !== "recordFormula") {
+      return true;
+    }
+    const nodeDOM = view.nodeDOM(position);
+    try {
+      if (nodeDOM && range.intersectsNode(nodeDOM)) {
+        from = Math.min(from, position);
+        to = Math.max(to, position + node.nodeSize);
+      }
+    } catch {
+      // Detached NodeViews cannot belong to the active editor selection.
+    }
+    return false;
+  });
+
+  try {
+    return view.state.doc.slice(from, to);
+  } catch {
+    return undefined;
+  }
+};
 
 const clipboardTextsMatch = (left: string, right: string): boolean =>
   normalizeClipboardText(left).replace(/\n+$/, "") === normalizeClipboardText(right).replace(/\n+$/, "");
@@ -1552,6 +1606,26 @@ export const RichTextEditor = ({
         draggable: "false",
       },
       handleDOMEvents: {
+        copy: (view, event) => {
+          const slice = sliceFromNativeSelection(view)
+            ?? (view.state.selection.empty ? undefined : view.state.selection.content());
+          const clipboardData = (event as ClipboardEvent).clipboardData;
+          if (!slice) {
+            return false;
+          }
+          const { dom, text } = view.serializeForClipboard(slice);
+          event.preventDefault();
+          if (clipboardData) {
+            clipboardData.clearData();
+            clipboardData.setData("text/html", dom.innerHTML);
+            clipboardData.setData("text/markdown", text);
+            clipboardData.setData("text/plain", text);
+          }
+          if (isNativePlatform()) {
+            void writeNativeClipboardText(text);
+          }
+          return true;
+        },
         dragstart: (_view, event) => {
           event.preventDefault();
           return true;

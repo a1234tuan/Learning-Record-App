@@ -143,6 +143,21 @@ export const readNativeClipboardText = async (): Promise<string | undefined> => 
   return undefined;
 };
 
+export const writeNativeClipboardText = async (text: string): Promise<boolean> => {
+  if (!isNativePlatform()) {
+    return false;
+  }
+
+  try {
+    await Clipboard.write({ string: text });
+    return true;
+  } catch {
+    // The DOM clipboard event remains the fallback on platforms where the
+    // native bridge is unavailable.
+    return false;
+  }
+};
+
 export const readClipboardTextFallback = async (options: { skipNative?: boolean } = {}): Promise<string | undefined> => {
   if (!options.skipNative) {
     const nativeText = await readNativeClipboardText();

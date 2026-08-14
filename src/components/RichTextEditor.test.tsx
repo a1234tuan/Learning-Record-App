@@ -9,7 +9,7 @@ import {
   createDefaultStructureDiagram,
   serializeStructureData,
 } from "../lib/recordStructureBlocks";
-import { readClipboardTextFallback } from "../lib/clipboard";
+import { readClipboardTextFallback, writeNativeClipboardText } from "../lib/clipboard";
 import { MAX_UNDOABLE_PASTE_BYTES } from "../lib/markdownPasteWork";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
 import { syncRecordRefsFromContent } from "../lib/recordContent";
@@ -26,6 +26,7 @@ vi.mock("../lib/clipboard", async () => {
   return {
     ...actual,
     readClipboardTextFallback: vi.fn(),
+    writeNativeClipboardText: vi.fn().mockResolvedValue(true),
   };
 });
 
@@ -2143,6 +2144,147 @@ describe("RichTextEditor", () => {
     expect(blockFormula?.getAttribute("data-formula-id")).not.toBe("block-source");
     expect(syncedRecord.formulas.map((formula) => formula.latex)).toEqual(["\\frac{a}{b}", "E=mc^2"]);
     expect(onChange).toHaveBeenCalled();
+  });
+
+  it("copies formulas when the browser DOM selection spans their node views", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<p>前文 <record-inline-math data-formula-id="dom-inline" data-latex="x^2"></record-inline-math> 后文</p>',
+          '<record-formula data-formula-id="dom-block" data-latex="y=mx+b"></record-formula>',
+          "<p>结尾</p>",
+        ].join("")}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const paragraphs = Array.from(document.querySelectorAll(".rich-editor > p"));
+    const startText = paragraphs[0]?.firstChild;
+    const endText = paragraphs[1]?.firstChild;
+    expect(startText).toBeInstanceOf(Text);
+    expect(endText).toBeInstanceOf(Text);
+    const range = document.createRange();
+    range.setStart(startText!, 0);
+    range.setEnd(endText!, endText!.textContent?.length ?? 0);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    const clipboard = new Map<string, string>();
+    fireEvent.copy(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        clearData: vi.fn(),
+        setData: (type: string, value: string) => clipboard.set(type, value),
+      },
+    });
+
+    expect(clipboard.get("text/plain")).toContain("$x^2$");
+    expect(clipboard.get("text/plain")).toContain("$$\ny=mx+b\n$$");
+    expect(clipboard.get("text/markdown")).toBe(clipboard.get("text/plain"));
+  });
+
+  it("keeps formulas crossed by a mixed DOM selection when endpoint mapping skips their atoms", async () => {
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<p>前文 <record-inline-math data-formula-id="skipped-inline" data-latex="x^2"></record-inline-math> 后文</p>',
+          '<record-formula data-formula-id="skipped-block" data-latex="y=mx+b"></record-formula>',
+          "<p>结尾</p>",
+        ].join("")}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    const paragraphs = Array.from(document.querySelectorAll(".rich-editor > p"));
+    const startText = paragraphs[0]?.firstChild;
+    const endText = paragraphs[1]?.firstChild;
+    expect(startText).toBeInstanceOf(Text);
+    expect(endText).toBeInstanceOf(Text);
+    const range = document.createRange();
+    range.setStart(startText!, 0);
+    range.setEnd(endText!, endText!.textContent?.length ?? 0);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+
+    let firstTextFrom: number | undefined;
+    let textBeforeInlineEnd: number | undefined;
+    editorRef!.state.doc.descendants((node, position) => {
+      if (node.isText && node.text === "前文 ") {
+        firstTextFrom = position;
+        textBeforeInlineEnd = position + node.nodeSize;
+        return false;
+      }
+      return true;
+    });
+    expect(firstTextFrom).toBeDefined();
+    expect(textBeforeInlineEnd).toBeDefined();
+
+    // Simulate the browser bug: both endpoints resolve to text before the
+    // contentEditable=false atoms, while the native range still spans them.
+    const posAtDOM = vi.spyOn(editorRef!.view, "posAtDOM")
+      .mockReturnValueOnce(firstTextFrom!)
+      .mockReturnValueOnce(textBeforeInlineEnd!);
+    try {
+      const clipboard = new Map<string, string>();
+      fireEvent.copy(document.querySelector(".rich-editor")!, {
+        clipboardData: {
+          clearData: vi.fn(),
+          setData: (type: string, value: string) => clipboard.set(type, value),
+        },
+      });
+
+      expect(clipboard.get("text/plain")).toContain("$x^2$");
+      expect(clipboard.get("text/plain")).toContain("$$\ny=mx+b\n$$");
+    } finally {
+      posAtDOM.mockRestore();
+    }
+  });
+
+  it("copies formula selections through the native clipboard when DOM clipboard data is unavailable", async () => {
+    let editorRef: Editor | undefined;
+    vi.mocked(isNativePlatform).mockReturnValue(true);
+    try {
+      render(
+        <RichTextEditor
+          value={'<p>前文 <record-inline-math data-formula-id="native-inline" data-latex="x^2"></record-inline-math> 后文</p>'}
+          onChange={vi.fn()}
+          renderInsertTools={(editor) => {
+            editorRef = editor;
+            return null;
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(editorRef).toBeDefined());
+      const paragraph = document.querySelector(".rich-editor > p")!;
+      const range = document.createRange();
+      range.setStart(paragraph.firstChild!, 0);
+      range.setEnd(paragraph.lastChild!, paragraph.lastChild?.textContent?.length ?? 0);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+
+      fireEvent.copy(document.querySelector(".rich-editor")!, { clipboardData: null });
+
+      await waitFor(() => expect(writeNativeClipboardText).toHaveBeenCalledWith("前文 $x^2$ 后文"));
+    } finally {
+      vi.mocked(isNativePlatform).mockReturnValue(false);
+      vi.mocked(writeNativeClipboardText).mockReset();
+    }
   });
 
   it("creates a block formula on Enter and leaves Markdown literal inside code", async () => {
