@@ -443,6 +443,18 @@ const snapshotClipboardData = (clipboardData: DataTransfer | null | undefined): 
   hasImageClipboardItem: Array.from(clipboardData?.items ?? []).some((item) => item.type.startsWith("image/")),
 });
 
+const serializeClipboardText = (slice: Slice): string =>
+  slice.content.textBetween(0, slice.content.size, "\n\n", (node) => {
+    const latex = String(node.attrs.latex ?? "");
+    if (node.type.name === "recordInlineMath") {
+      return `$${latex}$`;
+    }
+    if (node.type.name === "recordFormula") {
+      return `$$\n${latex}\n$$`;
+    }
+    return node.type.spec.leafText?.(node) ?? "";
+  });
+
 const clipboardTextsMatch = (left: string, right: string): boolean =>
   normalizeClipboardText(left).replace(/\n+$/, "") === normalizeClipboardText(right).replace(/\n+$/, "");
 
@@ -1534,6 +1546,7 @@ export const RichTextEditor = ({
     ],
     content: value,
     editorProps: {
+      clipboardTextSerializer: serializeClipboardText,
       attributes: {
         class: "rich-editor",
         draggable: "false",

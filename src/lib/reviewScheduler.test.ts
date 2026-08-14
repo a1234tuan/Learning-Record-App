@@ -34,15 +34,19 @@ describe("reviewScheduler", () => {
 
     const fuzzy = applyOverviewReview(state({ intervalDays: 6 }), "fuzzy", "2026-06-09", "2026-06-09T08:00:00.000Z").state;
     expect(fuzzy.intervalDays).toBe(7);
-    expect(fuzzy.nextReviewDate).toBe("2026-06-16");
+    // Due date carries a deterministic +/-N day fuzz on top of the exact 7-day ladder step
+    // (see the "spreads same-rating cards" test below for the mechanism).
+    expect(fuzzy.nextReviewDate).toBe("2026-06-17");
 
     const good = applyOverviewReview(state({ intervalDays: 1 }), "good", "2026-06-02", "2026-06-02T08:00:00.000Z").state;
     expect(good.intervalDays).toBe(10);
-    expect(good.nextReviewDate).toBe("2026-06-12");
+    // Fuzzed landing date on top of the exact 10-day ladder step.
+    expect(good.nextReviewDate).toBe("2026-06-13");
 
     const easy = applyOverviewReview(state({ intervalDays: 1 }), "easy", "2026-06-02", "2026-06-02T08:00:00.000Z").state;
     expect(easy.intervalDays).toBe(21);
-    expect(easy.nextReviewDate).toBe("2026-06-23");
+    // Fuzzed landing date on top of the exact 21-day ladder step.
+    expect(easy.nextReviewDate).toBe("2026-06-25");
   });
 
   it("advances overview good and easy ladders without repeating the same step", () => {
@@ -96,6 +100,36 @@ describe("reviewScheduler", () => {
     }
   });
 
+  it("keeps the overview due-date fuzz deterministic for the same card and rating", () => {
+    const first = applyOverviewReview(state({ intervalDays: 1 }), "good", "2026-06-02", "2026-06-02T08:00:00.000Z");
+    const second = applyOverviewReview(state({ intervalDays: 1 }), "good", "2026-06-02", "2026-06-02T08:00:00.000Z");
+    expect(second.nextReviewDate).toBe(first.nextReviewDate);
+    expect(second.state.intervalDays).toBe(first.state.intervalDays);
+  });
+
+  it("spreads the overview due-date fuzz across different cards given the same rating", () => {
+    const dates = new Set(
+      Array.from({ length: 12 }, (_, index) =>
+        applyOverviewReview(state({ id: `record-${index}`, recordId: `record-${index}`, intervalDays: 1 }), "good", "2026-06-02", "2026-06-02T08:00:00.000Z").nextReviewDate,
+      ),
+    );
+    // A batch of cards rated "good" together should not all land on the exact same day.
+    expect(dates.size).toBeGreaterThan(1);
+  });
+
+  it("never fuzzes the one-day forgot interval earlier than tomorrow", () => {
+    for (let index = 0; index < 12; index += 1) {
+      const next = applyOverviewReview(
+        state({ id: `record-${index}`, recordId: `record-${index}`, intervalDays: 30 }),
+        "forgot",
+        "2026-06-02",
+        "2026-06-02T08:00:00.000Z",
+      );
+      expect(next.state.intervalDays).toBe(1);
+      expect(next.nextReviewDate).toBe("2026-06-03");
+    }
+  });
+
   it("compresses fuzzy overview reviews instead of expanding them to the old 15 day result", () => {
     const next = applyOverviewReview(
       state({ repetition: 2, intervalDays: 15, consecutiveRemembered: 2 }),
@@ -105,7 +139,8 @@ describe("reviewScheduler", () => {
     ).state;
 
     expect(next.intervalDays).toBe(14);
-    expect(next.nextReviewDate).toBe("2026-07-19");
+    // Fuzzed landing date on top of the exact 14-day ladder step.
+    expect(next.nextReviewDate).toBe("2026-07-16");
     expect(next.consecutiveRemembered).toBe(0);
   });
 
@@ -118,7 +153,8 @@ describe("reviewScheduler", () => {
     ).state;
 
     expect(next.status).toBe("active");
-    expect(next.nextReviewDate).toBe("2026-07-11");
+    // Fuzzed landing date on top of the exact 21-day ladder step.
+    expect(next.nextReviewDate).toBe("2026-07-06");
     expect(next.consecutiveRemembered).toBe(5);
   });
 

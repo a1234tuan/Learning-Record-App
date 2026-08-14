@@ -23,6 +23,8 @@ desktop/oauth-config.cjs
 *.p12
 *.pem
 .qoder/
+.claude/
+codex-objects/
 android/app/google-services.json
 functions/lib/
 .firebase/

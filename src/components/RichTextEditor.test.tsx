@@ -12,6 +12,7 @@ import {
 import { readClipboardTextFallback } from "../lib/clipboard";
 import { MAX_UNDOABLE_PASTE_BYTES } from "../lib/markdownPasteWork";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
+import { syncRecordRefsFromContent } from "../lib/recordContent";
 import type { RecordBlock, SubjectConfig } from "../types";
 import { RichTextEditor } from "./RichTextEditor";
 
@@ -2073,6 +2074,75 @@ describe("RichTextEditor", () => {
 
     await waitFor(() => expect(onChange.mock.calls.at(-1)?.[0]).toContain("record-inline-math"));
     expectInlineMathPasteParagraph(onChange.mock.calls.at(-1)?.[0] ?? "");
+  });
+
+  it("copies mixed Chinese and formulas as Markdown without writing, then restores formula nodes on paste", async () => {
+    const onChange = vi.fn();
+    let editorRef: Editor | undefined;
+    render(
+      <RichTextEditor
+        value={[
+          '<p>由 <record-inline-math data-formula-id="inline-source" data-latex="\\frac{a}{b}"></record-inline-math> 可得结论。</p>',
+          '<record-formula data-formula-id="block-source" data-title="能量" data-latex="E=mc^2"></record-formula>',
+          '<p>因此继续计算。</p>',
+        ].join("")}
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef!.commands.selectAll();
+    });
+    onChange.mockClear();
+
+    const clipboard = new Map<string, string>();
+    fireEvent.copy(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        clearData: vi.fn(),
+        setData: (type: string, value: string) => clipboard.set(type, value),
+      },
+    });
+
+    const copiedText = clipboard.get("text/plain") ?? "";
+    expect(copiedText).toContain("由 $\\frac{a}{b}$ 可得结论。");
+    expect(copiedText).toContain("\n\n$$\nE=mc^2\n$$\n\n因此继续计算。");
+    expect(onChange).not.toHaveBeenCalled();
+
+    act(() => {
+      editorRef!.commands.setContent("<p></p>");
+    });
+    onChange.mockClear();
+    fireEvent.paste(document.querySelector(".rich-editor")!, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? copiedText : "",
+        items: [],
+      },
+    });
+
+    await waitFor(() => expect(editorRef?.getHTML()).toContain("record-formula"));
+    const html = editorRef!.getHTML();
+    const parsedDocument = new DOMParser().parseFromString(html, "text/html");
+    const inlineFormula = parsedDocument.querySelector("record-inline-math");
+    const blockFormula = parsedDocument.querySelector("record-formula");
+    const syncedRecord = syncRecordRefsFromContent({
+      ...referenceRecord("copied-formulas", "公式复制"),
+      contentHtml: html,
+    });
+
+    expect(html).toContain("由 ");
+    expect(html).toContain("可得结论。");
+    expect(html).toContain("因此继续计算。");
+    expect(inlineFormula?.getAttribute("data-latex")).toBe("\\frac{a}{b}");
+    expect(blockFormula?.getAttribute("data-latex")).toBe("E=mc^2");
+    expect(inlineFormula?.getAttribute("data-formula-id")).not.toBe("inline-source");
+    expect(blockFormula?.getAttribute("data-formula-id")).not.toBe("block-source");
+    expect(syncedRecord.formulas.map((formula) => formula.latex)).toEqual(["\\frac{a}{b}", "E=mc^2"]);
+    expect(onChange).toHaveBeenCalled();
   });
 
   it("creates a block formula on Enter and leaves Markdown literal inside code", async () => {

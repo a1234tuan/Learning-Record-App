@@ -107,9 +107,12 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     const saved = await adapter.rateRecordReview("record-1", "easy", "2026-07-03T01:30:00.000Z");
 
-    expect(saved?.review).toMatchObject({ intervalDays: 60, nextReviewDate: "2026-09-01" });
+    // The due date carries a deterministic +/-3 day fuzz on top of the exact 60-day ladder
+    // step (see reviewScheduler.ts overviewFuzzOffset) so batches of cards rated the same
+    // way don't all become due on the same day.
+    expect(saved?.review).toMatchObject({ intervalDays: 60, nextReviewDate: "2026-08-20" });
     const [log] = await fakeDb.recordReviewLogs.toArray();
-    expect(log).toMatchObject({ previousIntervalDays: 10, nextIntervalDays: 60, nextReviewDate: "2026-09-01" });
+    expect(log).toMatchObject({ previousIntervalDays: 10, nextIntervalDays: 60, nextReviewDate: "2026-08-20" });
   });
 
   it("stores trimmed evaluation text with the review log", async () => {
@@ -186,7 +189,8 @@ describe("DexieStorageAdapter record review invariants", () => {
 
     expect(result?.review.lastReviewDate).toBe("2026-07-03");
     expect(result?.review.reviewKind).toBe("overview");
-    expect(result?.review.nextReviewDate).toBe("2026-07-13");
+    // Fuzzed landing date on top of the exact 10-day ladder step.
+    expect(result?.review.nextReviewDate).toBe("2026-07-14");
     expect(await adapter.listDueRecordReviews("2026-07-03")).toEqual([]);
     expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
     expect(await fakeDb.recordReviewDayStats.get("2026-07-03")).toMatchObject({

@@ -191,7 +191,7 @@ describe("ReviewPage", () => {
     });
 
     expect(screen.getByRole("button", { name: "良好，21天后" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "轻松，60天后" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "轻松，61天后" })).toBeInTheDocument();
   });
 
   it("uses a progress bar instead of queue statistics in the review workspace", () => {

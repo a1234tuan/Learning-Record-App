@@ -932,7 +932,13 @@ export const ReviewPage = ({
               <section className="review-rating-bar">
                 {ratingConfig.map((item) => {
                   const preview = ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]);
-                  const intervalText = preview ? intervalLabel(preview.intervalDays) : undefined;
+                  // Compute the label from the fuzzed nextReviewDate rather than the base
+                  // intervalDays so users see the actual spread ("3天后" vs "11天后") instead
+                  // of every card in a batch landing on the same ladder step.
+                  const actualDays = preview?.nextReviewDate
+                    ? Math.max(1, Math.round((new Date(preview.nextReviewDate).getTime() - new Date(today).getTime()) / 86_400_000))
+                    : preview?.intervalDays;
+                  const intervalText = actualDays !== undefined ? intervalLabel(actualDays) : undefined;
                   return (
                     <button
                       key={item.rating}

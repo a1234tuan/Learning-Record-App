@@ -115,6 +115,44 @@ export const overviewIntervalForRating = (
   }
 };
 
+// Deterministic (non-cryptographic) string hash. Same inputs always produce the same
+// number, which is what lets a preview and its matching real rating land on the same
+// fuzzed date without sharing any mutable state.
+const fuzzSeedHash = (input: string): number => {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) | 0;
+  }
+  return hash;
+};
+
+// Anki-style due-date fuzz: keeps the ladder step itself intact (so the next rating's
+// lookup and the "N天后" preview stay exact), but spreads the *landing date* so a batch
+// of cards reviewed together with the same rating don't all pile onto the same future day.
+// Short intervals get little or no spread so "忘记了" (1 day) can never fuzz into the
+// past and small steps don't lose their meaning. Longer intervals get wider spread
+// proportionally so larger cohorts stay well separated.
+const overviewFuzzMaxOffset = (intervalDays: number): number => {
+  if (intervalDays <= 1) return 0;
+  if (intervalDays <= 7) return 2;
+  if (intervalDays <= 14) return 3;
+  if (intervalDays <= 45) return 5;
+  return 12;
+};
+
+const overviewFuzzOffset = (
+  recordId: string,
+  rating: ActiveRecordReviewRating,
+  intervalDays: number,
+): number => {
+  const maxOffset = overviewFuzzMaxOffset(intervalDays);
+  if (maxOffset <= 0) return 0;
+  const span = maxOffset * 2 + 1;
+  const hash = fuzzSeedHash(`${recordId}:${rating}:${intervalDays}`);
+  const normalized = ((hash % span) + span) % span;
+  return normalized - maxOffset;
+};
+
 export const qualityForRating = (rating: RecordReviewRating): number => {
   switch (normalizeLegacyRating(rating)) {
     case "easy":
@@ -149,7 +187,11 @@ export const applyOverviewReview = (
   const quality = qualityForRating(normalizedRating);
   const easeFactor = nextEaseFactor(state.easeFactor, quality);
   const intervalDays = overviewIntervalForRating(normalizedRating, state.intervalDays);
-  const nextReviewDate = addDaysISO(reviewedDate, intervalDays);
+  // The ladder step (intervalDays) stays exact — it drives the next rating's lookup and
+  // the "N天后" preview. Only the actual due date gets a deterministic fuzz so a batch of
+  // cards rated the same way on the same day don't all become due on the same future day.
+  const fuzzOffset = overviewFuzzOffset(state.recordId, normalizedRating, intervalDays);
+  const nextReviewDate = addDaysISO(reviewedDate, intervalDays + fuzzOffset);
   const successful = normalizedRating === "good" || normalizedRating === "easy";
   const nextRepetition = normalizedRating === "forgot" ? 0 : state.repetition + 1;
 
