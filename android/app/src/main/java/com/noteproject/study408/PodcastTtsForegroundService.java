@@ -446,7 +446,8 @@ public final class PodcastTtsForegroundService extends Service {
                 if (trimmed.isEmpty()) continue;
                 JSONObject item = new JSONObject(trimmed);
                 Object itemCode = item.opt("code");
-                if (itemCode != null && !"0".equals(String.valueOf(itemCode).trim())) {
+                String codeText = itemCode == null ? "" : String.valueOf(itemCode).trim();
+                if (!codeText.isEmpty() && !"0".equals(codeText) && !"20000000".equals(codeText)) {
                     throw new IllegalStateException("豆包 TTS 请求失败：" + item.optString("message", "错误码 " + itemCode));
                 }
                 String data = item.optString("data", "");

@@ -11,7 +11,9 @@ export const decodeDoubaoTtsNdjson = (payload: string): Uint8Array => {
       throw new Error("豆包 TTS 返回了无法解析的响应。");
     }
     const code = item.code == null ? "" : String(item.code).trim();
-    if (code && code !== "0") {
+    // V3 sends a final `{ code: 20000000, message: "OK" }` event after
+    // the base64 audio chunks. It is a successful end marker, not an error.
+    if (code && code !== "0" && code !== "20000000") {
       const detail = typeof item.message === "string" ? item.message : `错误码 ${String(item.code)}`;
       throw new Error(`豆包 TTS 请求失败：${detail}`);
     }

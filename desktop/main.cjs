@@ -100,7 +100,8 @@ const decodeDoubaoTtsNdjson = (payload) => {
       throw new Error("豆包 TTS 返回了无法解析的响应。");
     }
     const code = item.code == null ? "" : String(item.code).trim();
-    if (code && code !== "0") {
+    // Doubao V3 terminates a successful stream with code 20000000/message OK.
+    if (code && code !== "0" && code !== "20000000") {
       throw new Error(`豆包 TTS 请求失败：${typeof item.message === "string" ? item.message : `错误码 ${String(item.code)}`}`);
     }
     if (typeof item.data === "string" && item.data) chunks.push(Buffer.from(item.data, "base64"));

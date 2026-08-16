@@ -21,6 +21,14 @@ describe("decodeDoubaoTtsNdjson", () => {
     expect(new TextDecoder().decode(bytes)).toBe("mp3-audio");
   });
 
+  it("accepts Doubao's successful terminal event", () => {
+    const bytes = decodeDoubaoTtsNdjson([
+      JSON.stringify({ code: 0, data: btoa("audio") }),
+      JSON.stringify({ code: 20000000, message: "OK" }),
+    ].join("\n"));
+    expect(new TextDecoder().decode(bytes)).toBe("audio");
+  });
+
   it("surfaces provider errors", () => {
     expect(() => decodeDoubaoTtsNdjson(JSON.stringify({ code: 3001, message: "invalid speaker" })))
       .toThrow("invalid speaker");
