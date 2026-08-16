@@ -594,7 +594,7 @@ export class FishAudioTtsProvider implements TextToSpeechProvider {
         response = await fetch("https://api.fish.audio/v1/tts", {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${this.apiKey.trim()}`,
+            Authorization: `Bearer ${this.apiKey.trim().replace(/^Bearer\s+/i, "")}`,
             "Content-Type": "application/json",
             Accept: "audio/mpeg",
             model: this.profile.model,

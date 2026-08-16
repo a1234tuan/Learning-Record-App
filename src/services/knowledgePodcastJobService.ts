@@ -385,7 +385,9 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
   const ttsConfig = normalizeTtsConfig(settings.tts);
   const ttsProfile = getCurrentTtsProvider(ttsConfig);
   if (!ttsProfile) throw new Error("请先在 AI 工具设置中配置 TTS 供应商。");
-  const ttsSecret = await storage.getAiSecret?.(ttsProfile.id);
+  const ttsSecret = (await storage.getAiSecret?.(ttsProfile.id))
+    ?? (ttsProfile.providerId === "fish-audio" ? await storage.getAiSecret?.("fish-audio") : undefined)
+    ?? (ttsProfile.providerId === "fish-audio" ? await storage.getAiSecret?.("default") : undefined);
   if (!ttsSecret?.apiKey) throw new Error(`请先在 AI 工具设置中填写 ${ttsProfile.providerName} 的 API Key。`);
   if (ttsProfile.providerId === "tencent" && !ttsSecret.apiKeySecondary) throw new Error("腾讯云 TTS 需要同时填写 SecretId（API Key）和 SecretKey。");
   if (!ttsProfile.voice) throw new Error(`请先在 AI 工具设置中为 ${ttsProfile.providerName} 配置语音 ID。`);

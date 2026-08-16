@@ -331,7 +331,7 @@ public final class PodcastTtsForegroundService extends Service {
                         connection.setRequestMethod("POST");
                         connection.setConnectTimeout(30_000);
                         connection.setReadTimeout(30_000);
-                        connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                        connection.setRequestProperty("Authorization", "Bearer " + apiKey.replaceFirst("(?i)^Bearer\\s+", ""));
                         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                         connection.setRequestProperty("Accept", "audio/mpeg");
                         connection.setRequestProperty("model", fishModel);
@@ -446,7 +446,7 @@ public final class PodcastTtsForegroundService extends Service {
                 if (trimmed.isEmpty()) continue;
                 JSONObject item = new JSONObject(trimmed);
                 Object itemCode = item.opt("code");
-                if (itemCode != null && !"0".equals(String.valueOf(itemCode))) {
+                if (itemCode != null && !"0".equals(String.valueOf(itemCode).trim())) {
                     throw new IllegalStateException("豆包 TTS 请求失败：" + item.optString("message", "错误码 " + itemCode));
                 }
                 String data = item.optString("data", "");

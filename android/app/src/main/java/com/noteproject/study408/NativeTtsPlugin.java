@@ -63,7 +63,7 @@ public class NativeTtsPlugin extends Plugin {
         payload.put("latency", "normal");
         payload.put("chunk_length", 300);
         HttpURLConnection conn = openPost("https://api.fish.audio/v1/tts");
-        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Authorization", "Bearer " + apiKey.replaceFirst("(?i)^Bearer\\s+", ""));
         conn.setRequestProperty("Accept", "audio/mpeg");
         conn.setRequestProperty("model", fishModel);
         writeBody(conn, payload.toString());
@@ -142,7 +142,7 @@ public class NativeTtsPlugin extends Plugin {
             if (trimmed.isEmpty()) continue;
             JSONObject item = new JSONObject(trimmed);
             Object itemCode = item.opt("code");
-            if (itemCode != null && !"0".equals(String.valueOf(itemCode))) {
+            if (itemCode != null && !"0".equals(String.valueOf(itemCode).trim())) {
                 throw new IllegalStateException("豆包 TTS 请求失败：" + item.optString("message", "错误码 " + itemCode));
             }
             String data = item.optString("data", "");

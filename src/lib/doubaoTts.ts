@@ -10,7 +10,8 @@ export const decodeDoubaoTtsNdjson = (payload: string): Uint8Array => {
     } catch {
       throw new Error("豆包 TTS 返回了无法解析的响应。");
     }
-    if (item.code !== undefined && item.code !== 0 && String(item.code) !== "0") {
+    const code = item.code == null ? "" : String(item.code).trim();
+    if (code && code !== "0") {
       const detail = typeof item.message === "string" ? item.message : `错误码 ${String(item.code)}`;
       throw new Error(`豆包 TTS 请求失败：${detail}`);
     }

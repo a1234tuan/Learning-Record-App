@@ -99,7 +99,8 @@ const decodeDoubaoTtsNdjson = (payload) => {
     } catch {
       throw new Error("豆包 TTS 返回了无法解析的响应。");
     }
-    if (item.code !== undefined && item.code !== 0 && String(item.code) !== "0") {
+    const code = item.code == null ? "" : String(item.code).trim();
+    if (code && code !== "0") {
       throw new Error(`豆包 TTS 请求失败：${typeof item.message === "string" ? item.message : `错误码 ${String(item.code)}`}`);
     }
     if (typeof item.data === "string" && item.data) chunks.push(Buffer.from(item.data, "base64"));
@@ -653,9 +654,10 @@ ipcMain.handle("study-journal:tts-synthesize", async (event, options) => {
 
   // Fish Audio (default)
   const fishModel = model || "s2.1-pro-free";
+  const fishToken = apiKey.replace(/^Bearer\s+/i, "");
   const response = await net.fetch("https://api.fish.audio/v1/tts", {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "audio/mpeg", model: fishModel },
+    headers: { Authorization: `Bearer ${fishToken}`, "Content-Type": "application/json", Accept: "audio/mpeg", model: fishModel },
     body: JSON.stringify({ text, reference_id: voiceId, format: "mp3", normalize: true, mp3_bitrate: 64, latency: "normal", chunk_length: 300 }),
   });
   const buffer = Buffer.from(await response.arrayBuffer());

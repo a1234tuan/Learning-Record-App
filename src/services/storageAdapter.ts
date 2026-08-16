@@ -600,10 +600,23 @@ export class DexieStorageAdapter implements StorageAdapter {
   private async migrateTtsSettings(): Promise<void> {
     const settings = await this.getSettings();
     const normalized = normalizeTtsConfig(settings.tts);
-    if (JSON.stringify(settings.tts ?? {}) === JSON.stringify(normalized)) {
-      return;
+    if (JSON.stringify(settings.tts ?? {}) !== JSON.stringify(normalized)) {
+      await db.settings.put({ ...settings, tts: normalized });
     }
-    await db.settings.put({ ...settings, tts: normalized });
+
+    // Before multi-provider TTS, Fish Audio credentials were stored under the
+    // provider id `fish-audio`. Legacy settings now normalize to `default`,
+    // while newer profiles may use a generated id. Preserve that local secret
+    // when the normalized Fish profile does not have one yet.
+    const fishProfile = normalized.providers.find((provider) => provider.providerId === "fish-audio");
+    if (!fishProfile || fishProfile.id === "fish-audio") return;
+    const [targetSecret, legacySecret] = await Promise.all([
+      db.aiSecrets.get(fishProfile.id),
+      db.aiSecrets.get("fish-audio"),
+    ]);
+    if (!targetSecret?.apiKey && legacySecret?.apiKey) {
+      await db.aiSecrets.put({ ...legacySecret, id: fishProfile.id });
+    }
   }
 
   private async migrateRecordsToLinearContent(): Promise<void> {

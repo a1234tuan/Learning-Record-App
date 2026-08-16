@@ -198,6 +198,36 @@ describe("knowledgePodcastJobService", () => {
     expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(current.ttsConfig.voiceId).toBe("global-voice");
   });
+
+  it("reuses the legacy Fish Audio secret after TTS profiles are migrated", async () => {
+    let current: KnowledgePodcast = {
+      ...podcast(),
+      segments: [{ id: "segment-1", order: 0, title: "第一章", text: "正文。", sourceRecordIds: ["record-1"], textHash: "", audioStatus: "pending" }],
+    };
+    const migratedSettings = {
+      ...settings(),
+      tts: {
+        currentProviderId: "default",
+        providers: [{ id: "default", providerId: "fish-audio" as const, providerName: "Fish Audio", model: "s2.1-pro-free", voice: "legacy-voice" }],
+      },
+    };
+    synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
+    vi.spyOn(storage, "getSettings").mockResolvedValue(migratedSettings);
+    vi.spyOn(storage, "getAiSecret").mockImplementation(async (id = "default") => id === "fish-audio"
+      ? { id, apiKey: "legacy-key", updatedAt: "2026-08-03T00:00:00.000Z" }
+      : undefined);
+    vi.spyOn(storage, "getAsset").mockResolvedValue(undefined);
+    vi.spyOn(storage, "saveAsset").mockImplementation(async (file) => ({ id: "asset-legacy", createdAt: "2026-08-03T00:00:00.000Z", updatedAt: "2026-08-03T00:00:00.000Z", fileName: file.name, title: file.name, mimeType: file.type, size: file.size, kind: "audio", data: file }));
+    vi.spyOn(storage, "patchAsset").mockResolvedValue(undefined);
+    vi.spyOn(storage, "saveKnowledgePodcast").mockImplementation(async (next) => { current = next; return next; });
+
+    await startKnowledgePodcastAudioJob(current.id);
+    await vi.waitFor(() => expect(isKnowledgePodcastJobRunning(current.id, "audio")).toBe(false));
+
+    expect(synthesizeMock).toHaveBeenCalledWith("正文。", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(current.audioStatus).toBe("ready");
+  });
 });
 
 describe("syncNativeKnowledgePodcastTtsJobs", () => {
