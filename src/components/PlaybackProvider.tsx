@@ -153,10 +153,16 @@ export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
           mode: request.mode ?? "order",
         });
       } catch (error) {
-        setNativeEnabled(false);
+        // A decoder failure belongs to this queue/item. Keep the native service
+        // available so the next valid queue can still use MediaSession controls.
         setState(EMPTY_STATE);
         await stopNativeMedia().catch(() => undefined);
-        throw new Error(`Android 后台播放器不可用，已切换为普通播放：${error instanceof Error ? error.message : "未知错误"}`);
+        const detail = error instanceof Error
+          ? error.message
+          : typeof error === "object" && error !== null && "message" in error
+            ? String((error as { message?: unknown }).message ?? "未知错误")
+            : String(error ?? "未知错误");
+        throw new Error(`Android 后台播放器不可用，已切换为普通播放：${detail}`);
       }
       const previousSession = activeSessionRef.current;
       activeSessionRef.current = session;

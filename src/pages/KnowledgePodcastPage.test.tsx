@@ -11,7 +11,7 @@ const podcast: KnowledgePodcast = {
   title: "本周复习",
   mode: "explain",
   targetMinutes: 5,
-  scope: { kind: "recent", days: 7 },
+  scope: { kind: "records", recordIds: ["record-1"] },
   sourceRecordIds: [],
   contextHash: "",
   scriptStatus: "ready",
@@ -102,7 +102,7 @@ describe("KnowledgePodcastPage", () => {
     expect(props.onOpenScope).toHaveBeenCalledTimes(1);
   });
 
-  it("marks legacy podcast audio as requiring a full regeneration and does not render its old player", () => {
+  it("marks legacy podcast audio as requiring a full regeneration while keeping the player area visible", () => {
     const legacy = {
       ...podcast,
       audioLayoutVersion: undefined,
@@ -113,6 +113,7 @@ describe("KnowledgePodcastPage", () => {
     render(<KnowledgePodcastPage {...props} podcasts={[legacy]} />);
     expect(screen.getByText(/音频格式已更新，需要重新生成整期音频/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重新生成整期音频/ })).toBeInTheDocument();
+    expect(document.querySelector(".podcast-player-card")).toBeInTheDocument();
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
   });
 });

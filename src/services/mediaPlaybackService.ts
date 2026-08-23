@@ -1,6 +1,7 @@
 import { Directory, Filesystem } from "@capacitor/filesystem";
 
 import type { Asset } from "../types";
+import { normalizeMp3Stream, readBlobBytes } from "../lib/audio";
 import { blobToBase64Chunks } from "./nativeFileWriter";
 import {
   getNativeMediaAvailableBytes,
@@ -87,12 +88,27 @@ export const preparePlaybackSession = async (
   if (request.items.length === 0) {
     throw new Error("播放队列不能为空。");
   }
-  for (const item of request.items) {
+  const preparedItems = await Promise.all(request.items.map(async (item) => {
     if (!item.asset.data || item.asset.size <= 0 || item.asset.data.size <= 0) {
       throw new Error(`音频文件为空：${item.title || item.asset.fileName}`);
     }
-  }
-  const totalBytes = request.items.reduce((total, item) => total + item.asset.size, 0);
+    const mimeType = normalizePlaybackMimeType(item.asset);
+    if (mimeType !== "audio/mpeg" && !item.asset.fileName.toLowerCase().endsWith(".mp3")) return item;
+    const bytes = await readBlobBytes(item.asset.data);
+    const normalized = normalizeMp3Stream(bytes);
+    if (normalized.length === bytes.length) return item;
+    const payload = normalized.buffer.slice(normalized.byteOffset, normalized.byteOffset + normalized.byteLength) as ArrayBuffer;
+    return {
+      ...item,
+      asset: {
+        ...item.asset,
+        data: new Blob([payload], { type: "audio/mpeg" }),
+        size: normalized.length,
+        mimeType: "audio/mpeg",
+      },
+    };
+  }));
+  const totalBytes = preparedItems.reduce((total, item) => total + item.asset.data.size, 0);
   const availableBytes = await getNativeMediaAvailableBytes();
   if (availableBytes !== undefined && availableBytes < totalBytes + REQUIRED_FREE_BYTES) {
     throw new Error("设备可用空间不足，无法准备后台播放队列。");
@@ -105,9 +121,9 @@ export const preparePlaybackSession = async (
 
   try {
     const items: NativePlaybackQueueItem[] = [];
-    for (let itemIndex = 0; itemIndex < request.items.length; itemIndex += 1) {
+    for (let itemIndex = 0; itemIndex < preparedItems.length; itemIndex += 1) {
       if (shouldCancel()) throw new PlaybackPreparationCancelledError();
-      const input = request.items[itemIndex];
+      const input = preparedItems[itemIndex];
       const path = `${directory}/${itemIndex}-${safeFileName(input.asset.fileName, input.asset.id)}`;
       let uri = "";
       let wroteFirstChunk = false;

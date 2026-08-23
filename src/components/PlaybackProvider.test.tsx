@@ -46,7 +46,7 @@ vi.mock("../services/nativeMediaPlayback", () => ({
 import { PlaybackProvider, usePlayback } from "./PlaybackProvider";
 
 describe("PlaybackProvider", () => {
-  it("disables the native path and releases the staged session when preparation fails", async () => {
+  it("keeps the native service available and releases the staged session when one queue fails", async () => {
     sessions.prepare.mockResolvedValue({
       directory: "media-playback/session",
       queueId: "podcast:1",
@@ -70,7 +70,7 @@ describe("PlaybackProvider", () => {
       })).rejects.toThrow("已切换为普通播放");
     });
 
-    await waitFor(() => expect(getByText("fallback")).toBeInTheDocument());
+    await waitFor(() => expect(getByText("native")).toBeInTheDocument());
     expect(native.stop).toHaveBeenCalled();
     expect(sessions.remove).toHaveBeenCalledWith({ directory: "media-playback/session", queueId: "podcast:1", initialIndex: 0, items: expect.any(Array) });
   });

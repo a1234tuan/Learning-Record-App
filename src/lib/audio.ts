@@ -15,12 +15,28 @@ const id3v2TotalSize = (bytes: Uint8Array): number => {
 const hasId3v1Trailer = (bytes: Uint8Array, end: number): boolean =>
   end >= ID3V1_TAG_SIZE && bytes[end - ID3V1_TAG_SIZE] === 0x54 && bytes[end - ID3V1_TAG_SIZE + 1] === 0x41 && bytes[end - ID3V1_TAG_SIZE + 2] === 0x47;
 
-/** Removes per-response ID3 metadata before individual MP3 responses are concatenated. */
+/** Removes ID3 blocks from a single segment or a legacy concatenated MP3 stream. */
 export const normalizeMp3Segment = (bytes: Uint8Array): Uint8Array => {
-  const start = id3v2TotalSize(bytes);
-  const end = hasId3v1Trailer(bytes, bytes.length) ? bytes.length - ID3V1_TAG_SIZE : bytes.length;
-  return bytes.slice(start, Math.max(start, end));
+  const output: number[] = [];
+  let index = 0;
+  while (index < bytes.length) {
+    const remaining = bytes.length - index;
+    const id3Size = id3v2TotalSize(bytes.subarray(index));
+    if (id3Size > 0) {
+      index += id3Size;
+      continue;
+    }
+    if (remaining >= ID3V1_TAG_SIZE && hasId3v1Trailer(bytes, index + ID3V1_TAG_SIZE)) {
+      index += ID3V1_TAG_SIZE;
+      continue;
+    }
+    output.push(bytes[index]);
+    index += 1;
+  }
+  return Uint8Array.from(output);
 };
+
+export const normalizeMp3Stream = normalizeMp3Segment;
 
 export const isLikelyMp3Audio = (bytes: Uint8Array): boolean => {
   const scanLimit = Math.min(bytes.length - 3, 128 * 1024);

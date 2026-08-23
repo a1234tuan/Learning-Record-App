@@ -277,6 +277,7 @@ const PodcastEditor = ({
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(initialPodcast.playback?.positionSeconds ?? 0);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [nativeFallbackAssetId, setNativeFallbackAssetId] = useState<string>();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string>();
   const lastPlaybackSaveRef = useRef(0);
@@ -290,7 +291,7 @@ const PodcastEditor = ({
   const sourceChanged = Boolean(podcast.contextHash && currentContextHash && podcast.contextHash !== currentContextHash);
   const legacyAudioLayout = podcast.audioLayoutVersion !== 2;
   const audioUnits = podcast.audioUnits ?? [];
-  const useNativePlayback = playback.nativeEnabled;
+  const useNativePlayback = playback.nativeEnabled && !nativeFallbackAssetId;
   const nativeQueueId = `podcast:${podcast.id}`;
   const nativePodcastSessionActive = useNativePlayback && playback.state.queueId === nativeQueueId;
   const nativePlayingUnitId = nativePodcastSessionActive
@@ -339,6 +340,9 @@ const PodcastEditor = ({
   useEffect(() => {
     setPodcast(initialPodcast);
   }, [initialPodcast, records]);
+  useEffect(() => {
+    setNativeFallbackAssetId(undefined);
+  }, [initialPodcast.id]);
   useEffect(() => () => {
     audioRef.current?.pause();
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -446,7 +450,8 @@ const PodcastEditor = ({
   const playUnit = async (unit: KnowledgePodcastAudioUnit, startAt = 0) => {
     const asset = unit.audioAssetId ? assets.find((item) => item.id === unit.audioAssetId) : undefined;
     if (!asset) { setMessage("该音频单元尚未生成，请重新生成。 "); return; }
-    if (useNativePlayback) {
+    const shouldTryNative = playback.nativeEnabled && nativeFallbackAssetId !== asset.id;
+    if (shouldTryNative) {
       if (nativePodcastSessionActive && playback.state.itemId === asset.id) {
         if (playback.state.status === "playing") {
           await playback.pause();
@@ -471,11 +476,13 @@ const PodcastEditor = ({
           speed: playbackRate,
           mode: nativePodcastSessionActive ? playback.state.mode : "order",
         });
+        setNativeFallbackAssetId(undefined);
         const saved = { ...podcast, playback: { unitId: unit.id, positionSeconds: startAt } };
         setPodcast(saved);
         await onSavePodcast(saved);
         return;
       } catch (error) {
+        setNativeFallbackAssetId(asset.id);
         setMessage(error instanceof Error ? error.message : "无法准备后台播放，已改用普通播放。 ");
       }
     }
@@ -705,12 +712,20 @@ const PodcastEditor = ({
           </footer>}
         </article>
       </section>
-      {!legacyAudioLayout && <section className="podcast-player-card">
+      <section className="podcast-player-card">
+        {legacyAudioLayout && (
+          <div className="status-message">
+            这是旧版整期音频。重新生成后可使用章节播放器、通知栏控制和锁屏播放。
+          </div>
+        )}
+        {!legacyAudioLayout && <>
+        {playback.notificationUnavailable && <p className="status-message">通知权限未授予，播放时不会显示通知栏或锁屏控制。</p>}
         <div className="podcast-player-heading"><strong>{activePlayingUnitId ? audioUnits.find((unit) => unit.id === activePlayingUnitId)?.title : "尚未播放"}</strong><small>{formatTime(activePosition)}</small></div>
         <input type="range" min={0} max={Math.max(1, useNativePlayback ? playback.state.durationSeconds || 1 : audioRef.current?.duration || 1)} value={activePosition} onChange={(event) => { const value = Number(event.target.value); if (useNativePlayback) void playback.seekTo(value); else { setPosition(value); if (audioRef.current) audioRef.current.currentTime = value; } }} />
         <div className="podcast-player-actions"><button type="button" className="secondary-button" title="上一项" onClick={() => playAdjacent(-1)}><SkipBack size={17} /></button><button type="button" className="secondary-button" title="后退 10 秒" onClick={() => useNativePlayback ? void playback.seekBy(-10) : audioRef.current && (audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10))}><Rewind size={17} /></button><button type="button" className="primary-button" onClick={() => { const unit = audioUnits.find((item) => item.id === (activePlayingUnitId ?? podcast.playback?.unitId ?? podcast.playback?.segmentId)) ?? audioUnits.find((item) => item.audioStatus === "ready"); if (unit) void playUnit(unit, activePlayingUnitId === unit.id ? activePosition : podcast.playback?.positionSeconds ?? 0); }}><Play size={17} />播放/继续</button><button type="button" className="secondary-button" onClick={stopPlayback}><Pause size={17} />暂停</button><button type="button" className="secondary-button" title="前进 10 秒" onClick={() => useNativePlayback ? void playback.seekBy(10) : audioRef.current && (audioRef.current.currentTime = Math.min(audioRef.current.duration || Infinity, audioRef.current.currentTime + 10))}><FastForward size={17} /></button><button type="button" className="secondary-button" title="下一项" onClick={() => playAdjacent(1)}><SkipForward size={17} /></button></div>
         <div className="podcast-player-options"><label>播放速度<select value={activePlaybackRate} onChange={(event) => { const rate = Number(event.target.value); setPlaybackRate(rate); if (useNativePlayback) void playback.setSpeed(rate); }} aria-label="播放速度">{[0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}x</option>)}</select></label>{useNativePlayback && <button type="button" className="secondary-button" onClick={() => void playback.setMode(nextPlaybackMode(playback.state.mode))}>{playback.state.mode === "single" ? <Repeat1 size={15} /> : playback.state.mode === "shuffle" ? <Shuffle size={15} /> : <Repeat size={15} />}{playbackModeLabel[playback.state.mode]}</button>}<span>当前位置 {formatTime(activePosition)}</span></div>
-      </section>}
+        </>}
+      </section>
       <button type="button" className="danger-text-button" onClick={() => { if (window.confirm("删除这期知识播客及其生成音频吗？")) void onDeletePodcast(podcast.id).then(onBack); }}><Trash2 size={16} />删除这期播客</button>
     </main>
   );

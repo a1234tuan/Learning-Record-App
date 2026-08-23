@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.ComponentName;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Log;
 import android.os.Handler;
 import android.os.Looper;
 import androidx.core.content.ContextCompat;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     permissions = { @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS }) }
 )
 public final class NativeMediaPlaybackPlugin extends Plugin {
+    private static final String TAG = "NativeMediaPlayback";
     private static final long PREPARE_TIMEOUT_MS = 10_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private MediaController controller;
@@ -67,16 +69,18 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
 
     @Override
     public void handleOnDestroy() {
-        handler.removeCallbacksAndMessages(null);
-        if (controller != null) {
-            controller.removeListener(playerListener);
-            controller.release();
-            controller = null;
-        }
-        if (controllerFuture != null) {
-            controllerFuture.cancel(true);
-            controllerFuture = null;
-        }
+        handler.post(() -> {
+            handler.removeCallbacksAndMessages(null);
+            if (controller != null) {
+                controller.removeListener(playerListener);
+                controller.release();
+                controller = null;
+            }
+            if (controllerFuture != null) {
+                controllerFuture.cancel(true);
+                controllerFuture = null;
+            }
+        });
     }
 
     @PluginMethod
@@ -112,8 +116,12 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
                     call.reject("播放队列包含无效音频。");
                     return;
                 }
-                validateQueueItem(item);
-                items.add(MediaPlaybackService.mediaItemFromJson(item));
+                File file = validateQueueItem(item);
+                // Rebuild the URI from the verified file path so percent-encoded
+                // titles and non-ASCII filenames cannot confuse the extractor.
+                JSONObject canonical = new JSONObject(item.toString());
+                canonical.put("uri", Uri.fromFile(file).toString());
+                items.add(MediaPlaybackService.mediaItemFromJson(canonical));
             }
         } catch (Exception error) {
             call.reject("无法读取播放队列。", error);
@@ -147,6 +155,10 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
 
     @PluginMethod
     public void getState(PluginCall call) {
+        handler.post(() -> getStateOnMain(call));
+    }
+
+    private void getStateOnMain(PluginCall call) {
         JSObject result = new JSObject();
         if (controller != null) {
             result.put("state", stateFor(controller));
@@ -169,7 +181,7 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
 
     private interface ControllerAction { void run(MediaController controller); }
 
-    private void validateQueueItem(JSONObject item) {
+    private File validateQueueItem(JSONObject item) {
         Uri uri = Uri.parse(item.optString("uri", ""));
         if (!"file".equals(uri.getScheme()) || uri.getPath() == null) {
             throw new IllegalArgumentException("播放队列包含不受支持的音频地址。");
@@ -182,6 +194,7 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
         if (!mimeType.isEmpty() && !mimeType.startsWith("audio/")) {
             throw new IllegalArgumentException("播放队列包含不支持的音频类型：" + mimeType);
         }
+        return file;
     }
 
     private void prepareAndPlay(
@@ -200,7 +213,8 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
             if (completed.compareAndSet(false, true)) {
                 connected.removeListener(listener[0]);
                 connected.stop();
-                call.reject("Android 音频准备超时，请重新生成该章节音频。");
+                Log.e(TAG, "Media3 prepare timeout for " + expectedMediaId);
+                call.reject("Android 音频准备超时（10 秒），请重试；若持续失败请提供设备型号和 Android 版本。");
             }
         };
         listener[0] = new Player.Listener() {
@@ -219,7 +233,9 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
                 if (completed.compareAndSet(false, true)) {
                     handler.removeCallbacks(timeout);
                     connected.removeListener(listener[0]);
-                    call.reject("Android 无法解码该音频：" + safeErrorMessage(error), error);
+                    String detail = safePlaybackErrorMessage(error);
+                    Log.e(TAG, "Media3 playback error for " + expectedMediaId + ": " + detail, error);
+                    call.reject("Android 无法解码该音频：" + detail, error);
                 }
             }
         };
@@ -235,32 +251,52 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
             handler.removeCallbacks(timeout);
             connected.removeListener(listener[0]);
             if (completed.compareAndSet(false, true)) {
+                Log.e(TAG, "Unable to start Media3 player", error);
                 call.reject("无法启动 Android 播放器：" + safeErrorMessage(error), error);
             }
         }
     }
 
     private void withController(PluginCall call, ControllerAction action) {
+        // MediaController is thread-confined to its application Looper. The
+        // Capacitor bridge may invoke plugin methods off-main, so both creation
+        // and every subsequent player operation must be posted to main.
+        handler.post(() -> withControllerOnMain(call, action));
+    }
+
+    private void withControllerOnMain(PluginCall call, ControllerAction action) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post(() -> withControllerOnMain(call, action));
+            return;
+        }
         if (controller != null) {
             runControllerAction(call, controller, action);
             return;
         }
         if (controllerFuture == null) {
             SessionToken token = new SessionToken(getContext(), new ComponentName(getContext(), MediaPlaybackService.class));
-            controllerFuture = new MediaController.Builder(getContext(), token).buildAsync();
+            controllerFuture = new MediaController.Builder(getContext(), token)
+                .setApplicationLooper(Looper.getMainLooper())
+                .buildAsync();
         }
-        controllerFuture.addListener(() -> {
+        ListenableFuture<MediaController> future = controllerFuture;
+        future.addListener(() -> {
             try {
-                controller = controllerFuture.get();
+                controller = future.get();
                 controller.addListener(playerListener);
                 runControllerAction(call, controller, action);
             } catch (Exception error) {
+                Log.e(TAG, "Unable to connect Media3 controller", error);
                 call.reject("无法连接系统播放器：" + safeErrorMessage(error), error);
             }
         }, ContextCompat.getMainExecutor(getContext()));
     }
 
     private void runControllerAction(PluginCall call, MediaController connected, ControllerAction action) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post(() -> runControllerAction(call, connected, action));
+            return;
+        }
         try {
             action.run(connected);
         } catch (Exception error) {
@@ -271,6 +307,16 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
     private static String safeErrorMessage(Exception error) {
         String message = error.getMessage();
         return message == null || message.isEmpty() ? error.getClass().getSimpleName() : message;
+    }
+
+    private static String safePlaybackErrorMessage(androidx.media3.common.PlaybackException error) {
+        String message = error.getMessage();
+        if (message == null || message.isEmpty()) message = error.getClass().getSimpleName();
+        Throwable cause = error.getCause();
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().isEmpty()) {
+            message += "; cause=" + cause.getMessage();
+        }
+        return message + " (errorCode=" + error.errorCode + ")";
     }
 
     private void emitState() {

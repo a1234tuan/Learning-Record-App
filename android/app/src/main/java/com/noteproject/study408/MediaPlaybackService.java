@@ -1,6 +1,8 @@
 package com.noteproject.study408;
 
+import android.app.PendingIntent;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,6 +17,7 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import androidx.media3.session.CommandButton;
+import androidx.media3.session.DefaultMediaNotificationProvider;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
@@ -103,7 +106,20 @@ public final class MediaPlaybackService extends MediaSessionService {
                 clearSavedState(MediaPlaybackService.this);
             }
         });
-        mediaSession = new MediaSession.Builder(this, player).build();
+        // Use an explicit provider so the media notification/lock-screen card is
+        // created consistently across Android versions and OEM implementations.
+        setMediaNotificationProvider(new DefaultMediaNotificationProvider(this));
+        Intent openIntent = new Intent(this, MainActivity.class)
+            .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent sessionActivity = PendingIntent.getActivity(
+            this,
+            0,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        mediaSession = new MediaSession.Builder(this, player)
+            .setSessionActivity(sessionActivity)
+            .build();
         mediaSession.setMediaButtonPreferences(Arrays.asList(
             new CommandButton.Builder(CommandButton.ICON_PREVIOUS)
                 .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
@@ -245,8 +261,9 @@ public final class MediaPlaybackService extends MediaSessionService {
             .setMediaId(value.optString("assetId", ""))
             .setUri(value.optString("uri", ""))
             .setMediaMetadata(metadata);
-        String mimeType = value.optString("mimeType", "");
-        if (mimeType.startsWith("audio/")) builder.setMimeType(mimeType);
+        // Let Media3 infer the extractor from the local file extension. TTS
+        // providers occasionally return a valid stream with a generic MIME
+        // header, and forcing audio/mpeg makes those files fail before decode.
         return builder.build();
     }
 
