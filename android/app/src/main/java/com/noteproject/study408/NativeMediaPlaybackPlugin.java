@@ -2,6 +2,7 @@ package com.noteproject.study408;
 
 import android.Manifest;
 import android.content.ComponentName;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,12 +25,15 @@ import com.google.common.util.concurrent.ListenableFuture;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
+import java.io.File;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @CapacitorPlugin(
     name = "NativeMediaPlayback",
     permissions = { @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS }) }
 )
 public final class NativeMediaPlaybackPlugin extends Plugin {
+    private static final long PREPARE_TIMEOUT_MS = 10_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private MediaController controller;
     private ListenableFuture<MediaController> controllerFuture;
@@ -108,6 +112,7 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
                     call.reject("播放队列包含无效音频。");
                     return;
                 }
+                validateQueueItem(item);
                 items.add(MediaPlaybackService.mediaItemFromJson(item));
             }
         } catch (Exception error) {
@@ -118,14 +123,7 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
         long positionMs = Math.max(0L, Math.round(call.getDouble("positionSeconds", 0d) * 1_000d));
         float speed = call.getDouble("speed", 1d).floatValue();
         String mode = call.getString("mode", "order");
-        withController(call, connected -> {
-            connected.setMediaItems(items, initialIndex, positionMs);
-            applyMode(connected, mode);
-            connected.setPlaybackParameters(new PlaybackParameters(speed));
-            connected.prepare();
-            connected.play();
-            call.resolve();
-        });
+        withController(call, connected -> prepareAndPlay(call, connected, items, initialIndex, positionMs, speed, mode));
     }
 
     @PluginMethod public void play(PluginCall call) { withController(call, controller -> { controller.play(); call.resolve(); }); }
@@ -171,9 +169,80 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
 
     private interface ControllerAction { void run(MediaController controller); }
 
+    private void validateQueueItem(JSONObject item) {
+        Uri uri = Uri.parse(item.optString("uri", ""));
+        if (!"file".equals(uri.getScheme()) || uri.getPath() == null) {
+            throw new IllegalArgumentException("播放队列包含不受支持的音频地址。");
+        }
+        File file = new File(uri.getPath());
+        if (!file.isFile() || !file.canRead() || file.length() == 0L) {
+            throw new IllegalArgumentException("播放队列包含不存在、不可读或为空的音频文件。");
+        }
+        String mimeType = item.optString("mimeType", "");
+        if (!mimeType.isEmpty() && !mimeType.startsWith("audio/")) {
+            throw new IllegalArgumentException("播放队列包含不支持的音频类型：" + mimeType);
+        }
+    }
+
+    private void prepareAndPlay(
+        PluginCall call,
+        MediaController connected,
+        List<MediaItem> items,
+        int initialIndex,
+        long positionMs,
+        float speed,
+        String mode
+    ) {
+        final AtomicBoolean completed = new AtomicBoolean(false);
+        final String expectedMediaId = items.get(initialIndex).mediaId;
+        final Player.Listener[] listener = new Player.Listener[1];
+        final Runnable timeout = () -> {
+            if (completed.compareAndSet(false, true)) {
+                connected.removeListener(listener[0]);
+                connected.stop();
+                call.reject("Android 音频准备超时，请重新生成该章节音频。");
+            }
+        };
+        listener[0] = new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int playbackState) {
+                MediaItem current = connected.getCurrentMediaItem();
+                if (playbackState == Player.STATE_READY && current != null && expectedMediaId.equals(current.mediaId) && completed.compareAndSet(false, true)) {
+                    handler.removeCallbacks(timeout);
+                    connected.removeListener(listener[0]);
+                    call.resolve();
+                }
+            }
+
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                if (completed.compareAndSet(false, true)) {
+                    handler.removeCallbacks(timeout);
+                    connected.removeListener(listener[0]);
+                    call.reject("Android 无法解码该音频：" + safeErrorMessage(error), error);
+                }
+            }
+        };
+        try {
+            connected.addListener(listener[0]);
+            handler.postDelayed(timeout, PREPARE_TIMEOUT_MS);
+            connected.setMediaItems(items, initialIndex, positionMs);
+            applyMode(connected, mode);
+            connected.setPlaybackParameters(new PlaybackParameters(speed));
+            connected.prepare();
+            connected.play();
+        } catch (Exception error) {
+            handler.removeCallbacks(timeout);
+            connected.removeListener(listener[0]);
+            if (completed.compareAndSet(false, true)) {
+                call.reject("无法启动 Android 播放器：" + safeErrorMessage(error), error);
+            }
+        }
+    }
+
     private void withController(PluginCall call, ControllerAction action) {
         if (controller != null) {
-            action.run(controller);
+            runControllerAction(call, controller, action);
             return;
         }
         if (controllerFuture == null) {
@@ -184,11 +253,24 @@ public final class NativeMediaPlaybackPlugin extends Plugin {
             try {
                 controller = controllerFuture.get();
                 controller.addListener(playerListener);
-                action.run(controller);
+                runControllerAction(call, controller, action);
             } catch (Exception error) {
-                call.reject("无法连接系统播放器。", error);
+                call.reject("无法连接系统播放器：" + safeErrorMessage(error), error);
             }
         }, ContextCompat.getMainExecutor(getContext()));
+    }
+
+    private void runControllerAction(PluginCall call, MediaController connected, ControllerAction action) {
+        try {
+            action.run(connected);
+        } catch (Exception error) {
+            call.reject("Android 播放器操作失败：" + safeErrorMessage(error), error);
+        }
+    }
+
+    private static String safeErrorMessage(Exception error) {
+        String message = error.getMessage();
+        return message == null || message.isEmpty() ? error.getClass().getSimpleName() : message;
     }
 
     private void emitState() {

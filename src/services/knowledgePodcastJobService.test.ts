@@ -55,6 +55,10 @@ const settings = (): AppSettings => ({
   },
 });
 
+const validMp3Blob = (): Blob => new Blob([
+  new Uint8Array([0xff, 0xfb, 0x90, 0x64]).buffer,
+], { type: "audio/mpeg" });
+
 const podcast = (): KnowledgePodcast => ({
   id: "podcast-job",
   createdAt: "2026-08-03T00:00:00.000Z",
@@ -149,7 +153,7 @@ describe("knowledgePodcastJobService", () => {
       ],
     };
     let nextAsset = 0;
-    synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    synthesizeMock.mockImplementation(async () => validMp3Blob());
     vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
     vi.spyOn(storage, "getSettings").mockResolvedValue(settings());
     vi.spyOn(storage, "getAiSecret").mockResolvedValue({ id: "fish-audio", apiKey: "test", updatedAt: "2026-08-03T00:00:00.000Z" });
@@ -183,7 +187,7 @@ describe("knowledgePodcastJobService", () => {
         providers: [{ id: "fish-audio", providerId: "fish-audio" as const, providerName: "Fish Audio", model: "s2.1-pro-free", voice: "global-voice" }],
       },
     };
-    synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    synthesizeMock.mockImplementation(async () => validMp3Blob());
     vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
     vi.spyOn(storage, "getSettings").mockResolvedValue(globalSettings);
     vi.spyOn(storage, "getAiSecret").mockResolvedValue({ id: "fish-audio", apiKey: "test", updatedAt: "2026-08-03T00:00:00.000Z" });
@@ -211,7 +215,7 @@ describe("knowledgePodcastJobService", () => {
         providers: [{ id: "default", providerId: "fish-audio" as const, providerName: "Fish Audio", model: "s2.1-pro-free", voice: "legacy-voice" }],
       },
     };
-    synthesizeMock.mockResolvedValue(new Blob(["audio"], { type: "audio/mpeg" }));
+    synthesizeMock.mockImplementation(async () => validMp3Blob());
     vi.spyOn(storage, "getKnowledgePodcast").mockImplementation(async () => current);
     vi.spyOn(storage, "getSettings").mockResolvedValue(migratedSettings);
     vi.spyOn(storage, "getAiSecret").mockImplementation(async (id = "default") => id === "fish-audio"

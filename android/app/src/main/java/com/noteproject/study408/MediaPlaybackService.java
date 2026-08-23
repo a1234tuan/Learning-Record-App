@@ -95,6 +95,13 @@ public final class MediaPlaybackService extends MediaSessionService {
                     handler.post(persistRunnable);
                 }
             }
+
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                // Do not restore a queue that the extractor/decoder rejected.
+                handler.removeCallbacks(persistRunnable);
+                clearSavedState(MediaPlaybackService.this);
+            }
         });
         mediaSession = new MediaSession.Builder(this, player).build();
         mediaSession.setMediaButtonPreferences(Arrays.asList(
@@ -234,12 +241,13 @@ public final class MediaPlaybackService extends MediaSessionService {
             .setArtist(value.optString("subtitle", ""))
             .setExtras(extras)
             .build();
-        return new MediaItem.Builder()
+        MediaItem.Builder builder = new MediaItem.Builder()
             .setMediaId(value.optString("assetId", ""))
             .setUri(value.optString("uri", ""))
-            .setMimeType(value.optString("mimeType", ""))
-            .setMediaMetadata(metadata)
-            .build();
+            .setMediaMetadata(metadata);
+        String mimeType = value.optString("mimeType", "");
+        if (mimeType.startsWith("audio/")) builder.setMimeType(mimeType);
+        return builder.build();
     }
 
     private static JSONObject mediaItemToJson(MediaItem item) throws Exception {

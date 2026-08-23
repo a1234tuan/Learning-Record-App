@@ -277,7 +277,9 @@ public final class PodcastTtsForegroundService extends Service {
                         updateUnit(unitId, "generating", null, index + 1, inputUnits.length(), partIndex + 1, parts.length(), title + "语音片段 " + (partIndex + 1) + "/" + parts.length());
                         byte[] audio = requestAudio(providerId, apiKey, apiKeySecondary, model, voiceId, region, languageCode, text, unitId, title, partIndex + 1, parts.length());
                         if (audio == null || audio.length == 0) throw new IllegalStateException("TTS 返回了空音频。");
-                        outputStream.write(audio);
+                        byte[] normalizedAudio = normalizeMp3Segment(audio);
+                        if (!isLikelyMp3Audio(normalizedAudio)) throw new IllegalStateException("TTS 返回的内容不是有效的 MP3 音频。");
+                        outputStream.write(normalizedAudio);
                     }
                 } catch (Exception error) {
                     unitSuccess = false;
@@ -773,6 +775,38 @@ public final class PodcastTtsForegroundService extends Service {
             while ((length = stream.read(buffer)) != -1) output.write(buffer, 0, length);
             return output.toByteArray();
         }
+    }
+
+    /** Removes per-response ID3 metadata so concatenated TTS parts remain one MP3 stream. */
+    private static byte[] normalizeMp3Segment(byte[] input) {
+        int start = 0;
+        int end = input.length;
+        if (input.length >= 10 && input[0] == 'I' && input[1] == 'D' && input[2] == '3') {
+            int payload = ((input[6] & 0x7f) << 21) | ((input[7] & 0x7f) << 14) | ((input[8] & 0x7f) << 7) | (input[9] & 0x7f);
+            int footer = (input[5] & 0x10) != 0 ? 10 : 0;
+            int total = 10 + payload + footer;
+            if (total <= input.length) start = total;
+        }
+        if (end >= 128 && input[end - 128] == 'T' && input[end - 127] == 'A' && input[end - 126] == 'G') {
+            end -= 128;
+        }
+        int length = Math.max(0, end - start);
+        byte[] output = new byte[length];
+        System.arraycopy(input, start, output, 0, length);
+        return output;
+    }
+
+    private static boolean isLikelyMp3Audio(byte[] bytes) {
+        int limit = Math.min(Math.max(0, bytes.length - 3), 128 * 1024);
+        for (int index = 0; index < limit; index += 1) {
+            if ((bytes[index] & 0xff) != 0xff || (bytes[index + 1] & 0xe0) != 0xe0) continue;
+            int version = (bytes[index + 1] >> 3) & 0x03;
+            int layer = (bytes[index + 1] >> 1) & 0x03;
+            int bitrate = (bytes[index + 2] >> 4) & 0x0f;
+            int sampleRate = (bytes[index + 2] >> 2) & 0x03;
+            if (version != 0x01 && layer != 0 && bitrate != 0 && bitrate != 0x0f && sampleRate != 0x03) return true;
+        }
+        return false;
     }
 
     private static String now() {

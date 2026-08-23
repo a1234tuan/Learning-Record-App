@@ -45,6 +45,7 @@ export interface PlaybackPreparationState {
 
 interface PlaybackContextValue {
   nativeAvailable: boolean;
+  nativeEnabled: boolean;
   state: NativePlaybackState;
   preparing: PlaybackPreparationState;
   notificationUnavailable: boolean;
@@ -62,6 +63,7 @@ interface PlaybackContextValue {
 
 const unavailablePlayback: PlaybackContextValue = {
   nativeAvailable: false,
+  nativeEnabled: false,
   state: EMPTY_STATE,
   preparing: { active: false, writtenBytes: 0, totalBytes: 0 },
   notificationUnavailable: false,
@@ -81,6 +83,7 @@ const PlaybackContext = createContext<PlaybackContextValue>(unavailablePlayback)
 
 export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
   const nativeAvailable = canUseNativeMediaPlayback();
+  const [nativeEnabled, setNativeEnabled] = useState(nativeAvailable);
   const [state, setState] = useState<NativePlaybackState>(EMPTY_STATE);
   const [preparing, setPreparing] = useState<PlaybackPreparationState>({ active: false, writtenBytes: 0, totalBytes: 0 });
   const [notificationUnavailable, setNotificationUnavailable] = useState(false);
@@ -118,8 +121,12 @@ export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [nativeAvailable, syncState]);
 
+  useEffect(() => {
+    setNativeEnabled(nativeAvailable);
+  }, [nativeAvailable]);
+
   const startQueue = useCallback(async (request: PlaybackQueueRequest) => {
-    if (!nativeAvailable) {
+    if (!nativeAvailable || !nativeEnabled) {
       throw new Error("当前平台不支持后台媒体播放。");
     }
     const token = requestTokenRef.current + 1;
@@ -137,13 +144,20 @@ export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
       if (requestTokenRef.current !== token) throw new PlaybackPreparationCancelledError();
       const notificationGranted = await requestNativeMediaNotificationPermission();
       if (requestTokenRef.current === token) setNotificationUnavailable(!notificationGranted);
-      await prepareNativeMediaPlayback({
-        items: session.items,
-        initialIndex: session.initialIndex,
-        positionSeconds: request.positionSeconds ?? 0,
-        speed: request.speed ?? 1,
-        mode: request.mode ?? "order",
-      });
+      try {
+        await prepareNativeMediaPlayback({
+          items: session.items,
+          initialIndex: session.initialIndex,
+          positionSeconds: request.positionSeconds ?? 0,
+          speed: request.speed ?? 1,
+          mode: request.mode ?? "order",
+        });
+      } catch (error) {
+        setNativeEnabled(false);
+        setState(EMPTY_STATE);
+        await stopNativeMedia().catch(() => undefined);
+        throw new Error(`Android 后台播放器不可用，已切换为普通播放：${error instanceof Error ? error.message : "未知错误"}`);
+      }
       const previousSession = activeSessionRef.current;
       activeSessionRef.current = session;
       session = undefined;
@@ -152,7 +166,7 @@ export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
       if (session) await removePreparedPlaybackSession(session);
       if (requestTokenRef.current === token) setPreparing({ active: false, writtenBytes: 0, totalBytes: 0 });
     }
-  }, [nativeAvailable]);
+  }, [nativeAvailable, nativeEnabled]);
 
   const stop = useCallback(async () => {
     requestTokenRef.current += 1;
@@ -166,20 +180,21 @@ export const PlaybackProvider = ({ children }: { children: ReactNode }) => {
 
   const value = useMemo<PlaybackContextValue>(() => ({
     nativeAvailable,
+    nativeEnabled,
     state,
     preparing,
     notificationUnavailable,
     startQueue,
-    play: async () => { if (nativeAvailable) await playNativeMedia(); },
-    pause: async () => { if (nativeAvailable) await pauseNativeMedia(); },
+    play: async () => { if (nativeAvailable && nativeEnabled) await playNativeMedia(); },
+    pause: async () => { if (nativeAvailable && nativeEnabled) await pauseNativeMedia(); },
     stop,
-    next: async () => { if (nativeAvailable) await nextNativeMedia(); },
-    previous: async () => { if (nativeAvailable) await previousNativeMedia(); },
-    seekBy: async (offsetSeconds) => { if (nativeAvailable) await seekNativeMediaBy(offsetSeconds); },
-    seekTo: async (positionSeconds) => { if (nativeAvailable) await seekNativeMediaTo(positionSeconds); },
-    setSpeed: async (speed) => { if (nativeAvailable) await setNativeMediaSpeed(speed); },
-    setMode: async (mode) => { if (nativeAvailable) await setNativeMediaMode(mode); },
-  }), [nativeAvailable, notificationUnavailable, preparing, startQueue, state, stop]);
+    next: async () => { if (nativeAvailable && nativeEnabled) await nextNativeMedia(); },
+    previous: async () => { if (nativeAvailable && nativeEnabled) await previousNativeMedia(); },
+    seekBy: async (offsetSeconds) => { if (nativeAvailable && nativeEnabled) await seekNativeMediaBy(offsetSeconds); },
+    seekTo: async (positionSeconds) => { if (nativeAvailable && nativeEnabled) await seekNativeMediaTo(positionSeconds); },
+    setSpeed: async (speed) => { if (nativeAvailable && nativeEnabled) await setNativeMediaSpeed(speed); },
+    setMode: async (mode) => { if (nativeAvailable && nativeEnabled) await setNativeMediaMode(mode); },
+  }), [nativeAvailable, nativeEnabled, notificationUnavailable, preparing, startQueue, state, stop]);
 
   return <PlaybackContext.Provider value={value}>{children}</PlaybackContext.Provider>;
 };

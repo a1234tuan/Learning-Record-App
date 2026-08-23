@@ -51,6 +51,18 @@ const safeFileName = (value: string, fallback: string): string => {
 
 const sessionDirectory = (id: string): string => `${MEDIA_ROOT}/${id}`;
 
+export const normalizePlaybackMimeType = (asset: Pick<Asset, "mimeType" | "fileName" | "data">): string => {
+  const declared = (asset.mimeType || asset.data.type || "").split(";", 1)[0].trim().toLowerCase();
+  if (declared.startsWith("audio/")) return declared;
+  const extension = asset.fileName.toLowerCase().split(".").pop();
+  if (extension === "mp3") return "audio/mpeg";
+  if (extension === "m4a" || extension === "mp4") return "audio/mp4";
+  if (extension === "aac") return "audio/aac";
+  if (extension === "wav") return "audio/wav";
+  if (extension === "ogg" || extension === "oga") return "audio/ogg";
+  return "audio/*";
+};
+
 export const createPlaybackSessionId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -74,6 +86,11 @@ export const preparePlaybackSession = async (
 ): Promise<PreparedPlaybackSession> => {
   if (request.items.length === 0) {
     throw new Error("播放队列不能为空。");
+  }
+  for (const item of request.items) {
+    if (!item.asset.data || item.asset.size <= 0 || item.asset.data.size <= 0) {
+      throw new Error(`音频文件为空：${item.title || item.asset.fileName}`);
+    }
   }
   const totalBytes = request.items.reduce((total, item) => total + item.asset.size, 0);
   const availableBytes = await getNativeMediaAvailableBytes();
@@ -118,7 +135,7 @@ export const preparePlaybackSession = async (
         uri,
         title: input.title,
         subtitle: input.subtitle,
-        mimeType: input.asset.mimeType || input.asset.data.type || "application/octet-stream",
+        mimeType: normalizePlaybackMimeType(input.asset),
         queueId: request.queueId,
         durationSeconds: input.asset.durationSeconds,
       });

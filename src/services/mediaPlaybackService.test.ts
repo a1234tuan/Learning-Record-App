@@ -27,7 +27,7 @@ vi.mock("./nativeFileWriter", () => ({
   },
 }));
 
-import { preparePlaybackSession, removeStalePlaybackSessions } from "./mediaPlaybackService";
+import { normalizePlaybackMimeType, preparePlaybackSession, removeStalePlaybackSessions } from "./mediaPlaybackService";
 
 const asset = {
   id: "asset-1",
@@ -70,6 +70,23 @@ describe("preparePlaybackSession", () => {
     }, () => false)).rejects.toThrow("可用空间不足");
 
     expect(filesystem.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty audio asset before it creates a native queue", async () => {
+    const emptyAsset = { ...asset, size: 0, data: new Blob() };
+
+    await expect(preparePlaybackSession({
+      queueId: "recordings:os",
+      items: [{ asset: emptyAsset, title: "空文件", subtitle: "进程同步" }],
+      initialAssetId: "asset-1",
+    }, () => false)).rejects.toThrow("音频文件为空");
+
+    expect(filesystem.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("derives an audio MIME type instead of passing application/octet-stream to ExoPlayer", () => {
+    expect(normalizePlaybackMimeType({ ...asset, fileName: "episode.mp3", mimeType: "application/octet-stream" })).toBe("audio/mpeg");
+    expect(normalizePlaybackMimeType({ ...asset, fileName: "episode.m4a", mimeType: "" })).toBe("audio/mp4");
   });
 
   it("rejects when the requested initial item is not in the staged queue", async () => {

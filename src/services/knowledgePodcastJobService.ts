@@ -1,5 +1,6 @@
 import type { KnowledgePodcast, KnowledgePodcastAudioUnit, KnowledgePodcastGenerationProgress, KnowledgePodcastTtsDiagnostic } from "../types";
 import { newId } from "../lib/entity";
+import { isLikelyMp3Audio, normalizeMp3Segment, readBlobBytes } from "../lib/audio";
 import { getCurrentAiProvider } from "../lib/aiProviders";
 import { normalizeTtsConfig, getCurrentTtsProvider, TTS_PROVIDER_LABELS } from "../lib/ttsProviders";
 import {
@@ -502,7 +503,14 @@ export const startKnowledgePodcastAudioJob = async (podcastId: string, onlyUnitI
                 partTotal: parts.length,
               }),
             });
-            blobs.push(await provider.synthesize(part, { signal: controller.signal }));
+            const synthesized = await provider.synthesize(part, { signal: controller.signal });
+            const bytes = await readBlobBytes(synthesized);
+            const normalized = normalizeMp3Segment(bytes);
+            if (!isLikelyMp3Audio(normalized)) {
+              throw new Error("TTS 返回的内容不是有效的 MP3 音频。");
+            }
+            const payload = normalized.buffer.slice(normalized.byteOffset, normalized.byteOffset + normalized.byteLength) as ArrayBuffer;
+            blobs.push(new Blob([payload], { type: "audio/mpeg" }));
           }
           current = await savePodcast({
             ...current,
