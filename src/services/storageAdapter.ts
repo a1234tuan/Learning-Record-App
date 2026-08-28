@@ -313,9 +313,71 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
     await this.compactOldReviewLogs();
+    await this.restoreKnowledgePodcastAudioReferences();
     // Do not create today's entry during startup. A sync check must observe the
     // last confirmed local snapshot; the entry is created lazily by user flows.
     await this.resetStaleOcrJobs(10 * 60 * 1000);
+  }
+
+  /**
+   * Cloud sync deliberately excludes generated podcast audio. If an older
+   * restore cleared the references on the podcast rows, reconnect them to the
+   * local audio assets while keeping the asset data itself untouched.
+   */
+  private async restoreKnowledgePodcastAudioReferences(): Promise<void> {
+    const [podcasts, podcastAssets] = await Promise.all([
+      db.knowledgePodcasts.toArray(),
+      db.assets.filter((asset) => asset.generatedBy === "knowledge-podcast").toArray(),
+    ]);
+    if (podcasts.length === 0 || podcastAssets.length === 0) return;
+
+    const assetsByUnit = new Map<string, Asset>();
+    for (const asset of podcastAssets) {
+      if (asset.generatedForPodcastId && asset.generatedForAudioUnitId) {
+        const key = `${asset.generatedForPodcastId}:${asset.generatedForAudioUnitId}`;
+        const current = assetsByUnit.get(key);
+        if (!current || asset.updatedAt > current.updatedAt) assetsByUnit.set(key, asset);
+      }
+    }
+    if (assetsByUnit.size === 0) return;
+
+    const repaired = podcasts.flatMap((podcast) => {
+      let changed = false;
+      const audioUnits = podcast.audioUnits?.map((unit) => {
+        const asset = assetsByUnit.get(`${podcast.id}:${unit.id}`);
+        if (!asset || (unit.audioAssetId === asset.id && unit.audioStatus === "ready")) return unit;
+        changed = true;
+        return {
+          ...unit,
+          audioAssetId: asset.id,
+          audioStatus: "ready" as const,
+          durationSeconds: unit.durationSeconds ?? asset.durationSeconds,
+          error: undefined,
+        };
+      });
+      const segments = podcast.segments.map((segment) => {
+        const unit = audioUnits?.find((item) => item.kind === "segment" && item.segmentId === segment.id);
+        if (!unit?.audioAssetId || (segment.audioAssetId === unit.audioAssetId && segment.audioStatus === "ready")) return segment;
+        changed = true;
+        return {
+          ...segment,
+          audioAssetId: unit.audioAssetId,
+          audioStatus: "ready" as const,
+          durationSeconds: segment.durationSeconds ?? unit.durationSeconds,
+          error: undefined,
+        };
+      });
+      if (!changed) return [];
+      const readyUnitCount = audioUnits?.filter((unit) => unit.audioStatus === "ready" && unit.audioAssetId).length ?? 0;
+      const derivedAudioStatus = audioUnits && audioUnits.length > 0 && readyUnitCount === audioUnits.length
+        ? "ready" as const
+        : readyUnitCount > 0 ? "partial" as const : podcast.audioStatus;
+      const audioStatus = podcast.audioStatus === "generating" || podcast.generation?.status === "running"
+        ? podcast.audioStatus
+        : derivedAudioStatus;
+      return [{ ...podcast, audioUnits, segments, audioStatus, updatedAt: nowISO() }];
+    });
+    if (repaired.length > 0) await db.knowledgePodcasts.bulkPut(repaired);
   }
 
   async recoverInterruptedKnowledgePodcastJobs(activePodcastIds: Set<string> = new Set()): Promise<void> {
@@ -1838,10 +1900,17 @@ export class DexieStorageAdapter implements StorageAdapter {
     };
   }
 
-  private async restoreSnapshotData(snapshot: StorageSnapshot, expectedEpoch?: number): Promise<void> {
+  private async restoreSnapshotData(
+    snapshot: StorageSnapshot,
+    expectedEpoch?: number,
+    options: { preservePodcasts?: boolean } = {},
+  ): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
     const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
+    const restoredPodcasts = options.preservePodcasts
+      ? snapshot.payload.podcasts ?? []
+      : normalizeSnapshotPodcasts(snapshot.payload.podcasts);
     assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
     await db.transaction(
       "rw",
@@ -1896,7 +1965,7 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.studySessions.bulkPut(snapshot.payload.studySessions),
           db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
           db.assets.bulkPut(snapshot.assets),
-          db.knowledgePodcasts.bulkPut(normalizeSnapshotPodcasts(snapshot.payload.podcasts)),
+          db.knowledgePodcasts.bulkPut(restoredPodcasts),
           db.cloudSyncMutation.put({ id: "local", epoch: (currentEpoch?.epoch ?? 0) + 1 }),
         ]);
       },
@@ -1925,7 +1994,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...podcastAudioAssets,
       ],
     };
-    await this.restoreSnapshot(mergedSnapshot);
+    await this.restoreSnapshotData(mergedSnapshot, undefined, { preservePodcasts: true });
   }
 
   async restoreCloudSyncSnapshotIfUnchanged(snapshot: StorageSnapshot, expectedEpoch: number): Promise<void> {
@@ -1941,7 +2010,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...podcastAudioAssets,
       ],
     };
-    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch);
+    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch, { preservePodcasts: true });
   }
 
   async restoreStreamableSnapshot(

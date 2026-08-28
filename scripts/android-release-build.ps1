@@ -38,8 +38,14 @@ New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 $targetApk = Join-Path $releaseDir "学习日志.apk"
 Copy-Item -Force -Path $sourceApk -Destination $targetApk
 
-$hash = Get-FileHash -Path $targetApk -Algorithm SHA256
-$hash.Hash | Set-Content -Encoding ASCII -Path "$targetApk.sha256"
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+  $hashBytes = $sha256.ComputeHash([System.IO.File]::ReadAllBytes($targetApk))
+  $hashValue = ([System.BitConverter]::ToString($hashBytes)).Replace("-", "")
+} finally {
+  $sha256.Dispose()
+}
+$hashValue | Set-Content -Encoding ASCII -Path "$targetApk.sha256"
 
 Write-Host "Release APK: $targetApk"
-Write-Host "SHA256: $($hash.Hash)"
+Write-Host "SHA256: $hashValue"

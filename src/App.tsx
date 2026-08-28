@@ -105,7 +105,7 @@ const useKeyboardVisible = () => {
 
     const update = () => {
       const activeEditable = isEditableElement(document.activeElement);
-      const aiWorkspaceActive = Boolean(document.querySelector(".app-shell.ai-chat-active"));
+      const aiWorkspaceActive = Boolean(document.querySelector(".app-shell.ai-chat-active, .app-shell.ai-scope-active"));
       const activeAiInput = document.activeElement instanceof Element
         && Boolean(document.activeElement.closest(".ai-chat-page, .ai-scope-page"));
       const keyboardEditable = activeEditable && (!aiWorkspaceActive || activeAiInput);
@@ -1294,12 +1294,16 @@ export const App = () => {
 
   const pageKey = buildTabPageKey(activeTab, tabMemory, activeAiSessionId);
   const aiWorkspaceActive = activeTab === "more" && tabMemory.more.subRoute === "ai";
+  const podcastScopeActive = activeTab === "more"
+    && tabMemory.more.subRoute === "podcasts"
+    && tabMemory.more.podcastScreen === "scope";
 
   const shellClassName = [
     "app-shell",
     isDesktopPlatform() ? "desktop-app" : "",
     keyboardVisible ? "keyboard-open" : "",
     aiWorkspaceActive ? "ai-chat-active" : "",
+    podcastScopeActive ? "ai-scope-active" : "",
   ].filter(Boolean).join(" ");
   const showWebNavigationBack = !Capacitor.isNativePlatform()
     && getTabDepth(activeTab, tabMemory) > 0
@@ -1362,7 +1366,7 @@ export const App = () => {
             </button>
           </div>
         )}
-        {aiWorkspaceActive ? renderCurrentTab() : <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>}
+        {aiWorkspaceActive || podcastScopeActive ? renderCurrentTab() : <PageTransition pageKey={pageKey}>{renderCurrentTab()}</PageTransition>}
       </div>
       {backToast && (
         <div className="app-toast" role="status" aria-live="polite">

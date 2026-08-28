@@ -106,7 +106,8 @@ button:disabled {
   grid-template-columns: 260px minmax(0, 1fr);
 }
 
-.app-shell.ai-chat-active {
+.app-shell.ai-chat-active,
+.app-shell.ai-scope-active {
   height: 100vh;
   height: 100lvh;
   height: var(--ai-chat-viewport-height, 100lvh);
@@ -115,11 +116,13 @@ button:disabled {
 }
 
 .app-shell.ai-chat-active.keyboard-open:has(.ai-chat-page textarea:focus),
-.app-shell.ai-chat-active.keyboard-open:has(.ai-scope-page input:focus) {
+.app-shell.ai-chat-active.keyboard-open:has(.ai-scope-page input:focus),
+.app-shell.ai-scope-active.keyboard-open:has(.ai-scope-page input:focus) {
   height: var(--ai-chat-viewport-height, 100lvh);
 }
 
-.app-shell.ai-chat-active .content-area {
+.app-shell.ai-chat-active .content-area,
+.app-shell.ai-scope-active .content-area {
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -128,19 +131,23 @@ button:disabled {
 }
 
 .app-shell.ai-chat-active .page-transition-frame,
-.app-shell.ai-chat-active .page-transition-layer {
+.app-shell.ai-chat-active .page-transition-layer,
+.app-shell.ai-scope-active .page-transition-frame,
+.app-shell.ai-scope-active .page-transition-layer {
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
 .app-shell.ai-chat-active .content-area > .ai-chat-page.immersive,
-.app-shell.ai-chat-active .content-area > .ai-scope-page.immersive {
+.app-shell.ai-chat-active .content-area > .ai-scope-page.immersive,
+.app-shell.ai-scope-active .content-area > .ai-scope-page.immersive {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.app-shell.ai-chat-active .sidebar {
+.app-shell.ai-chat-active .sidebar,
+.app-shell.ai-scope-active .sidebar {
   height: 100%;
 }
 
@@ -4126,8 +4133,29 @@ button:disabled {
 }
 
 .ai-scope-page-records .ai-scope-page-content {
-  grid-template-rows: minmax(0, 1fr) auto;
-  overflow-y: hidden;
+  display: block;
+  overflow-y: auto;
+}
+
+/* Keep one touch scroll surface on the record tab. Nested scroll regions are
+   unreliable in Android WebView and leave only a narrow strip gestureable. */
+.ai-scope-page-records .ai-scope-record-picker {
+  display: block;
+  min-height: auto;
+}
+
+.ai-scope-page-records .ai-scope-record-picker > * + * {
+  margin-top: 10px;
+}
+
+.ai-scope-page-records .ai-scope-record-list {
+  max-height: none;
+  min-height: auto;
+  overflow: visible;
+}
+
+.ai-scope-page-records .ai-scope-page-content > .ai-scope-preview {
+  margin-top: 16px;
 }
 
 .ai-scope-mode-control {
@@ -4708,7 +4736,8 @@ button:disabled {
     backdrop-filter: blur(14px);
   }
 
-  .app-shell.ai-chat-active .bottom-nav {
+  .app-shell.ai-chat-active .bottom-nav,
+  .app-shell.ai-scope-active .bottom-nav {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;

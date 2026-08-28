@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Asset, RecordBlock, StreamableBackupSnapshot } from "../types";
+import type { Asset, KnowledgePodcast, RecordBlock, StorageSnapshot, StreamableBackupSnapshot } from "../types";
 
 type StoredRow = object;
 
@@ -51,6 +51,12 @@ class MemoryTable<T extends StoredRow> {
       }),
     };
   }
+
+  filter(predicate: (row: T) => boolean) {
+    return {
+      toArray: async () => Array.from(this.rows.values()).filter(predicate),
+    };
+  }
 }
 
 const stamp = "2026-06-21T00:00:00.000Z";
@@ -82,6 +88,116 @@ const oldAsset: Asset = {
   kind: "image",
   data: new Blob(["old"], { type: "image/png" }),
 };
+
+const podcastAudioAsset: Asset = {
+  id: "podcast-audio",
+  createdAt: stamp,
+  updatedAt: stamp,
+  fileName: "episode-01.mp3",
+  title: "第一章",
+  mimeType: "audio/mpeg",
+  size: 3,
+  kind: "audio",
+  generatedBy: "knowledge-podcast",
+  generatedForPodcastId: "podcast-1",
+  generatedForAudioUnitId: "unit-1",
+  durationSeconds: 12,
+  data: new Blob(["mp3"], { type: "audio/mpeg" }),
+};
+
+const podcastWithAudio: KnowledgePodcast = {
+  id: "podcast-1",
+  createdAt: stamp,
+  updatedAt: stamp,
+  title: "测试播客",
+  mode: "summary",
+  targetMinutes: 3,
+  scope: { kind: "date", date: "2026-06-21" },
+  sourceRecordIds: [],
+  contextHash: "context",
+  scriptStatus: "ready",
+  audioStatus: "ready",
+  opening: "开场",
+  segments: [{
+    id: "segment-1",
+    order: 0,
+    title: "第一章",
+    text: "正文",
+    sourceRecordIds: [],
+    textHash: "text",
+    audioAssetId: "podcast-audio",
+    audioStatus: "ready",
+    durationSeconds: 12,
+  }],
+  closing: "结尾",
+  audioLayoutVersion: 2,
+  audioUnits: [{
+    id: "unit-1",
+    kind: "segment",
+    order: 0,
+    title: "第一章",
+    segmentId: "segment-1",
+    textHash: "text",
+    audioAssetId: "podcast-audio",
+    audioStatus: "ready",
+    durationSeconds: 12,
+  }],
+  ttsConfig: { providerId: "google", model: "default", voiceId: "default", format: "mp3" },
+};
+
+const restorePayload = {
+  manifest: {
+    format: "study-journal" as const,
+    version: 5 as const,
+    exportedAt: stamp,
+    appVersion: "0.1.0",
+    counts: { entries: 0, blocks: 0, mistakes: 0, assets: 0, tags: 0, reviews: 0, studySessions: 0 },
+  },
+  entries: [],
+  blocks: [],
+  templates: [],
+  recordDrafts: [],
+  mistakes: [],
+  tags: [],
+  reviews: [],
+  recordReviews: [],
+  recordReviewLogs: [],
+  recordReviewDayStats: [],
+  studySessions: [],
+  settings: {
+    id: "settings" as const,
+    examDate: "2026-12-27" as const,
+    theme: "system" as const,
+    accentColor: "#2f6f5e",
+    backupReminderDays: 7,
+    fontScale: 1,
+    lineHeight: 1.7,
+    schemaVersion: 4 as const,
+  },
+};
+
+const createRestoreDb = (podcasts: KnowledgePodcast[] = [], assets: Asset[] = [podcastAudioAsset]) => ({
+  entries: new MemoryTable(),
+  blocks: new MemoryTable(),
+  templates: new MemoryTable(),
+  recordDrafts: new MemoryTable(),
+  recordReviews: new MemoryTable(),
+  recordReviewLogs: new MemoryTable(),
+  recordReviewDayStats: new MemoryTable(),
+  mistakes: new MemoryTable(),
+  tags: new MemoryTable(),
+  reviews: new MemoryTable(),
+  studySessions: new MemoryTable(),
+  settings: new MemoryTable<StoredRow>([restorePayload.settings]),
+  assets: new MemoryTable<StoredRow>(assets),
+  knowledgePodcasts: new MemoryTable<StoredRow>(podcasts),
+  cloudSyncMutation: new MemoryTable<StoredRow>([{ id: "local", epoch: 0 }]),
+  restoreStagingAssets: new MemoryTable<StoredRow>([], "stagingId"),
+  transaction: async (_mode: string, ...args: unknown[]) => {
+    const callback = args.at(-1) as () => Promise<unknown>;
+    return callback();
+  },
+});
 
 const snapshot: StreamableBackupSnapshot = {
   payload: {
@@ -205,5 +321,69 @@ describe("DexieStorageAdapter stream restore", () => {
     expect(nextSettings.schemaVersion).toBe(4);
     expect(nextSettings.subjects?.some((subject) => subject.name === "数学")).toBe(true);
     expect(await fakeDb.restoreStagingAssets.toArray()).toEqual([]);
+  });
+});
+
+describe("DexieStorageAdapter cloud restore", () => {
+  it("repairs podcast references that were cleared by an earlier restore", async () => {
+    vi.resetModules();
+    const damagedPodcast: KnowledgePodcast = {
+      ...podcastWithAudio,
+      audioStatus: "idle",
+      segments: podcastWithAudio.segments.map((segment) => ({ ...segment, audioAssetId: undefined, audioStatus: "pending", durationSeconds: undefined })),
+      audioUnits: podcastWithAudio.audioUnits?.map((unit) => ({ ...unit, audioAssetId: undefined, audioStatus: "pending", durationSeconds: undefined })),
+    };
+    const fakeDb = createRestoreDb([damagedPodcast]);
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+
+    await (adapter as unknown as { restoreKnowledgePodcastAudioReferences: () => Promise<void> }).restoreKnowledgePodcastAudioReferences();
+
+    expect(await fakeDb.knowledgePodcasts.get("podcast-1")).toMatchObject({
+      audioStatus: "ready",
+      audioUnits: [{ audioAssetId: "podcast-audio", audioStatus: "ready", durationSeconds: 12 }],
+      segments: [{ audioAssetId: "podcast-audio", audioStatus: "ready", durationSeconds: 12 }],
+    });
+  });
+
+  it("preserves local podcast audio references and assets", async () => {
+    vi.resetModules();
+    const fakeDb = createRestoreDb([podcastWithAudio]);
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+    const snapshot = {
+      payload: { ...restorePayload, podcasts: [] },
+      assets: [],
+    } as StorageSnapshot;
+
+    await adapter.restoreCloudSyncSnapshot(snapshot);
+
+    expect(await fakeDb.knowledgePodcasts.get("podcast-1")).toMatchObject({
+      audioStatus: "ready",
+      audioUnits: [{ audioAssetId: "podcast-audio", audioStatus: "ready" }],
+      segments: [{ audioAssetId: "podcast-audio", audioStatus: "ready" }],
+    });
+    expect(await fakeDb.assets.get("podcast-audio")).toEqual(podcastAudioAsset);
+  });
+
+  it("keeps ordinary backup restore normalization unchanged", async () => {
+    vi.resetModules();
+    const fakeDb = createRestoreDb();
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+    const snapshot = {
+      payload: { ...restorePayload, podcasts: [podcastWithAudio] },
+      assets: [],
+    } as StorageSnapshot;
+
+    await adapter.restoreSnapshot(snapshot);
+
+    const restored = await fakeDb.knowledgePodcasts.get("podcast-1") as unknown as KnowledgePodcast;
+    expect(restored).toMatchObject({ audioStatus: "idle", audioUnits: [{ audioStatus: "pending" }], segments: [{ audioStatus: "pending" }] });
+    expect(restored.audioUnits?.[0].audioAssetId).toBeUndefined();
+    expect(restored.segments[0].audioAssetId).toBeUndefined();
   });
 });

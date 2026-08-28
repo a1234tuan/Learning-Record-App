@@ -32,6 +32,7 @@ describe("DexieStorageAdapter initialization", () => {
       "migrateRecordReviewsToMixedSystem",
       "rebuildReviewProjectionFromEvents",
       "compactOldReviewLogs",
+      "restoreKnowledgePodcastAudioReferences",
       "resetStaleOcrJobs",
       "getOrCreateEntry",
     ] as const;
