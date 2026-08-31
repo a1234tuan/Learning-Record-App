@@ -13,9 +13,19 @@ import type {
   ContentTemplate,
   DayEntry,
   KnowledgePodcast,
+  KnowledgePoint,
+  KnowledgePointCoachSnapshot,
+  KnowledgePointExtractionRun,
+  KnowledgeRelation,
+  LearningCoachAiRun,
+  LearningCoachSettings,
+  LearningCoachSnapshot,
+  LearningCoachTask,
+  LearningEvidence,
   MistakeCard,
   RecordDraft,
   RecordBlock,
+  RecordKnowledgePointLink,
   RecordReviewBulkResult,
   RecordReviewDayStat,
   RecordReviewLog,
@@ -59,7 +69,7 @@ import {
   syncRecordRefsFromContent,
 } from "../lib/recordContent";
 import { normalizeRecordTags, sameRecordTags } from "../lib/recordTags";
-import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
+import { canonicalStudySubject, ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
 import { normalizeTtsConfig } from "../lib/ttsProviders";
 import {
@@ -73,6 +83,9 @@ import {
   normalizeLegacyRating,
   schedulerForKind,
 } from "../lib/reviewScheduler";
+import { cleanDuplicateLearningCoachTasks, learningCoachInterventionKey, normalizeLearningCoachTask } from "./learningCoachTaskService";
+import { isMeaningfulLearningRecord } from "../lib/learningFacts";
+import { normalizeKnowledgePointName, recordKnowledgeFingerprint } from "../lib/knowledgePointIdentity";
 
 const assetToMeta = (asset: Asset): BackupAssetMeta => {
   const { data: _data, ...meta } = asset;
@@ -124,6 +137,61 @@ const normalizeSnapshotPodcasts = (podcasts: KnowledgePodcast[] | undefined): Kn
       error: undefined,
     })),
   }));
+
+const createKnowledgePointLinkInTransaction = async (input: {
+  recordId: string;
+  subject: Subject;
+  name: string;
+  definition?: string;
+  role?: RecordKnowledgePointLink["role"];
+  sourceQuote?: string;
+  confirmationSource: RecordKnowledgePointLink["confirmationSource"];
+  existingKnowledgePointId?: string;
+}): Promise<{ knowledgePoint: KnowledgePoint; link: RecordKnowledgePointLink }> => {
+  const record = await db.blocks.get(input.recordId);
+  if (!record || record.type !== "record" || !isMeaningfulLearningRecord(record)) {
+    throw new Error("只有包含有效学习内容的正式记录才能关联知识点。");
+  }
+  const subject = canonicalStudySubject(input.subject);
+  if (canonicalStudySubject(record.subject) !== subject) throw new Error("知识点科目必须与来源记录一致。");
+  const name = input.name.trim();
+  const normalizedKey = normalizeKnowledgePointName(name);
+  if (!normalizedKey) throw new Error("知识点名称不能为空。");
+  const now = nowISO();
+  let point = input.existingKnowledgePointId ? await db.knowledgePoints.get(input.existingKnowledgePointId) : undefined;
+  if (point && (point.status !== "active" || canonicalStudySubject(point.subject) !== subject)) {
+    throw new Error("选择的知识点已不可用或科目不匹配。");
+  }
+  if (!point) {
+    point = await db.knowledgePoints.where("[subject+normalizedKey]").equals([subject, normalizedKey]).filter((item) => item.status === "active").first();
+  }
+  if (!point) {
+    point = { ...createBaseEntity(), subject, name, normalizedKey, aliases: [], definition: input.definition?.trim() || undefined, status: "active" };
+    await db.knowledgePoints.put(point);
+  }
+  const duplicate = await db.recordKnowledgePointLinks.where("[recordId+status]").equals([record.id, "active"]).filter((link) => link.knowledgePointId === point!.id).first();
+  if (duplicate) return { knowledgePoint: point, link: duplicate };
+  const link: RecordKnowledgePointLink = {
+    ...createBaseEntity(),
+    recordId: record.id,
+    knowledgePointId: point.id,
+    role: input.role ?? "primary",
+    sourceQuote: input.sourceQuote?.trim() || undefined,
+    recordFingerprint: recordKnowledgeFingerprint(record),
+    confirmationSource: input.confirmationSource,
+    confirmedAt: now,
+    status: "active",
+  };
+  await db.recordKnowledgePointLinks.put(link);
+  return { knowledgePoint: point, link };
+};
+
+const DEFAULT_LEARNING_COACH_SETTINGS: LearningCoachSettings = {
+  id: "learning-coach",
+  scenario: "general",
+  dashboardEnabled: false,
+  updatedAt: "1970-01-01T00:00:00.000Z",
+};
 
 const assertSnapshotIntegrity = (
   blocks: Block[],
@@ -314,6 +382,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await this.rebuildReviewProjectionFromEvents();
     await this.compactOldReviewLogs();
     await this.restoreKnowledgePodcastAudioReferences();
+    await this.cleanupDuplicateLearningCoachTasks();
     // Do not create today's entry during startup. A sync check must observe the
     // last confirmed local snapshot; the entry is created lazily by user flows.
     await this.resetStaleOcrJobs(10 * 60 * 1000);
@@ -1472,6 +1541,373 @@ export class DexieStorageAdapter implements StorageAdapter {
     return saved;
   }
 
+  async getLearningCoachSettings(): Promise<LearningCoachSettings> {
+    return (await db.learningCoachSettings.get("learning-coach")) ?? DEFAULT_LEARNING_COACH_SETTINGS;
+  }
+
+  async saveLearningCoachSettings(settings: LearningCoachSettings): Promise<LearningCoachSettings> {
+    // Local-only preference: do not mark a cloud mutation or touch AppSettings.
+    const saved = { ...settings, id: "learning-coach" as const, updatedAt: nowISO() };
+    await db.learningCoachSettings.put(saved);
+    return saved;
+  }
+
+  async listLearningEvidence(): Promise<LearningEvidence[]> {
+    return db.learningEvidence.orderBy("occurredAt").reverse().toArray();
+  }
+
+  async saveLearningEvidence(evidence: LearningEvidence): Promise<LearningEvidence> {
+    // Coach evidence has no cloud equivalent.
+    const saved = touch(evidence);
+    await db.learningEvidence.put(saved);
+    return saved;
+  }
+
+  async listLearningCoachSnapshots(): Promise<LearningCoachSnapshot[]> {
+    return db.learningCoachSnapshots.orderBy("date").reverse().toArray();
+  }
+
+  async getLearningCoachSnapshot(date: string): Promise<LearningCoachSnapshot | undefined> {
+    return db.learningCoachSnapshots.where("date").equals(date).first();
+  }
+
+  async saveLearningCoachSnapshot(snapshot: LearningCoachSnapshot): Promise<LearningCoachSnapshot> {
+    const existing = await db.learningCoachSnapshots.where("date").equals(snapshot.date).first();
+    const saved = touch({ ...snapshot, id: existing?.id ?? snapshot.id, createdAt: existing?.createdAt ?? snapshot.createdAt });
+    await db.learningCoachSnapshots.put(saved);
+    return saved;
+  }
+
+  async listLearningCoachTasks(): Promise<LearningCoachTask[]> {
+    return db.learningCoachTasks.orderBy("date").reverse().toArray();
+  }
+
+  async listLearningCoachAiRuns(): Promise<LearningCoachAiRun[]> {
+    return db.learningCoachAiRuns.orderBy("requestedAt").reverse().toArray();
+  }
+
+  async saveLearningCoachAiRun(run: LearningCoachAiRun): Promise<LearningCoachAiRun> {
+    const saved = touch(run);
+    await db.learningCoachAiRuns.put(saved);
+    const oldRuns = (await db.learningCoachAiRuns.orderBy("requestedAt").reverse().toArray()).slice(30);
+    if (oldRuns.length > 0) await db.learningCoachAiRuns.bulkDelete(oldRuns.map((item) => item.id));
+    return saved;
+  }
+
+  async listKnowledgePoints(): Promise<KnowledgePoint[]> {
+    return db.knowledgePoints.orderBy("updatedAt").reverse().toArray();
+  }
+
+  async listRecordKnowledgePointLinks(recordId?: string): Promise<RecordKnowledgePointLink[]> {
+    return recordId
+      ? db.recordKnowledgePointLinks.where("recordId").equals(recordId).toArray()
+      : db.recordKnowledgePointLinks.toArray();
+  }
+
+  async createKnowledgePointLink(input: Parameters<StorageAdapter["createKnowledgePointLink"]>[0]): Promise<{ knowledgePoint: KnowledgePoint; link: RecordKnowledgePointLink }> {
+    return db.transaction("rw", db.blocks, db.knowledgePoints, db.recordKnowledgePointLinks, () => createKnowledgePointLinkInTransaction(input));
+  }
+
+  async removeRecordKnowledgePointLink(linkId: string): Promise<RecordKnowledgePointLink | undefined> {
+    return db.transaction("rw", db.knowledgePoints, db.recordKnowledgePointLinks, async () => {
+      const link = await db.recordKnowledgePointLinks.get(linkId);
+      if (!link || link.status !== "active") return link;
+      const now = nowISO();
+      const saved = { ...link, status: "removed" as const, removedAt: now, removalReason: "user-unlinked" as const, updatedAt: now };
+      await db.recordKnowledgePointLinks.put(saved);
+      const remaining = await db.recordKnowledgePointLinks.where("[knowledgePointId+status]").equals([link.knowledgePointId, "active"]).count();
+      if (remaining === 0) {
+        const point = await db.knowledgePoints.get(link.knowledgePointId);
+        if (point?.status === "active") await db.knowledgePoints.put({ ...point, status: "archived", updatedAt: now });
+      }
+      return saved;
+    });
+  }
+
+  async mergeKnowledgePoints(sourceId: string, targetId: string): Promise<KnowledgePoint | undefined> {
+    if (sourceId === targetId) return db.knowledgePoints.get(sourceId);
+    return db.transaction("rw", db.knowledgePoints, db.recordKnowledgePointLinks, async () => {
+      const [source, target] = await Promise.all([db.knowledgePoints.get(sourceId), db.knowledgePoints.get(targetId)]);
+      if (!source || !target || source.status !== "active" || target.status !== "active") return undefined;
+      if (canonicalStudySubject(source.subject) !== canonicalStudySubject(target.subject)) throw new Error("只能合并同一科目的知识点。");
+      const now = nowISO();
+      const operationId = newId();
+      const aliasesAdded = [source.name, ...source.aliases].filter((alias) => !target.aliases.includes(alias) && alias !== target.name);
+      const sourceLinks = await db.recordKnowledgePointLinks.where("[knowledgePointId+status]").equals([source.id, "active"]).toArray();
+      for (const link of sourceLinks) {
+        const existingTarget = await db.recordKnowledgePointLinks.where("[recordId+status]").equals([link.recordId, "active"]).filter((item) => item.knowledgePointId === target.id).first();
+        let replacement = existingTarget;
+        if (!replacement) {
+          replacement = {
+            ...createBaseEntity(),
+            recordId: link.recordId,
+            knowledgePointId: target.id,
+            role: link.role,
+            sourceQuote: link.sourceQuote,
+            recordFingerprint: link.recordFingerprint,
+            confirmationSource: link.confirmationSource,
+            confirmedAt: now,
+            status: "active",
+            mergeOperationId: operationId,
+          };
+          await db.recordKnowledgePointLinks.put(replacement);
+        }
+        await db.recordKnowledgePointLinks.put({ ...link, status: "superseded", removedAt: now, removalReason: "knowledge-point-merge", supersededByLinkId: replacement.id, mergeOperationId: operationId, updatedAt: now });
+      }
+      await db.knowledgePoints.put({ ...target, aliases: [...target.aliases, ...aliasesAdded], updatedAt: now });
+      const merged = { ...source, status: "merged" as const, mergedIntoId: target.id, mergeOperationId: operationId, mergedAt: now, mergeAliasesAdded: aliasesAdded, updatedAt: now };
+      await db.knowledgePoints.put(merged);
+      return merged;
+    });
+  }
+
+  async undoKnowledgePointMerge(sourceId: string): Promise<KnowledgePoint | undefined> {
+    return db.transaction("rw", db.knowledgePoints, db.recordKnowledgePointLinks, async () => {
+      const source = await db.knowledgePoints.get(sourceId);
+      if (!source || source.status !== "merged" || !source.mergedIntoId || !source.mergeOperationId) return undefined;
+      const target = await db.knowledgePoints.get(source.mergedIntoId);
+      const now = nowISO();
+      const links = await db.recordKnowledgePointLinks.filter((link) => link.mergeOperationId === source.mergeOperationId).toArray();
+      for (const link of links) {
+        if (link.knowledgePointId === source.id && link.status === "superseded") {
+          await db.recordKnowledgePointLinks.put({ ...link, status: "active", removedAt: undefined, removalReason: "merge-undone", supersededByLinkId: undefined, mergeOperationId: undefined, updatedAt: now });
+        } else if (link.knowledgePointId === target?.id && link.status === "active") {
+          await db.recordKnowledgePointLinks.put({ ...link, status: "removed", removedAt: now, removalReason: "merge-undone", updatedAt: now });
+        }
+      }
+      if (target) {
+        const removedAliases = new Set(source.mergeAliasesAdded ?? []);
+        await db.knowledgePoints.put({ ...target, aliases: target.aliases.filter((alias) => !removedAliases.has(alias)), updatedAt: now });
+      }
+      const restored = { ...source, status: "active" as const, mergedIntoId: undefined, mergeOperationId: undefined, mergedAt: undefined, mergeAliasesAdded: undefined, updatedAt: now };
+      await db.knowledgePoints.put(restored);
+      return restored;
+    });
+  }
+
+  async listKnowledgePointExtractionRuns(recordId?: string): Promise<KnowledgePointExtractionRun[]> {
+    const runs = recordId ? await db.knowledgePointExtractionRuns.where("recordId").equals(recordId).toArray() : await db.knowledgePointExtractionRuns.toArray();
+    return runs.sort((left, right) => right.requestedAt.localeCompare(left.requestedAt));
+  }
+
+  async saveKnowledgePointExtractionRun(run: KnowledgePointExtractionRun): Promise<KnowledgePointExtractionRun> {
+    const saved = touch(run);
+    await db.knowledgePointExtractionRuns.put(saved);
+    return saved;
+  }
+
+  async decideKnowledgePointProposal(runId: string, proposalId: string, decision: "accepted" | "rejected", existingKnowledgePointId?: string): Promise<KnowledgePointExtractionRun | undefined> {
+    return db.transaction("rw", db.blocks, db.knowledgePoints, db.recordKnowledgePointLinks, db.knowledgePointExtractionRuns, async () => {
+      const run = await db.knowledgePointExtractionRuns.get(runId);
+      const proposal = run?.proposals.find((item) => item.id === proposalId);
+      if (!run || run.status !== "succeeded" || !proposal || proposal.decision !== "pending") return run;
+      const record = await db.blocks.get(run.recordId);
+      if (!record || record.type !== "record" || recordKnowledgeFingerprint(record) !== run.inputFingerprint) {
+        const stale = { ...run, status: "stale" as const, proposals: run.proposals.map((item) => item.decision === "pending" ? { ...item, decision: "stale" as const } : item), updatedAt: nowISO() };
+        await db.knowledgePointExtractionRuns.put(stale);
+        return stale;
+      }
+      const decidedAt = nowISO();
+      let formal: { knowledgePoint: KnowledgePoint; link: RecordKnowledgePointLink } | undefined;
+      if (decision === "accepted") {
+        formal = await createKnowledgePointLinkInTransaction({
+          recordId: run.recordId,
+          subject: run.subject,
+          name: proposal.name,
+          definition: proposal.definition,
+          sourceQuote: proposal.sourceQuote,
+          confirmationSource: "ai-proposal",
+          existingKnowledgePointId: existingKnowledgePointId ?? proposal.suggestedExistingKnowledgePointId,
+        });
+      }
+      const saved = {
+        ...run,
+        updatedAt: decidedAt,
+        proposals: run.proposals.map((item) => item.id === proposalId ? {
+          ...item,
+          decision,
+          decidedAt,
+          createdKnowledgePointId: formal?.knowledgePoint.id,
+          createdLinkId: formal?.link.id,
+        } : item),
+      };
+      await db.knowledgePointExtractionRuns.put(saved);
+      return saved;
+    });
+  }
+
+  async listKnowledgePointCoachSnapshots(): Promise<KnowledgePointCoachSnapshot[]> {
+    return db.knowledgePointCoachSnapshots.orderBy("date").reverse().toArray();
+  }
+
+  async getKnowledgePointCoachSnapshot(date: string): Promise<KnowledgePointCoachSnapshot | undefined> {
+    return db.knowledgePointCoachSnapshots.where("date").equals(date).first();
+  }
+
+  async saveKnowledgePointCoachSnapshot(snapshot: KnowledgePointCoachSnapshot): Promise<KnowledgePointCoachSnapshot> {
+    const existing = await db.knowledgePointCoachSnapshots.where("date").equals(snapshot.date).first();
+    const saved = touch({ ...snapshot, id: existing?.id ?? snapshot.id, createdAt: existing?.createdAt ?? snapshot.createdAt });
+    await db.knowledgePointCoachSnapshots.put(saved);
+    return saved;
+  }
+
+  async listKnowledgeRelations(): Promise<KnowledgeRelation[]> {
+    return db.knowledgeRelations.orderBy("updatedAt").reverse().toArray();
+  }
+
+  async saveKnowledgeRelation(relation: KnowledgeRelation): Promise<KnowledgeRelation> {
+    return db.transaction("rw", db.knowledgePoints, db.knowledgeRelations, async () => {
+      const [from, to] = await Promise.all([
+        db.knowledgePoints.get(relation.fromKnowledgePointId),
+        db.knowledgePoints.get(relation.toKnowledgePointId),
+      ]);
+      if (!from || !to || from.status !== "active" || to.status !== "active" || from.id === to.id) {
+        throw new Error("关系两端必须是不同的有效知识点。");
+      }
+      if (relation.type !== "prerequisite-of" || relation.status !== "confirmed") {
+        throw new Error("只能保存已确认的前置关系。");
+      }
+      if (!relation.sourceRefs || relation.sourceRefs.length === 0) {
+        throw new Error("确认关系前必须保留至少一条来源依据。");
+      }
+      const existing = await db.knowledgeRelations
+        .where("[fromKnowledgePointId+status]")
+        .equals([from.id, "confirmed"])
+        .filter((item) => item.toKnowledgePointId === to.id && item.type === relation.type)
+        .first();
+      if (existing) return existing;
+      const saved = touch({ ...relation, sourceRefs: relation.sourceRefs ?? [], origin: relation.origin ?? "user" });
+      await db.knowledgeRelations.put(saved);
+      return saved;
+    });
+  }
+
+  async retireKnowledgeRelation(relationId: string): Promise<KnowledgeRelation | undefined> {
+    const relation = await db.knowledgeRelations.get(relationId);
+    if (!relation || relation.status === "retired") return relation;
+    const saved = touch({ ...relation, status: "retired" as const, retiredAt: nowISO(), retirementReason: "user-revoked" as const });
+    await db.knowledgeRelations.put(saved);
+    return saved;
+  }
+
+  async decideKnowledgeRelationProposal(runId: string, proposalId: string, decision: "accepted" | "rejected"): Promise<LearningCoachAiRun | undefined> {
+    return db.transaction("rw", db.learningCoachAiRuns, db.knowledgePoints, db.knowledgeRelations, async () => {
+      const run = await db.learningCoachAiRuns.get(runId);
+      const proposal = run?.relationProposals?.find((item) => item.id === proposalId);
+      if (!run || run.status !== "succeeded" || !proposal || proposal.decision !== "pending") return run;
+      const [from, to] = await Promise.all([
+        db.knowledgePoints.get(proposal.fromKnowledgePointId),
+        db.knowledgePoints.get(proposal.toKnowledgePointId),
+      ]);
+      if (!from || !to || from.status !== "active" || to.status !== "active" || from.id === to.id) {
+        const stale = { ...run, relationProposals: run.relationProposals?.map((item) => item.id === proposalId ? { ...item, decision: "stale" as const } : item), updatedAt: nowISO() };
+        await db.learningCoachAiRuns.put(stale);
+        return stale;
+      }
+      const decidedAt = nowISO();
+      if (decision === "accepted") {
+        const existing = await db.knowledgeRelations
+          .where("[fromKnowledgePointId+status]")
+          .equals([from.id, "confirmed"])
+          .filter((item) => item.toKnowledgePointId === to.id && item.type === "prerequisite-of")
+          .first();
+        if (!existing) {
+          await db.knowledgeRelations.put({
+            ...createBaseEntity(),
+            fromKnowledgePointId: from.id,
+            toKnowledgePointId: to.id,
+            type: "prerequisite-of",
+            status: "confirmed",
+            sourceRefs: proposal.sourceRefs.length > 0 ? proposal.sourceRefs : [{ type: "knowledge-point", id: from.id }, { type: "knowledge-point", id: to.id }],
+            origin: "ai-proposal",
+            confirmedAt: decidedAt,
+          });
+        }
+      }
+      const saved = { ...run, relationProposals: run.relationProposals?.map((item) => item.id === proposalId ? { ...item, decision, decidedAt } : item), updatedAt: decidedAt };
+      await db.learningCoachAiRuns.put(saved);
+      return saved;
+    });
+  }
+
+  async saveLearningCoachTask(task: LearningCoachTask): Promise<LearningCoachTask> {
+    return db.transaction("rw", db.learningCoachTasks, async () => {
+      const normalized = normalizeLearningCoachTask({ ...task, interventionKey: task.interventionKey ?? learningCoachInterventionKey(task) });
+      if (normalized.replanKey) {
+        const existingReplan = await db.learningCoachTasks.where("replanKey").equals(normalized.replanKey).first();
+        if (existingReplan && existingReplan.id !== normalized.id) return existingReplan;
+      }
+      if (normalized.activeSlotKey) {
+        const existingActive = await db.learningCoachTasks.where("activeSlotKey").equals(normalized.activeSlotKey).first();
+        if (existingActive && existingActive.id !== normalized.id) return existingActive;
+      }
+      const existing = await db.learningCoachTasks.get(normalized.id);
+      const saved = existing && deepEqualIgnoring(existing, normalized, ["updatedAt"])
+        ? existing
+        : touch(normalized);
+      if (saved !== existing) await db.learningCoachTasks.put(saved);
+      return saved;
+    });
+  }
+
+  async cleanupDuplicateLearningCoachTasks(): Promise<{ scanned: number; duplicateGroups: number; cancelled: number; active: number }> {
+    return db.transaction("rw", db.learningCoachTasks, db.learningEvidence, db.recordReviewLogs, db.blocks, async () => {
+      const [tasks, evidence, reviewLogs, blocks] = await Promise.all([
+        db.learningCoachTasks.toArray(), db.learningEvidence.toArray(), db.recordReviewLogs.toArray(), db.blocks.toArray(),
+      ]);
+      const result = cleanDuplicateLearningCoachTasks({
+        tasks,
+        evidence,
+        reviewLogs,
+        records: blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt),
+        cleanedAt: nowISO(),
+      });
+      // Terminal rows release their unique slot before keepers claim it.
+      for (const task of result.tasks.filter((item) => item.status === "cancelled")) await db.learningCoachTasks.put(touch(task));
+      for (const task of result.tasks.filter((item) => item.status !== "cancelled")) {
+        const current = await db.learningCoachTasks.get(task.id);
+        if (!current || !deepEqualIgnoring(current, task, ["updatedAt"])) await db.learningCoachTasks.put(touch(task));
+      }
+      return {
+        scanned: tasks.length,
+        duplicateGroups: result.duplicateGroups,
+        cancelled: result.cancelled,
+        active: (await db.learningCoachTasks.toArray()).filter((item) => item.status === "pending" || item.status === "in-progress").length,
+      };
+    });
+  }
+
+  async updateLearningCoachTaskStatus(taskId: string, status: LearningCoachTask["status"]): Promise<LearningCoachTask | undefined> {
+    const task = await db.learningCoachTasks.get(taskId);
+    if (!task) return undefined;
+    const saved = touch(normalizeLearningCoachTask({ ...task, status }));
+    await db.learningCoachTasks.put(saved);
+    return saved;
+  }
+
+  async completeLearningCoachTask(
+    taskId: string,
+    status: "completed" | "skipped",
+    evidence: LearningEvidence,
+  ): Promise<LearningCoachTask | undefined> {
+    return db.transaction("rw", db.learningCoachTasks, db.learningEvidence, async () => {
+      const task = await db.learningCoachTasks.get(taskId);
+      if (!task || (task.status !== "pending" && task.status !== "in-progress")) return undefined;
+      const savedEvidence = touch(evidence);
+      const savedTask = touch({
+        ...task,
+        status,
+        activeSlotKey: undefined,
+        ...(status === "completed"
+          ? { completedEvidenceId: savedEvidence.id, completedAt: savedEvidence.occurredAt, completionEvidenceIds: [...(task.completionEvidenceIds ?? []), savedEvidence.id], completionEvidenceRefs: savedEvidence.supportingEvidenceRefs ?? [] }
+          : { skippedEvidenceId: savedEvidence.id, skippedAt: savedEvidence.occurredAt }),
+      });
+      await db.learningEvidence.put(savedEvidence);
+      await db.learningCoachTasks.put(savedTask);
+      return savedTask;
+    });
+  }
+
   async saveAsset(file: File, kind: Asset["kind"], title?: string): Promise<Asset> {
     const asset: Asset = {
       ...createBaseEntity(),
@@ -1763,9 +2199,9 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createSnapshot(): Promise<StorageSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts, db.learningCoachSettings, db.learningEvidence, db.learningCoachSnapshots, db.learningCoachTasks, db.learningCoachAiRuns, db.knowledgePoints, db.recordKnowledgePointLinks, db.knowledgePointExtractionRuns, db.knowledgePointCoachSnapshots, db.knowledgeRelations],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, learningCoachSettings, learningEvidence, learningCoachSnapshots, learningCoachTasks, learningCoachAiRuns, knowledgePoints, recordKnowledgePointLinks, knowledgePointExtractionRuns, knowledgePointCoachSnapshots, knowledgeRelations] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1778,8 +2214,18 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
           db.knowledgePodcasts.toArray(),
+          db.learningCoachSettings.get("learning-coach"),
+          db.learningEvidence.toArray(),
+          db.learningCoachSnapshots.toArray(),
+          db.learningCoachTasks.toArray(),
+          db.learningCoachAiRuns.toArray(),
+          db.knowledgePoints.toArray(),
+          db.recordKnowledgePointLinks.toArray(),
+          db.knowledgePointExtractionRuns.toArray(),
+          db.knowledgePointCoachSnapshots.toArray(),
+          db.knowledgeRelations.toArray(),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, learningCoachSettings, learningEvidence, learningCoachSnapshots, learningCoachTasks, learningCoachAiRuns, knowledgePoints, recordKnowledgePointLinks, knowledgePointExtractionRuns, knowledgePointCoachSnapshots, knowledgeRelations };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
@@ -1822,6 +2268,16 @@ export class DexieStorageAdapter implements StorageAdapter {
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
+        learningCoachSettings: snapshot.learningCoachSettings,
+        learningEvidence: snapshot.learningEvidence,
+        learningCoachSnapshots: snapshot.learningCoachSnapshots,
+        learningCoachTasks: snapshot.learningCoachTasks,
+        learningCoachAiRuns: snapshot.learningCoachAiRuns,
+        knowledgePoints: snapshot.knowledgePoints,
+        recordKnowledgePointLinks: snapshot.recordKnowledgePointLinks,
+        knowledgePointExtractionRuns: snapshot.knowledgePointExtractionRuns,
+        knowledgePointCoachSnapshots: snapshot.knowledgePointCoachSnapshots,
+        knowledgeRelations: snapshot.knowledgeRelations,
       },
       assets: backupAssets,
       recordDrafts: cleanedDrafts,
@@ -1829,15 +2285,19 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async createCloudSyncSnapshot(): Promise<StorageSnapshot> {
-    return this.createSnapshot();
+    const localSnapshot = await this.createSnapshot();
+    // The sync exporter is an allow-list, but strip local coach payloads here too so any future
+    // consumer of a cloud snapshot cannot accidentally observe them.
+    const { learningCoachSettings: _settings, learningEvidence: _evidence, learningCoachSnapshots: _snapshots, learningCoachTasks: _tasks, learningCoachAiRuns: _aiRuns, knowledgePoints: _points, recordKnowledgePointLinks: _links, knowledgePointExtractionRuns: _extractions, knowledgePointCoachSnapshots: _pointSnapshots, knowledgeRelations: _relations, ...cloudPayload } = localSnapshot.payload;
+    return { ...localSnapshot, payload: cloudPayload };
   }
 
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts, db.learningCoachSettings, db.learningEvidence, db.learningCoachSnapshots, db.learningCoachTasks, db.learningCoachAiRuns, db.knowledgePoints, db.recordKnowledgePointLinks, db.knowledgePointExtractionRuns, db.knowledgePointCoachSnapshots, db.knowledgeRelations],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, learningCoachSettings, learningEvidence, learningCoachSnapshots, learningCoachTasks, learningCoachAiRuns, knowledgePoints, recordKnowledgePointLinks, knowledgePointExtractionRuns, knowledgePointCoachSnapshots, knowledgeRelations] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1850,8 +2310,18 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
           db.knowledgePodcasts.toArray(),
+          db.learningCoachSettings.get("learning-coach"),
+          db.learningEvidence.toArray(),
+          db.learningCoachSnapshots.toArray(),
+          db.learningCoachTasks.toArray(),
+          db.learningCoachAiRuns.toArray(),
+          db.knowledgePoints.toArray(),
+          db.recordKnowledgePointLinks.toArray(),
+          db.knowledgePointExtractionRuns.toArray(),
+          db.knowledgePointCoachSnapshots.toArray(),
+          db.knowledgeRelations.toArray(),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, learningCoachSettings, learningEvidence, learningCoachSnapshots, learningCoachTasks, learningCoachAiRuns, knowledgePoints, recordKnowledgePointLinks, knowledgePointExtractionRuns, knowledgePointCoachSnapshots, knowledgeRelations };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
@@ -1894,6 +2364,16 @@ export class DexieStorageAdapter implements StorageAdapter {
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
+        learningCoachSettings: snapshot.learningCoachSettings,
+        learningEvidence: snapshot.learningEvidence,
+        learningCoachSnapshots: snapshot.learningCoachSnapshots,
+        learningCoachTasks: snapshot.learningCoachTasks,
+        learningCoachAiRuns: snapshot.learningCoachAiRuns,
+        knowledgePoints: snapshot.knowledgePoints,
+        recordKnowledgePointLinks: snapshot.recordKnowledgePointLinks,
+        knowledgePointExtractionRuns: snapshot.knowledgePointExtractionRuns,
+        knowledgePointCoachSnapshots: snapshot.knowledgePointCoachSnapshots,
+        knowledgeRelations: snapshot.knowledgeRelations,
       },
       assets,
       recordDrafts: cleanedDrafts,
@@ -1903,7 +2383,7 @@ export class DexieStorageAdapter implements StorageAdapter {
   private async restoreSnapshotData(
     snapshot: StorageSnapshot,
     expectedEpoch?: number,
-    options: { preservePodcasts?: boolean } = {},
+    options: { preservePodcasts?: boolean; preserveCoach?: boolean } = {},
   ): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
@@ -1929,6 +2409,16 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.settings,
         db.assets,
         db.knowledgePodcasts,
+        db.learningCoachSettings,
+        db.learningEvidence,
+        db.learningCoachSnapshots,
+        db.learningCoachTasks,
+        db.learningCoachAiRuns,
+        db.knowledgePoints,
+        db.recordKnowledgePointLinks,
+        db.knowledgePointExtractionRuns,
+        db.knowledgePointCoachSnapshots,
+        db.knowledgeRelations,
         db.cloudSyncMutation,
       ],
       async () => {
@@ -1951,6 +2441,18 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.settings.clear(),
           db.assets.clear(),
           db.knowledgePodcasts.clear(),
+          ...(options.preserveCoach || !db.learningCoachSettings ? [] : [
+            db.learningCoachSettings.clear(),
+            db.learningEvidence.clear(),
+            db.learningCoachSnapshots.clear(),
+            db.learningCoachTasks.clear(),
+            db.learningCoachAiRuns.clear(),
+            db.knowledgePoints.clear(),
+            db.recordKnowledgePointLinks.clear(),
+            db.knowledgePointExtractionRuns.clear(),
+            db.knowledgePointCoachSnapshots.clear(),
+            db.knowledgeRelations.clear(),
+          ]),
         ]);
         const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
         await Promise.all([
@@ -1966,12 +2468,28 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
           db.assets.bulkPut(snapshot.assets),
           db.knowledgePodcasts.bulkPut(restoredPodcasts),
+          ...(options.preserveCoach || !db.learningCoachSettings ? [] : [
+            snapshot.payload.learningCoachSettings
+              ? db.learningCoachSettings.put(snapshot.payload.learningCoachSettings)
+              : Promise.resolve(),
+            db.learningEvidence.bulkPut(snapshot.payload.learningEvidence ?? []),
+            db.learningCoachSnapshots.bulkPut(snapshot.payload.learningCoachSnapshots ?? []),
+            db.learningCoachTasks.bulkPut(snapshot.payload.learningCoachTasks ?? []),
+            db.learningCoachAiRuns.bulkPut(snapshot.payload.learningCoachAiRuns ?? []),
+            db.knowledgePoints.bulkPut(snapshot.payload.knowledgePoints ?? []),
+            db.recordKnowledgePointLinks.bulkPut(snapshot.payload.recordKnowledgePointLinks ?? []),
+            db.knowledgePointExtractionRuns.bulkPut(snapshot.payload.knowledgePointExtractionRuns ?? []),
+            db.knowledgePointCoachSnapshots.bulkPut(snapshot.payload.knowledgePointCoachSnapshots ?? []),
+            db.knowledgeRelations.bulkPut(snapshot.payload.knowledgeRelations ?? []),
+          ]),
           db.cloudSyncMutation.put({ id: "local", epoch: (currentEpoch?.epoch ?? 0) + 1 }),
         ]);
       },
     );
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
+    // A cloud restore must not write, normalize, or timestamp device-local Coach data.
+    if (!options.preserveCoach) await this.cleanupDuplicateLearningCoachTasks();
   }
 
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
@@ -1994,7 +2512,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...podcastAudioAssets,
       ],
     };
-    await this.restoreSnapshotData(mergedSnapshot, undefined, { preservePodcasts: true });
+    await this.restoreSnapshotData(mergedSnapshot, undefined, { preservePodcasts: true, preserveCoach: true });
   }
 
   async restoreCloudSyncSnapshotIfUnchanged(snapshot: StorageSnapshot, expectedEpoch: number): Promise<void> {
@@ -2010,7 +2528,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...podcastAudioAssets,
       ],
     };
-    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch, { preservePodcasts: true });
+    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch, { preservePodcasts: true, preserveCoach: true });
   }
 
   async restoreStreamableSnapshot(
@@ -2049,12 +2567,15 @@ export class DexieStorageAdapter implements StorageAdapter {
       await markCloudSyncMutation();
       await db.transaction(
         "rw",
-        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.restoreStagingAssets],
+        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.learningCoachSettings, db.learningEvidence, db.learningCoachSnapshots, db.learningCoachTasks, db.learningCoachAiRuns, db.knowledgePoints, db.recordKnowledgePointLinks, db.knowledgePointExtractionRuns, db.knowledgePointCoachSnapshots, db.knowledgeRelations, db.restoreStagingAssets],
         async () => {
           await Promise.all([
             db.entries.clear(), db.blocks.clear(), db.templates.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
             db.recordReviewDayStats.clear(), db.mistakes.clear(), db.tags.clear(), db.reviews.clear(), db.studySessions.clear(),
             db.settings.clear(), db.assets.clear(), db.knowledgePodcasts.clear(),
+            db.learningCoachSettings.clear(), db.learningEvidence.clear(), db.learningCoachSnapshots.clear(), db.learningCoachTasks.clear(), db.learningCoachAiRuns.clear(),
+            db.knowledgePoints.clear(), db.recordKnowledgePointLinks.clear(), db.knowledgePointExtractionRuns.clear(), db.knowledgePointCoachSnapshots.clear(),
+            db.knowledgeRelations.clear(),
           ]);
           await Promise.all([
             db.entries.bulkPut(snapshot.payload.entries),
@@ -2069,6 +2590,16 @@ export class DexieStorageAdapter implements StorageAdapter {
             db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
             db.assets.bulkPut(staged.map((entry) => entry.asset)),
             db.knowledgePodcasts.bulkPut(normalizeSnapshotPodcasts(snapshot.payload.podcasts)),
+            ...(snapshot.payload.learningCoachSettings ? [db.learningCoachSettings.put(snapshot.payload.learningCoachSettings)] : []),
+            db.learningEvidence.bulkPut(snapshot.payload.learningEvidence ?? []),
+            db.learningCoachSnapshots.bulkPut(snapshot.payload.learningCoachSnapshots ?? []),
+            db.learningCoachTasks.bulkPut(snapshot.payload.learningCoachTasks ?? []),
+            db.learningCoachAiRuns.bulkPut(snapshot.payload.learningCoachAiRuns ?? []),
+            db.knowledgePoints.bulkPut(snapshot.payload.knowledgePoints ?? []),
+            db.recordKnowledgePointLinks.bulkPut(snapshot.payload.recordKnowledgePointLinks ?? []),
+            db.knowledgePointExtractionRuns.bulkPut(snapshot.payload.knowledgePointExtractionRuns ?? []),
+            db.knowledgePointCoachSnapshots.bulkPut(snapshot.payload.knowledgePointCoachSnapshots ?? []),
+            db.knowledgeRelations.bulkPut(snapshot.payload.knowledgeRelations ?? []),
             db.restoreStagingAssets.where("sessionId").equals(sessionId).delete(),
           ]);
         },

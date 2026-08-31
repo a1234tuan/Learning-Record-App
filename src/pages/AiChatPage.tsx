@@ -25,7 +25,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AiMarkdown } from "../components/AiMarkdown";
-import type { AiChatAttachment, AiChatMessage, AiChatSession, AiKnowledgeScope, AppSettings, Asset, Block } from "../types";
+import type { AiChatAttachment, AiChatMessage, AiChatSession, AiKnowledgeScope, AppSettings, Asset, Block, LearningEvidence } from "../types";
 import { AiKnowledgeScopePicker } from "../components/AiKnowledgeScopePicker";
 import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
@@ -43,6 +43,7 @@ import { createAiImageAttachment, runLocalOcrForAiAttachment } from "../services
 import { createAiSessionForScope, titleFromFirstPrompt } from "../services/aiSessionService";
 import { DEFAULT_AI_MEMORY_TURNS, getCurrentAiProvider } from "../lib/aiProviders";
 import { pickNativeCameraImageFile, pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
+import { todayISO } from "../lib/date";
 
 interface AiChatPageProps {
   sessionId: string | null;
@@ -58,6 +59,7 @@ interface AiChatPageProps {
   onOpenScopeScreen: () => void;
   onBackFromScopeScreen: () => void;
   onOpenPodcastForScope: (scope: AiKnowledgeScope) => void;
+  onCoachQuizAccepted?: (taskId: string) => void;
 }
 
 const sortedPresets = (settings: AppSettings) =>
@@ -149,6 +151,7 @@ export const AiChatPage = ({
   onOpenScopeScreen,
   onBackFromScopeScreen,
   onOpenPodcastForScope,
+  onCoachQuizAccepted,
 }: AiChatPageProps) => {
   const [sessions, setSessions] = useState<AiChatSession[]>([]);
   const [session, setSession] = useState<AiChatSession | null>(null);
@@ -461,7 +464,7 @@ export const AiChatPage = ({
         attachment: freshAttachment,
       });
     }
-    const contextSession = freshAttachment
+    let contextSession = freshAttachment
       ? await storage.saveAiSession?.({
         ...titleSession,
         scope,
@@ -484,6 +487,26 @@ export const AiChatPage = ({
       attachmentIds: preparedImages.map((image) => image.id),
     };
     await storage.saveAiMessage?.(userMessage);
+    if (contextSession.coachQuiz?.questionMessageId && !contextSession.coachQuiz.answerEvidenceId) {
+      const evidence: LearningEvidence = {
+        ...createBaseEntity(),
+        date: todayISO(),
+        occurredAt: new Date().toISOString(),
+        kind: "quiz-answer",
+        origin: "local",
+        source: { type: "ai-session", id: contextSession.id },
+        ...(contextSession.coachQuiz.knowledgePointId
+          ? { target: { type: "knowledge-point" as const, id: contextSession.coachQuiz.knowledgePointId } }
+          : contextSession.coachQuiz.recordIds[0] ? { target: { type: "record" as const, id: contextSession.coachQuiz.recordIds[0] } } : {}),
+        payload: { answer: effectivePrompt, questionMessageId: contextSession.coachQuiz.questionMessageId },
+      };
+      const savedEvidence = await storage.saveLearningEvidence(evidence);
+      contextSession = await storage.saveAiSession?.({
+        ...contextSession,
+        coachQuiz: { ...contextSession.coachQuiz, answerEvidenceId: savedEvidence.id },
+      }) ?? contextSession;
+      setSession(contextSession);
+    }
     const savedPreparedImages = await Promise.all(preparedImages.map((image) =>
       storage.saveAiAttachment?.({ ...image, messageId: userMessage.id }) ?? { ...image, messageId: userMessage.id },
     ));
@@ -515,6 +538,23 @@ export const AiChatPage = ({
         content,
       };
       await storage.saveAiMessage?.(assistantMessage);
+      if (contextSession.coachQuiz && !contextSession.coachQuiz.questionMessageId) {
+        contextSession = await storage.saveAiSession?.({
+          ...contextSession,
+          coachQuiz: { ...contextSession.coachQuiz, questionMessageId: assistantMessage.id },
+        }) ?? contextSession;
+        setSession(contextSession);
+      } else if (contextSession.coachQuiz?.answerEvidenceId && !contextSession.coachQuiz.assessment) {
+        const suggestedOutcome = /needs-review|需(?:要)?复习|不够熟练|薄弱/u.test(content) ? "needs-review" as const : "satisfactory" as const;
+        contextSession = await storage.saveAiSession?.({
+          ...contextSession,
+          coachQuiz: {
+            ...contextSession.coachQuiz,
+            assessment: { assistantMessageId: assistantMessage.id, status: "proposed", suggestedOutcome },
+          },
+        }) ?? contextSession;
+        setSession(contextSession);
+      }
       const memorySummary = buildSessionMemorySummary([...visibleHistory, assistantMessage], provider?.memoryTurns ?? DEFAULT_AI_MEMORY_TURNS);
       if (memorySummary && memorySummary !== contextSession.memorySummary) {
         await storage.saveAiSession?.({ ...contextSession, memorySummary });
@@ -536,6 +576,33 @@ export const AiChatPage = ({
       setBusy(false);
       setStatus("");
     }
+  };
+
+  const acceptCoachQuizAssessment = async (accepted: boolean) => {
+    if (!session?.coachQuiz?.assessment || !session.coachQuiz.answerEvidenceId) return;
+    const assessment = session.coachQuiz.assessment;
+    if (assessment.status !== "proposed") return;
+    if (accepted) {
+      const evidence: LearningEvidence = {
+        ...createBaseEntity(),
+        date: todayISO(),
+        occurredAt: new Date().toISOString(),
+        kind: "quiz-assessment-confirmed",
+        origin: "user-confirmed-ai",
+        source: { type: "ai-session", id: session.id },
+        ...(session.coachQuiz.knowledgePointId
+          ? { target: { type: "knowledge-point" as const, id: session.coachQuiz.knowledgePointId } }
+          : session.coachQuiz.recordIds[0] ? { target: { type: "record" as const, id: session.coachQuiz.recordIds[0] } } : {}),
+        payload: { taskId: session.coachQuiz.taskId, outcome: assessment.suggestedOutcome, answerEvidenceId: session.coachQuiz.answerEvidenceId, assistantMessageId: assessment.assistantMessageId },
+      };
+      await storage.saveLearningEvidence(evidence);
+      if (session.coachQuiz.taskId) onCoachQuizAccepted?.(session.coachQuiz.taskId);
+    }
+    const saved = await storage.saveAiSession?.({
+      ...session,
+      coachQuiz: { ...session.coachQuiz, assessment: { ...assessment, status: accepted ? "accepted" : "rejected" } },
+    });
+    if (saved) setSession(saved);
   };
 
   const deleteSession = async (id: string) => {
@@ -633,6 +700,19 @@ export const AiChatPage = ({
             </button>
           </div>
         </header>
+
+        {session?.coachQuiz && (
+          <section className="coach-quiz-banner" aria-label="单题测验">
+            {!session.coachQuiz.questionMessageId ? <>
+              <span>已准备一项基于关联日志的单题测验。</span>
+              <button type="button" className="secondary-button" onClick={() => setInput("请基于当前日志只出 1 道定制测验题，不要先给答案，等待我作答后再批改。")}>生成题目</button>
+            </> : !session.coachQuiz.answerEvidenceId ? <span>请在下方输入你的答案并发送。首次作答会保存为本地学习证据。</span>
+              : session.coachQuiz.assessment?.status === "proposed" ? <>
+                <span>AI 已给出批改建议。采纳后才会作为学习证据影响后续诊断。</span>
+                <div><button type="button" className="secondary-button" onClick={() => void acceptCoachQuizAssessment(true)}>采纳反馈</button><button type="button" className="icon-button" title="忽略反馈" aria-label="忽略反馈" onClick={() => void acceptCoachQuizAssessment(false)}><X size={16} /></button></div>
+              </> : <span>{session.coachQuiz.assessment?.status === "accepted" ? "本次反馈已确认并保存。" : "本次 AI 反馈未采纳。"}</span>}
+          </section>
+        )}
 
         <section className="ai-conversation-area">
           <section

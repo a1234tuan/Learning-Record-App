@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Asset, KnowledgePodcast, RecordBlock, StorageSnapshot, StreamableBackupSnapshot } from "../types";
+import type { Asset, KnowledgePoint, KnowledgePointCoachSnapshot, KnowledgePointExtractionRun, KnowledgePodcast, LearningCoachAiRun, LearningCoachSettings, LearningCoachSnapshot, LearningCoachTask, LearningEvidence, RecordBlock, RecordKnowledgePointLink, StorageSnapshot, StreamableBackupSnapshot } from "../types";
 
 type StoredRow = object;
 
@@ -191,6 +191,16 @@ const createRestoreDb = (podcasts: KnowledgePodcast[] = [], assets: Asset[] = [p
   settings: new MemoryTable<StoredRow>([restorePayload.settings]),
   assets: new MemoryTable<StoredRow>(assets),
   knowledgePodcasts: new MemoryTable<StoredRow>(podcasts),
+  learningCoachSettings: new MemoryTable<LearningCoachSettings>(),
+  learningEvidence: new MemoryTable<LearningEvidence>(),
+  learningCoachSnapshots: new MemoryTable<LearningCoachSnapshot>(),
+  learningCoachTasks: new MemoryTable<LearningCoachTask>(),
+  learningCoachAiRuns: new MemoryTable<LearningCoachAiRun>(),
+  knowledgePoints: new MemoryTable(),
+  recordKnowledgePointLinks: new MemoryTable(),
+  knowledgePointExtractionRuns: new MemoryTable(),
+  knowledgePointCoachSnapshots: new MemoryTable(),
+  knowledgeRelations: new MemoryTable(),
   cloudSyncMutation: new MemoryTable<StoredRow>([{ id: "local", epoch: 0 }]),
   restoreStagingAssets: new MemoryTable<StoredRow>([], "stagingId"),
   transaction: async (_mode: string, ...args: unknown[]) => {
@@ -325,6 +335,42 @@ describe("DexieStorageAdapter stream restore", () => {
 });
 
 describe("DexieStorageAdapter cloud restore", () => {
+  it("preserves local coach data when applying a cloud snapshot", async () => {
+    vi.resetModules();
+    const fakeDb = createRestoreDb([], []);
+    const localSettings: LearningCoachSettings = { id: "learning-coach", scenario: "postgraduate-exam", dashboardEnabled: true, updatedAt: stamp };
+    const localEvidence: LearningEvidence = { id: "local-evidence", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", occurredAt: stamp, kind: "task-completed", origin: "local", source: { type: "coach-task", id: "local-task" }, payload: {} };
+    const localSnapshot: LearningCoachSnapshot = { id: "local-snapshot", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", scenario: "postgraduate-exam", inputFingerprint: "fp", localSummary: { dueReviews: 0, overdueReviews: 0, pendingTasks: 1, studyMinutesLast7Days: 0, recordCountLast7Days: 0 }, diagnoses: [], taskIds: ["local-task"] };
+    const localTask: LearningCoachTask = { id: "local-task", createdAt: stamp, updatedAt: stamp, snapshotId: "local-snapshot", date: "2026-06-21", kind: "practice", source: "rule", status: "pending", priority: 2, reasonCode: "subject-gap", title: "本机任务", recordIds: [] };
+    const localAiRun: LearningCoachAiRun = { id: "local-ai-run", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", snapshotId: "local-snapshot", inputFingerprint: "fp", issueKeys: [], status: "succeeded", sourceRecords: [], requestedAt: stamp, completedAt: stamp, analysis: "本机分析" };
+    const localPoint: KnowledgePoint = { id: "local-kp", createdAt: stamp, updatedAt: stamp, subject: "计网", name: "IPv4", normalizedKey: "ipv4", aliases: [], status: "active" };
+    const localLink: RecordKnowledgePointLink = { id: "local-kp-link", createdAt: stamp, updatedAt: stamp, recordId: "record-1", knowledgePointId: localPoint.id, role: "primary", recordFingerprint: "fp", confirmationSource: "manual", confirmedAt: stamp, status: "active" };
+    const localExtraction: KnowledgePointExtractionRun = { id: "local-kp-run", createdAt: stamp, updatedAt: stamp, recordId: "record-1", subject: "计网", inputFingerprint: "fp", catalogFingerprint: "catalog", status: "succeeded", requestedAt: stamp, completedAt: stamp, proposals: [] };
+    const localPointSnapshot: KnowledgePointCoachSnapshot = { id: "local-kp-snapshot", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", evaluatedAt: stamp, inputFingerprint: "kp-fp", states: [], diagnoses: [], taskIds: [] };
+    await fakeDb.learningCoachSettings.put(localSettings);
+    await fakeDb.learningEvidence.put(localEvidence);
+    await fakeDb.learningCoachSnapshots.put(localSnapshot);
+    await fakeDb.learningCoachTasks.put(localTask);
+    await fakeDb.learningCoachAiRuns.put(localAiRun);
+    await fakeDb.knowledgePoints.put(localPoint);
+    await fakeDb.recordKnowledgePointLinks.put(localLink);
+    await fakeDb.knowledgePointExtractionRuns.put(localExtraction);
+    await fakeDb.knowledgePointCoachSnapshots.put(localPointSnapshot);
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+    await adapter.restoreCloudSyncSnapshot({ payload: { ...restorePayload, learningCoachSettings: { id: "learning-coach", scenario: "general", dashboardEnabled: false, updatedAt: "2099-01-01T00:00:00.000Z" }, learningEvidence: [], learningCoachSnapshots: [], learningCoachTasks: [], learningCoachAiRuns: [], knowledgePoints: [], recordKnowledgePointLinks: [], knowledgePointExtractionRuns: [], knowledgePointCoachSnapshots: [] }, assets: [] } as StorageSnapshot);
+    expect(await fakeDb.learningCoachSettings.get("learning-coach")).toEqual(localSettings);
+    expect(await fakeDb.learningEvidence.get("local-evidence")).toEqual(localEvidence);
+    expect(await fakeDb.learningCoachSnapshots.get("local-snapshot")).toEqual(localSnapshot);
+    expect(await fakeDb.learningCoachTasks.get("local-task")).toEqual(localTask);
+    expect(await fakeDb.learningCoachAiRuns.get("local-ai-run")).toEqual(localAiRun);
+    expect(await fakeDb.knowledgePoints.get(localPoint.id)).toEqual(localPoint);
+    expect(await fakeDb.recordKnowledgePointLinks.get(localLink.id)).toEqual(localLink);
+    expect(await fakeDb.knowledgePointExtractionRuns.get(localExtraction.id)).toEqual(localExtraction);
+    expect(await fakeDb.knowledgePointCoachSnapshots.get(localPointSnapshot.id)).toEqual(localPointSnapshot);
+  });
+
   it("repairs podcast references that were cleared by an earlier restore", async () => {
     vi.resetModules();
     const damagedPodcast: KnowledgePodcast = {
@@ -385,5 +431,49 @@ describe("DexieStorageAdapter cloud restore", () => {
     expect(restored).toMatchObject({ audioStatus: "idle", audioUnits: [{ audioStatus: "pending" }], segments: [{ audioStatus: "pending" }] });
     expect(restored.audioUnits?.[0].audioAssetId).toBeUndefined();
     expect(restored.segments[0].audioAssetId).toBeUndefined();
+  });
+});
+
+describe("DexieStorageAdapter local backup restore", () => {
+  it("restores local coach entities from a complete backup", async () => {
+    vi.resetModules();
+    const fakeDb = createRestoreDb([], []);
+    const coachTask: LearningCoachTask = {
+      id: "backup-task", createdAt: stamp, updatedAt: stamp, snapshotId: "backup-snapshot", date: "2026-06-21",
+      kind: "practice", source: "rule", status: "completed", priority: 2, reasonCode: "subject-gap", title: "备份任务", recordIds: [],
+    };
+    const coachEvidence: LearningEvidence = {
+      id: "backup-evidence", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", occurredAt: stamp,
+      kind: "task-outcome", origin: "local", source: { type: "coach-task", id: coachTask.id }, payload: { taskId: coachTask.id },
+    };
+    const coachSnapshot: LearningCoachSnapshot = {
+      id: "backup-snapshot", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", scenario: "general", inputFingerprint: "backup-fp",
+      localSummary: { dueReviews: 0, overdueReviews: 0, pendingTasks: 0, studyMinutesLast7Days: 0, recordCountLast7Days: 0 }, diagnoses: [], taskIds: [coachTask.id],
+    };
+    const backupPoint: KnowledgePoint = { id: "backup-kp", createdAt: stamp, updatedAt: stamp, subject: "计网", name: "IPv4", normalizedKey: "ipv4", aliases: [], status: "active" };
+    const backupLink: RecordKnowledgePointLink = { id: "backup-link", createdAt: stamp, updatedAt: stamp, recordId: "record-1", knowledgePointId: backupPoint.id, role: "primary", recordFingerprint: "fp", confirmationSource: "manual", confirmedAt: stamp, status: "active" };
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+    await adapter.restoreSnapshot({
+      payload: {
+        ...restorePayload,
+        learningCoachSettings: { id: "learning-coach", scenario: "general", dashboardEnabled: true, updatedAt: stamp },
+        learningEvidence: [coachEvidence],
+        learningCoachSnapshots: [coachSnapshot],
+        learningCoachTasks: [coachTask],
+        learningCoachAiRuns: [],
+        knowledgePoints: [backupPoint],
+        recordKnowledgePointLinks: [backupLink],
+        knowledgePointExtractionRuns: [],
+        knowledgePointCoachSnapshots: [],
+      },
+      assets: [],
+    } as StorageSnapshot);
+    expect(await fakeDb.learningEvidence.get(coachEvidence.id)).toEqual(coachEvidence);
+    expect(await fakeDb.learningCoachSnapshots.get(coachSnapshot.id)).toEqual(coachSnapshot);
+    expect(await fakeDb.learningCoachTasks.get(coachTask.id)).toEqual(coachTask);
+    expect(await fakeDb.knowledgePoints.get(backupPoint.id)).toEqual(backupPoint);
+    expect(await fakeDb.recordKnowledgePointLinks.get(backupLink.id)).toEqual(backupLink);
   });
 });

@@ -108,6 +108,35 @@ const snapshot: StorageSnapshot = {
 };
 
 describe("cloud sync model", () => {
+  it("never exports local learning coach data", async () => {
+    const localOnly: StorageSnapshot = {
+      ...snapshot,
+      payload: {
+        ...snapshot.payload,
+        learningCoachSettings: { id: "learning-coach", scenario: "general", dashboardEnabled: true, updatedAt: stamp },
+        learningEvidence: [{
+          id: "evidence-1", createdAt: stamp, updatedAt: stamp, date: "2026-08-05", occurredAt: stamp,
+          kind: "task-completed", origin: "local", source: { type: "coach-task", id: "task-1" }, payload: {},
+        }],
+        learningCoachSnapshots: [],
+        learningCoachTasks: [],
+        learningCoachAiRuns: [{
+          id: "run-1", createdAt: stamp, updatedAt: stamp, date: "2026-08-05", snapshotId: "snapshot-1", inputFingerprint: "fp",
+          issueKeys: [], status: "succeeded", sourceRecords: [], requestedAt: stamp, completedAt: stamp, analysis: "建议",
+        }],
+        knowledgePoints: [{ id: "kp-1", createdAt: stamp, updatedAt: stamp, subject: "OS", name: "进程切换", normalizedKey: "进程切换", aliases: [], status: "active" }],
+        recordKnowledgePointLinks: [{ id: "kp-link-1", createdAt: stamp, updatedAt: stamp, recordId: record.id, knowledgePointId: "kp-1", role: "primary", recordFingerprint: "record-fp", confirmationSource: "manual", confirmedAt: stamp, status: "active" }],
+        knowledgePointExtractionRuns: [{ id: "kp-run-1", createdAt: stamp, updatedAt: stamp, recordId: record.id, subject: "OS", inputFingerprint: "record-fp", catalogFingerprint: "catalog-fp", status: "succeeded", requestedAt: stamp, completedAt: stamp, proposals: [] }],
+        knowledgePointCoachSnapshots: [{ id: "kp-snapshot-1", createdAt: stamp, updatedAt: stamp, date: "2026-08-05", evaluatedAt: stamp, inputFingerprint: "kp-fp", states: [], diagnoses: [], taskIds: [] }],
+      },
+    };
+    const plain = await exportCloudSync(snapshot);
+    const exported = await exportCloudSync(localOnly);
+    expect(exported.entities).toEqual(plain.entities);
+    expect(exported.reviewEvents).toEqual(plain.reviewEvents);
+    expect(exported.entities.some((entity) => entity.key.includes("coach") || entity.key.includes("evidence"))).toBe(false);
+  });
+
   it("keeps asset bytes out of entity payloads and restores them by content hash", async () => {
     const exported = await exportCloudSync(snapshot);
     const asset = exported.entities.find((entity) => entity.entityType === "asset");

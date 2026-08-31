@@ -403,6 +403,20 @@ export interface AiChatSession extends BaseEntity {
   attachment?: AiContextPack;
   memorySummary?: string;
   lastContextHash?: string;
+  /** Local-only metadata for the learning coach single-question flow. */
+  coachQuiz?: {
+    taskId?: EntityId;
+    knowledgePointId?: EntityId;
+    recordIds: EntityId[];
+    contextFingerprint: string;
+    questionMessageId?: EntityId;
+    answerEvidenceId?: EntityId;
+    assessment?: {
+      assistantMessageId: EntityId;
+      status: "proposed" | "accepted" | "rejected";
+      suggestedOutcome: "needs-review" | "satisfactory";
+    };
+  };
 }
 
 export interface AiCompletionUsage {
@@ -722,6 +736,352 @@ export interface StudySession extends BaseEntity {
   blockId?: EntityId;
 }
 
+export type LearningScenario = "general" | "postgraduate-exam";
+export type PostgraduateExamStage = "基础" | "强化" | "刷题" | "冲刺";
+export type LearningCoachDiagnosisCode =
+  | "profile-incomplete"
+  | "review-overdue"
+  | "review-due"
+  | "task-carryover"
+  | "subject-gap"
+  | "subject-imbalance"
+  | "quiz-follow-up"
+  | "kp-assessment-needs-review"
+  | "kp-linked-review-overdue";
+
+/** Kept in a local-only table so coach preferences never affect cloud settings sync. */
+export interface LearningCoachSettings {
+  id: "learning-coach";
+  scenario: LearningScenario;
+  dashboardEnabled: boolean;
+  postgraduateExamProfile?: {
+    examDate: ISODate;
+    weeklyAvailableMinutes: number;
+    stages: Partial<Record<"数学" | "政治" | "英语" | "408", PostgraduateExamStage>>;
+  };
+  updatedAt: ISODateTime;
+}
+
+export interface LearningEvidence extends BaseEntity {
+  date: ISODate;
+  occurredAt: ISODateTime;
+  subject?: Subject;
+  kind: "task-started" | "task-outcome" | "task-completed" | "task-skipped" | "quiz-answer" | "quiz-assessment-confirmed";
+  origin: "local" | "user-confirmed-ai";
+  source: { type: "coach-task" | "ai-session" | "record" | "review-log"; id: EntityId };
+  target?: { type: "record" | "knowledge-point"; id: EntityId };
+  supportingEvidenceRefs?: LearningCoachEvidenceRef[];
+  payload: Record<string, unknown>;
+}
+
+export type LearningCoachIssueStatus = "new" | "ongoing" | "improved" | "resolved";
+export type LearningCoachEvidenceRefType = "record" | "study-session" | "review-state" | "review-log" | "learning-evidence" | "coach-task" | "knowledge-point" | "record-knowledge-point-link";
+
+export interface LearningCoachEvidenceRef {
+  type: LearningCoachEvidenceRefType;
+  id: EntityId;
+}
+
+export interface LearningCoachDiagnosis {
+  issueKey?: string;
+  code: LearningCoachDiagnosisCode;
+  status?: LearningCoachIssueStatus;
+  priority: 1 | 2 | 3;
+  subject?: Subject;
+  recordIds: EntityId[];
+  message: string;
+  /** Human-readable explanation of the deterministic condition. */
+  reason?: string;
+  metric?: { current: number; threshold: number; unit: string; direction: "above" | "below" };
+  evidenceRefs?: LearningCoachEvidenceRef[];
+  firstDetectedAt?: ISODateTime;
+  lastEvaluatedAt?: ISODateTime;
+  resolvedAt?: ISODateTime;
+  lastStatusChangedAt?: ISODateTime;
+  lastRelevantInputFingerprint?: string;
+  interventionState?: "actionable" | "in-progress" | "awaiting-new-evidence" | "satisfied";
+  latestIntervention?: {
+    taskId: EntityId;
+    interventionKey?: string;
+    outcomeEvidenceId?: EntityId;
+    outcome?: "completed" | "skipped";
+    occurredAt: ISODateTime;
+  };
+  resolutionEvidenceRefs?: LearningCoachEvidenceRef[];
+  statusHistory?: Array<{ status: LearningCoachIssueStatus; occurredAt: ISODateTime; evidenceRefs?: LearningCoachEvidenceRef[] }>;
+  deferredUntil?: ISODate;
+  deferReason?: LearningCoachSkipReason;
+  /** Phase 2 refinement metadata. Record-level diagnoses leave these fields absent. */
+  level?: "record" | "knowledge-point";
+  knowledgePointId?: EntityId;
+  parentIssueKey?: string;
+}
+
+/** A user-confirmed directional dependency used only by the Phase 3 decision layer. */
+export interface KnowledgeRelation extends BaseEntity {
+  fromKnowledgePointId: EntityId;
+  toKnowledgePointId: EntityId;
+  type: "prerequisite-of";
+  status: "confirmed" | "retired";
+  sourceRefs: LearningCoachEvidenceRef[];
+  origin: "user" | "ai-proposal";
+  confirmedAt: ISODateTime;
+  retiredAt?: ISODateTime;
+  retirementReason?: "user-revoked" | "endpoint-invalid";
+}
+
+export interface LearningCoachDecisionFactor {
+  issueKey: string;
+  knowledgePointId?: EntityId;
+  tier: 1 | 2 | 3 | 4 | 5 | 6;
+  activeChildIssueCount: number;
+  overdueReviewCount: number;
+  firstDetectedAt?: ISODateTime;
+  interventionState?: LearningCoachDiagnosis["interventionState"];
+  hasNewStrongEvidence: boolean;
+  hasExecutableTask: boolean;
+}
+
+/** Snapshot-scoped recommendation; it is not a diagnosis or an official fact. */
+export interface LearningCoachDecision {
+  status: "recommended" | "no-action";
+  recommendedKnowledgePointId?: EntityId;
+  recommendedTaskId?: EntityId;
+  priorityRationale: string;
+  supportingIssueKeys: string[];
+  supportingRelationIds: EntityId[];
+  decisionInputsFingerprint: string;
+  policyVersion: number;
+  evaluatedAt: ISODateTime;
+  consideredIssueKeys?: string[];
+  factors?: LearningCoachDecisionFactor[];
+}
+
+export interface KnowledgeRelationProposal {
+  id: EntityId;
+  fromKnowledgePointId: EntityId;
+  toKnowledgePointId: EntityId;
+  type: "prerequisite-of";
+  rationale: string;
+  sourceRefs: LearningCoachEvidenceRef[];
+  decision: "pending" | "accepted" | "rejected" | "stale";
+  decidedAt?: ISODateTime;
+}
+
+/** A stable, user-confirmed concept. It is never an AI-inferred mastery state. */
+export interface KnowledgePoint extends BaseEntity {
+  subject: Subject;
+  name: string;
+  normalizedKey: string;
+  aliases: string[];
+  definition?: string;
+  status: "active" | "merged" | "archived";
+  mergedIntoId?: EntityId;
+  mergeOperationId?: EntityId;
+  mergedAt?: ISODateTime;
+  mergeAliasesAdded?: string[];
+}
+
+/** Formal provenance between an official Record fact and a confirmed KnowledgePoint. */
+export interface RecordKnowledgePointLink extends BaseEntity {
+  recordId: EntityId;
+  knowledgePointId: EntityId;
+  role: "primary" | "supporting";
+  sourceQuote?: string;
+  recordFingerprint: string;
+  confirmationSource: "manual" | "ai-proposal";
+  confirmedAt: ISODateTime;
+  status: "active" | "removed" | "superseded";
+  removedAt?: ISODateTime;
+  removalReason?: "user-unlinked" | "knowledge-point-merge" | "merge-undone";
+  supersededByLinkId?: EntityId;
+  mergeOperationId?: EntityId;
+}
+
+export interface KnowledgePointProposal {
+  id: EntityId;
+  name: string;
+  normalizedKey: string;
+  definition?: string;
+  sourceQuote: string;
+  suggestedExistingKnowledgePointId?: EntityId;
+  decision: "pending" | "accepted" | "rejected" | "stale";
+  decidedAt?: ISODateTime;
+  createdKnowledgePointId?: EntityId;
+  createdLinkId?: EntityId;
+}
+
+/** A user-triggered, single-Record AI extraction run. Proposals are not formal data. */
+export interface KnowledgePointExtractionRun extends BaseEntity {
+  recordId: EntityId;
+  subject: Subject;
+  inputFingerprint: string;
+  catalogFingerprint: string;
+  status: "running" | "succeeded" | "failed" | "stale";
+  phase?: "preparing-context" | "calling-provider" | "validating-result";
+  requestedAt: ISODateTime;
+  completedAt?: ISODateTime;
+  proposals: KnowledgePointProposal[];
+  error?: string;
+}
+
+export interface KnowledgePointDerivedState {
+  knowledgePointId: EntityId;
+  subject: Subject;
+  linkedRecordIds: EntityId[];
+  latestCoveredDate?: ISODate;
+  dueReviewRecordIds: EntityId[];
+  overdueReviewRecordIds: EntityId[];
+  latestAssessment?: {
+    outcome: "needs-review" | "satisfactory";
+    evidenceId: EntityId;
+    occurredAt: ISODateTime;
+  };
+  latestInterventionTaskId?: EntityId;
+  latestInterventionEvidenceId?: EntityId;
+}
+
+/** Traceable derived projection; never an official fact or stored mastery score. */
+export interface KnowledgePointCoachSnapshot extends BaseEntity {
+  date: ISODate;
+  inputFingerprint: string;
+  evaluatedAt: ISODateTime;
+  states: KnowledgePointDerivedState[];
+  diagnoses: LearningCoachDiagnosis[];
+  taskIds: EntityId[];
+  previousSnapshotId?: EntityId;
+}
+
+export interface LearningCoachSubjectState {
+  subject: Subject;
+  lastActivityDate?: ISODate;
+  recordCountLast7Days: number;
+  studyMinutesLast7Days: number;
+  dueReviewCount: number;
+  overdueReviewCount: number;
+  latestConfirmedQuizOutcome?: "needs-review" | "satisfactory";
+}
+
+export type LearningCoachTaskActionType = "review-queue" | "ai-quiz" | "create-record";
+export type LearningCoachSkipReason = "no-time" | "too-large" | "not-relevant" | "other";
+
+export interface LearningCoachTaskAction {
+  type: LearningCoachTaskActionType;
+  subject?: Subject;
+  recordIds: EntityId[];
+  createdRecordId?: EntityId;
+  knowledgePointId?: EntityId;
+}
+
+export interface LearningCoachCompletionPolicy {
+  type: "review-logs" | "confirmed-quiz" | "meaningful-record" | "meaningful-record-with-knowledge-point-link";
+  targetRecordIds?: EntityId[];
+  knowledgePointId?: EntityId;
+}
+
+export interface LearningCoachLocalSummary {
+  dueReviews: number;
+  overdueReviews: number;
+  pendingTasks: number;
+  studyMinutesLast7Days: number;
+  recordCountLast7Days: number;
+  examDaysRemaining?: number;
+}
+
+export interface LearningCoachTaskCandidate {
+  issueKey?: string;
+  subject?: Subject;
+  kind: "review" | "revisit-record" | "practice";
+  title: string;
+  recordIds: EntityId[];
+  reason: string;
+  actionLabel?: string;
+  action?: LearningCoachTaskAction;
+}
+
+export interface LearningCoachSnapshot extends BaseEntity {
+  date: ISODate;
+  scenario: LearningScenario;
+  inputFingerprint: string;
+  localSummary: LearningCoachLocalSummary;
+  diagnoses: LearningCoachDiagnosis[];
+  taskIds: EntityId[];
+  evaluatedAt?: ISODateTime;
+  previousSnapshotId?: EntityId;
+  subjectStates?: LearningCoachSubjectState[];
+  changes?: Record<LearningCoachIssueStatus, string[]>;
+  aiRunIds?: EntityId[];
+  aiAnalysis?: {
+    status: "idle" | "success" | "failed";
+    inputFingerprint: string;
+    generatedAt?: ISODateTime;
+    content?: string;
+    candidateTasks?: LearningCoachTaskCandidate[];
+    error?: string;
+  };
+  decision?: LearningCoachDecision;
+}
+
+export interface LearningCoachTask extends BaseEntity {
+  snapshotId: EntityId;
+  date: ISODate;
+  subject?: Subject;
+  kind: "review" | "revisit-record" | "practice";
+  source: "rule" | "ai-proposal";
+  proposalStatus?: "proposed" | "accepted" | "rejected";
+  status: "pending" | "in-progress" | "completed" | "skipped" | "cancelled";
+  priority: 1 | 2 | 3;
+  reasonCode: LearningCoachDiagnosisCode;
+  title: string;
+  recordIds: EntityId[];
+  /** Explicit action and evidence explanation shown before the user starts. */
+  actionLabel?: string;
+  reason?: string;
+  completedEvidenceId?: EntityId;
+  skippedEvidenceId?: EntityId;
+  issueKey?: string;
+  action?: LearningCoachTaskAction;
+  completionPolicy?: LearningCoachCompletionPolicy;
+  startedAt?: ISODateTime;
+  completedAt?: ISODateTime;
+  skippedAt?: ISODateTime;
+  cancelledAt?: ISODateTime;
+  progress?: { current: number; total: number };
+  completionEvidenceIds?: EntityId[];
+  skipReason?: LearningCoachSkipReason;
+  skipNote?: string;
+  deferredUntil?: ISODate;
+  /** Unique while this task is pending/in-progress; absent for terminal tasks. */
+  activeSlotKey?: string;
+  interventionKey?: string;
+  replanKey?: string;
+  parentTaskId?: EntityId;
+  cancellationReason?: "issue-resolved" | "duplicate-active-task" | "superseded-replan";
+  duplicateOfTaskId?: EntityId;
+  cleanedAt?: ISODateTime;
+  cleanupVersion?: number;
+  completionEvidenceRefs?: LearningCoachEvidenceRef[];
+  scope?: "record" | "knowledge-point";
+  knowledgePointId?: EntityId;
+  parentIssueKey?: string;
+}
+
+export interface LearningCoachAiRun extends BaseEntity {
+  date: ISODate;
+  snapshotId: EntityId;
+  inputFingerprint: string;
+  issueKeys: string[];
+  status: "queued" | "running" | "succeeded" | "failed" | "stale";
+  phase?: "preparing-context" | "calling-provider" | "validating-result";
+  sourceRecords: Array<{ recordId: EntityId; subject: Subject; date: ISODate; title: string; sourceLabel: string }>;
+  requestedAt: ISODateTime;
+  completedAt?: ISODateTime;
+  analysis?: string;
+  candidateTasks?: LearningCoachTaskCandidate[];
+  relationProposals?: KnowledgeRelationProposal[];
+  error?: string;
+}
+
 export interface AppSettings {
   id: "settings";
   examDate: ISODate;
@@ -774,6 +1134,17 @@ export interface BackupPayload {
   studySessions: StudySession[];
   settings: AppSettings;
   podcasts?: KnowledgePodcast[];
+  /** Local-only learning coach data. Full backups include it; cloud snapshots do not. */
+  learningCoachSettings?: LearningCoachSettings;
+  learningEvidence?: LearningEvidence[];
+  learningCoachSnapshots?: LearningCoachSnapshot[];
+  learningCoachTasks?: LearningCoachTask[];
+  learningCoachAiRuns?: LearningCoachAiRun[];
+  knowledgePoints?: KnowledgePoint[];
+  recordKnowledgePointLinks?: RecordKnowledgePointLink[];
+  knowledgePointExtractionRuns?: KnowledgePointExtractionRun[];
+  knowledgePointCoachSnapshots?: KnowledgePointCoachSnapshot[];
+  knowledgeRelations?: KnowledgeRelation[];
 }
 
 export interface SearchResult {
@@ -1008,6 +1379,35 @@ export interface StorageAdapter {
   upsertTag(name: string): Promise<Tag>;
   listStudySessions(): Promise<StudySession[]>;
   saveStudySession(session: StudySession): Promise<StudySession>;
+  getLearningCoachSettings(): Promise<LearningCoachSettings>;
+  saveLearningCoachSettings(settings: LearningCoachSettings): Promise<LearningCoachSettings>;
+  listLearningEvidence(): Promise<LearningEvidence[]>;
+  saveLearningEvidence(evidence: LearningEvidence): Promise<LearningEvidence>;
+  listLearningCoachSnapshots(): Promise<LearningCoachSnapshot[]>;
+  getLearningCoachSnapshot(date: ISODate): Promise<LearningCoachSnapshot | undefined>;
+  saveLearningCoachSnapshot(snapshot: LearningCoachSnapshot): Promise<LearningCoachSnapshot>;
+  listLearningCoachTasks(): Promise<LearningCoachTask[]>;
+  saveLearningCoachTask(task: LearningCoachTask): Promise<LearningCoachTask>;
+  updateLearningCoachTaskStatus(taskId: EntityId, status: LearningCoachTask["status"]): Promise<LearningCoachTask | undefined>;
+  completeLearningCoachTask(taskId: EntityId, status: "completed" | "skipped", evidence: LearningEvidence): Promise<LearningCoachTask | undefined>;
+  listLearningCoachAiRuns(): Promise<LearningCoachAiRun[]>;
+  saveLearningCoachAiRun(run: LearningCoachAiRun): Promise<LearningCoachAiRun>;
+  listKnowledgePoints(): Promise<KnowledgePoint[]>;
+  listRecordKnowledgePointLinks(recordId?: EntityId): Promise<RecordKnowledgePointLink[]>;
+  createKnowledgePointLink(input: { recordId: EntityId; subject: Subject; name: string; definition?: string; role?: RecordKnowledgePointLink["role"]; sourceQuote?: string; confirmationSource: RecordKnowledgePointLink["confirmationSource"]; existingKnowledgePointId?: EntityId }): Promise<{ knowledgePoint: KnowledgePoint; link: RecordKnowledgePointLink }>;
+  removeRecordKnowledgePointLink(linkId: EntityId): Promise<RecordKnowledgePointLink | undefined>;
+  mergeKnowledgePoints(sourceId: EntityId, targetId: EntityId): Promise<KnowledgePoint | undefined>;
+  undoKnowledgePointMerge(sourceId: EntityId): Promise<KnowledgePoint | undefined>;
+  listKnowledgePointExtractionRuns(recordId?: EntityId): Promise<KnowledgePointExtractionRun[]>;
+  saveKnowledgePointExtractionRun(run: KnowledgePointExtractionRun): Promise<KnowledgePointExtractionRun>;
+  decideKnowledgePointProposal(runId: EntityId, proposalId: EntityId, decision: "accepted" | "rejected", existingKnowledgePointId?: EntityId): Promise<KnowledgePointExtractionRun | undefined>;
+  listKnowledgePointCoachSnapshots(): Promise<KnowledgePointCoachSnapshot[]>;
+  getKnowledgePointCoachSnapshot(date: ISODate): Promise<KnowledgePointCoachSnapshot | undefined>;
+  saveKnowledgePointCoachSnapshot(snapshot: KnowledgePointCoachSnapshot): Promise<KnowledgePointCoachSnapshot>;
+  listKnowledgeRelations(): Promise<KnowledgeRelation[]>;
+  saveKnowledgeRelation(relation: KnowledgeRelation): Promise<KnowledgeRelation>;
+  retireKnowledgeRelation(relationId: EntityId): Promise<KnowledgeRelation | undefined>;
+  decideKnowledgeRelationProposal(runId: EntityId, proposalId: EntityId, decision: "accepted" | "rejected"): Promise<LearningCoachAiRun | undefined>;
   saveAsset(file: File, kind: Asset["kind"], title?: string): Promise<Asset>;
   patchAsset(
     id: EntityId,

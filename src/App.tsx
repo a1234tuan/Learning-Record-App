@@ -43,13 +43,15 @@ import { CloudSyncButton } from "./components/CloudSyncButton";
 import { CloudSyncConflictDialog } from "./components/CloudSyncConflictDialog";
 import { CloudSyncStatusToast } from "./components/CloudSyncStatusToast";
 import { PlaybackProvider } from "./components/PlaybackProvider";
-import type { AiKnowledgeScope, RecordBlock, Subject } from "./types";
+import type { AiKnowledgeScope, LearningCoachEvidenceRef, LearningCoachTask, RecordBlock, Subject } from "./types";
+import { createBaseEntity } from "./lib/entity";
 import { buildAiKnowledgeContextPackAsync } from "./services/aiContextService";
 import { createAiSessionForScope } from "./services/aiSessionService";
 import { createEmptyPodcast } from "./services/knowledgePodcastService";
 import { exportRecordTransferPackage } from "./services/recordTransferService";
 import { storage } from "./services/storageAdapter";
 import { getFavoriteRecords } from "./lib/journalSelectors";
+import { getCurrentAiProvider } from "./lib/aiProviders";
 import { todayISO } from "./lib/date";
 import { isDesktopPlatform } from "./lib/platform";
 import { isKeyboardViewportVisible, nextKeyboardBaselineHeight, resolveViewportHeight } from "./lib/viewport";
@@ -197,6 +199,7 @@ export const App = () => {
   const [backToast, setBackToast] = useState("");
   const [reviewToast, setReviewToast] = useState("");
   const [desktopMigrationOpen, setDesktopMigrationOpen] = useState(false);
+  const [coachAiAvailability, setCoachAiAvailability] = useState<"checking" | "available" | "unavailable">("checking");
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
   const navigationStateRef = useRef<NavigationState>({ activeTab, tabMemory, activeAiSessionId });
@@ -204,6 +207,22 @@ export const App = () => {
   const historyScrollRestoreRef = useRef(0);
   const app = useAppData();
   const keyboardVisible = useKeyboardVisible();
+
+  useEffect(() => {
+    let active = true;
+    const provider = getCurrentAiProvider(app.settings?.ai);
+    if (!provider?.baseUrl.trim() || !provider.model.trim()) {
+      setCoachAiAvailability("unavailable");
+      return () => { active = false; };
+    }
+    setCoachAiAvailability("checking");
+    void storage.getAiSecret(provider.id).then((secret) => {
+      if (active) setCoachAiAvailability(secret?.apiKey.trim() ? "available" : "unavailable");
+    }).catch(() => {
+      if (active) setCoachAiAvailability("unavailable");
+    });
+    return () => { active = false; };
+  }, [app.settings?.ai]);
 
   navigationStateRef.current = { activeTab, tabMemory, activeAiSessionId };
 
@@ -708,13 +727,88 @@ export const App = () => {
     }
   };
 
+  const openCoachQuiz = async (task: import("./types").LearningCoachTask) => {
+    if (task.recordIds.length === 0) return;
+    const sessions = await storage.listAiSessions();
+    const existing = sessions
+      .filter((session) => !session.deletedAt && session.coachQuiz?.taskId === task.id)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (task.status === "in-progress" && existing) {
+      updateNavigationState((current) => ({ ...current, activeAiSessionId: existing.id }));
+      setAiReturnTab("today");
+      openMoreSubRoute("ai");
+      return;
+    }
+    const scope: AiKnowledgeScope = { kind: "records", recordIds: task.recordIds };
+    const attachment = await buildAiKnowledgeContextPackAsync(scope, app.blocks, app.assets, "定制单题测验");
+    const session = await createAiSessionForScope(scope, attachment);
+    if (!session) return;
+    const coachSession = await storage.saveAiSession({
+      ...session,
+      title: `${task.subject ?? "学习"} 单题测验`,
+      coachQuiz: { taskId: task.id, knowledgePointId: task.knowledgePointId ?? task.action?.knowledgePointId, recordIds: task.recordIds, contextFingerprint: attachment.contextHash },
+    });
+    const started = await app.startLearningCoachAction(task.id);
+    if (!started) return;
+    updateNavigationState((current) => ({ ...current, activeAiSessionId: coachSession.id }));
+    setAiReturnTab("today");
+    openMoreSubRoute("ai");
+  };
+
+  const startCoachTask = async (task: LearningCoachTask) => {
+    const actionType = task.action?.type ?? (task.reasonCode === "review-due" || task.reasonCode === "review-overdue" ? "review-queue" : task.recordIds.length > 0 ? "ai-quiz" : "create-record");
+    if (actionType === "review-queue") {
+      await app.startLearningCoachAction(task.id);
+      updateNavigationState((current) => ({
+        ...current,
+        activeTab: "review",
+        tabMemory: {
+          ...current.tabMemory,
+          review: { ...current.tabMemory.review, mode: "queue", queueIds: task.recordIds, currentRecordId: task.recordIds[0], reviewProgress: undefined },
+        },
+      }));
+      return;
+    }
+    if (actionType === "ai-quiz") {
+      await openCoachQuiz(task);
+      return;
+    }
+    const subject = task.subject ?? app.activeSubjects[0]?.name;
+    if (!subject) return;
+    const existingRecordId = task.action?.createdRecordId;
+    if (task.status === "in-progress" && existingRecordId) {
+      const existingRecord = app.blocks.find((block): block is RecordBlock => block.type === "record" && block.id === existingRecordId && !block.deletedAt);
+      if (existingRecord) {
+        openRecordInTab(existingRecord, "today");
+        return;
+      }
+    }
+    const record = await app.createRecordBlock(todayISO(), subject);
+    await app.startLearningCoachAction(task.id, record.id);
+    openRecordInTab(record, "today");
+  };
+
+  const openCoachTaskRecord = (task: LearningCoachTask) => {
+    const record = app.blocks.find((block): block is RecordBlock => block.type === "record" && !block.deletedAt && task.recordIds.includes(block.id));
+    if (!record) {
+      setBackToast("关联学习记录不存在，无法打开替代回顾");
+      return;
+    }
+    openRecordInTab(record, "today");
+  };
+
   const renderRecordPage = (record: RecordBlock, highlightedAssetId?: string) => (
     <RecordEditorPage
       record={record}
       initialEditing={Boolean(currentRecordState.recordEditing)}
       onEditingChange={setCurrentRecordEditing}
       onBack={closeRecordInCurrentTab}
-      onSave={async (nextRecord) => app.saveBlock(nextRecord)}
+      onSave={async (nextRecord) => {
+        const saved = await app.saveBlock(nextRecord);
+        await app.reconcileLearningCoachTasks();
+        await app.ensureLearningCoachSnapshot();
+        return saved;
+      }}
       onDelete={async (recordId) => {
         await app.deleteBlock(recordId);
         closeRecordInCurrentTab();
@@ -747,6 +841,21 @@ export const App = () => {
         await app.removeRecordFromReview(recordId);
       }}
       onExportRecord={(recordId) => exportRecordTransferPackage(storage, [recordId])}
+      knowledgePoints={app.knowledgePoints}
+      knowledgePointLinks={app.recordKnowledgePointLinks}
+      knowledgePointExtractionRuns={app.knowledgePointExtractionRuns}
+      knowledgePointAiAvailable={coachAiAvailability === "available"}
+      requiredKnowledgePointId={app.learningCoachTasks.find((task) => task.scope === "knowledge-point" && task.status === "in-progress" && task.action?.type === "create-record" && task.action.createdRecordId === record.id)?.knowledgePointId}
+      onConfirmKnowledgePointLink={async (input) => {
+        await app.createKnowledgePointLink({ recordId: record.id, subject: record.subject, ...input });
+        await app.reconcileLearningCoachTasks();
+        await app.ensureKnowledgePointCoachSnapshot();
+      }}
+      onRemoveKnowledgePointLink={async (linkId) => { await app.removeKnowledgePointLink(linkId); }}
+      onExtractKnowledgePoints={async () => { await app.requestKnowledgePointExtraction(record.id); }}
+      onDecideKnowledgePointProposal={async (runId, proposalId, decision, existingKnowledgePointId) => { await app.decideKnowledgePointProposal(runId, proposalId, decision, existingKnowledgePointId); }}
+      onMergeKnowledgePoints={async (sourceId, targetId) => { await app.mergeKnowledgePoints(sourceId, targetId); }}
+      onUndoKnowledgePointMerge={async (sourceId) => { await app.undoKnowledgePointMerge(sourceId); }}
     />
   );
 
@@ -869,6 +978,8 @@ export const App = () => {
           <SettingsPage
             settings={settings}
             onSaveSettings={(nextSettings) => void app.persistSettings(nextSettings)}
+            learningCoachSettings={app.learningCoachSettings ?? undefined}
+            onSaveLearningCoachSettings={(nextSettings) => void app.saveLearningCoachSettings(nextSettings)}
           />
         );
       case "favorites":
@@ -1002,6 +1113,7 @@ export const App = () => {
                 });
               });
             }}
+            onCoachQuizAccepted={() => { void app.reconcileLearningCoachTasks().then(() => app.ensureLearningCoachSnapshot()); }}
           />
         );
       case null:
@@ -1050,6 +1162,25 @@ export const App = () => {
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
             onOpenCloudSyncSettings={() => openMoreSubRoute("backup")}
             onCloudSyncRestored={app.refresh}
+            learningCoachSettings={app.learningCoachSettings}
+            learningCoachSnapshot={app.learningCoachSnapshots.find((snapshot) => snapshot.date === todayISO())}
+            learningCoachTasks={app.learningCoachTasks}
+            learningCoachRecords={app.blocks.filter((block): block is RecordBlock => block.type === "record" && !block.deletedAt)}
+            learningCoachAiRuns={app.learningCoachAiRuns}
+            learningCoachEvidence={app.learningEvidence}
+            knowledgePoints={app.knowledgePoints}
+            knowledgeRelations={app.knowledgeRelations}
+            onConfirmKnowledgeRelation={(fromKnowledgePointId, toKnowledgePointId, sourceRefs: LearningCoachEvidenceRef[]) => void app.saveKnowledgeRelation({ ...createBaseEntity(), fromKnowledgePointId, toKnowledgePointId, type: "prerequisite-of", status: "confirmed", sourceRefs: sourceRefs.length > 0 ? sourceRefs : [{ type: "knowledge-point", id: fromKnowledgePointId }, { type: "knowledge-point", id: toKnowledgePointId }], origin: "user", confirmedAt: new Date().toISOString() })}
+            onRetireKnowledgeRelation={(relationId) => void app.retireKnowledgeRelation(relationId)}
+            knowledgePointSnapshot={app.knowledgePointCoachSnapshots.find((snapshot) => snapshot.date === todayISO())}
+            coachAiAvailability={coachAiAvailability}
+            onEnsureLearningCoach={async () => { await app.ensureLearningCoachSnapshot(); await app.ensureKnowledgePointCoachSnapshot(); }}
+            onSkipLearningCoachTask={(taskId, reason, note) => void app.skipLearningCoachAction(taskId, reason, note).then(() => app.ensureLearningCoachSnapshot())}
+            onAskCoachAi={() => void app.requestLearningCoachAiAnalysis()}
+            onAcceptCoachCandidate={(runId, index) => void app.acceptLearningCoachCandidateTask(runId, index)}
+            onDecideRelationProposal={(runId, proposalId, decision) => void app.decideKnowledgeRelationProposal(runId, proposalId, decision)}
+            onStartCoachTask={(task) => void startCoachTask(task)}
+            onOpenCoachTaskRecord={openCoachTaskRecord}
           />
         );
       case "journal":
@@ -1266,6 +1397,8 @@ export const App = () => {
             restoreScrollY={tabMemory.review.restoreScrollY}
             onRate={async (recordId, rating, evaluationText) => {
               const result = await app.rateRecordReview(recordId, rating, evaluationText);
+              await app.reconcileLearningCoachTasks();
+              await app.ensureLearningCoachSnapshot();
               return result?.undoToken;
             }}
             onUndo={async (token) => {

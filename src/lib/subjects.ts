@@ -2,9 +2,14 @@ import type { AppSettings, RecordBlock, Subject, SubjectConfig } from "../types"
 import { nowISO } from "./date";
 import { newId } from "./entity";
 
-export const DEFAULT_SUBJECT_NAMES: Subject[] = ["读书笔记", "数学", "英语", "其他"];
-export const DEFAULT_SUBJECT = "读书笔记";
-const LEGACY_DEFAULT_SUBJECT_NAMES: Subject[] = ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"];
+export const DEFAULT_SUBJECT_NAMES: Subject[] = ["OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS"];
+export const DEFAULT_SUBJECT = "OS";
+export const CANONICAL_STUDY_SUBJECTS = ["OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS"] as const;
+export type CanonicalStudySubject = typeof CANONICAL_STUDY_SUBJECTS[number];
+const LEGACY_DEFAULT_SUBJECT_SETS: Subject[][] = [
+  ["读书笔记", "数学", "英语", "其他"],
+  ["计组", "OS", "计网", "数据结构", "数学", "英语", "政治"],
+];
 const STABLE_BOOTSTRAP_TIME = "1970-01-01T00:00:00.000Z";
 
 export const normalizeSubjectName = (subject?: string): Subject => {
@@ -26,6 +31,12 @@ export const normalizeSubjectName = (subject?: string): Subject => {
   }
   return trimmed;
 };
+
+/** Stable internal identity for the formal exam subjects. */
+export const canonicalStudySubject = (subject?: string): Subject => normalizeSubjectName(subject);
+
+/** Kept separate so a future display-name change cannot change the stored identity. */
+export const subjectDisplayName = (subject?: string): string => canonicalStudySubject(subject);
 
 export const createSubjectConfig = (name: Subject, order: number, archivedAt?: string): SubjectConfig => {
   const now = nowISO();
@@ -54,8 +65,9 @@ export const createDefaultSubjects = (): SubjectConfig[] =>
 
 const isLegacyDefaultSubjectSet = (subjects: SubjectConfig[]): boolean => {
   const names = subjects.map((subject) => normalizeSubjectName(subject.name));
-  return names.length === LEGACY_DEFAULT_SUBJECT_NAMES.length &&
-    LEGACY_DEFAULT_SUBJECT_NAMES.every((name, index) => names[index] === name);
+  return LEGACY_DEFAULT_SUBJECT_SETS.some((legacy) =>
+    names.length === legacy.length && legacy.every((name, index) => names[index] === name),
+  );
 };
 
 const isCurrentDefaultSubjectSet = (subjects: SubjectConfig[] | undefined): boolean => {

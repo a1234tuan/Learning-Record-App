@@ -132,6 +132,19 @@ describe("aiContextService", () => {
     expect(pack.markdown).toContain("标签：#专项突破 #训练");
   });
 
+  it("uses canonical subject identity for legacy aliases in tag retrieval and chunks", () => {
+    const pack = buildAiKnowledgeContextPack(
+      { kind: "tag", subject: "OS", tag: "进程" },
+      [record({ id: "os-1", subject: "操作系统", tags: ["进程"], title: "进程调度" })],
+      [],
+      "进程",
+    );
+    expect(pack.recordIds).toEqual(["os-1"]);
+    expect(pack.scopeTitle).toContain("OS");
+    expect(pack.allChunks[0]?.subject).toBe("OS");
+    expect(pack.allChunks[0]?.sourceLabel).toContain("/ OS /");
+  });
+
   it("uses calendar-day boundaries for recent scopes and excludes deleted records", () => {
     const pack = buildAiKnowledgeContextPack(
       { kind: "recent", days: 7 },

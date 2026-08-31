@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TodayPage } from "./TodayPage";
-import type { SubjectConfig } from "../types";
+import type { LearningCoachSnapshot, SubjectConfig } from "../types";
 import { getDailyMotto } from "../lib/dailyMotto";
 
 const stamp = "2026-06-21T00:00:00.000Z";
@@ -93,5 +93,35 @@ describe("TodayPage", () => {
       "数学",
       template.contentHtml,
     ));
+  });
+
+  it("keeps the learning cockpit as a compact entry after the primary record flow", async () => {
+    const coachSnapshot: LearningCoachSnapshot = {
+      id: "snapshot", createdAt: stamp, updatedAt: stamp, date: "2026-06-21", scenario: "general", inputFingerprint: "fingerprint",
+      localSummary: { dueReviews: 0, overdueReviews: 0, pendingTasks: 0, studyMinutesLast7Days: 0, recordCountLast7Days: 0 }, diagnoses: [], taskIds: [],
+    };
+    const { container } = render(
+      <TodayPage
+        entry={null}
+        blocks={[]}
+        examDate="2026-12-27"
+        subjects={subjects}
+        onSaveEntry={vi.fn()}
+        onCreateRecord={vi.fn()}
+        onOpenFavorites={vi.fn()}
+        onOpenRecord={vi.fn()}
+        onToggleFavorite={vi.fn()}
+        learningCoachSettings={{ id: "learning-coach", scenario: "general", dashboardEnabled: true, updatedAt: stamp }}
+        learningCoachSnapshot={coachSnapshot}
+        onEnsureLearningCoach={vi.fn().mockResolvedValue(coachSnapshot)}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "暂时没有需要关注的问题" })).toBeInTheDocument());
+    const cockpit = container.querySelector(".learning-coach-entry")!;
+    const newRecord = container.querySelector(".today-workbench")!;
+    expect(newRecord.compareDocumentPosition(cockpit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看驾驶舱" })).toBeInTheDocument();
+    expect(screen.queryByText("当前最重要的学习问题")).not.toBeInTheDocument();
   });
 });

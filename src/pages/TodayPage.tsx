@@ -1,7 +1,7 @@
-import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
+import { useEffect, useState } from "react";
 
-import type { Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Block, ContentTemplate, DayEntry, KnowledgePoint, KnowledgePointCoachSnapshot, KnowledgeRelation, LearningCoachAiRun, LearningCoachSettings, LearningCoachSkipReason, LearningCoachSnapshot, LearningCoachTask, LearningCoachEvidenceRef, LearningEvidence, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
@@ -9,6 +9,7 @@ import { CloudSyncButton } from "../components/CloudSyncButton";
 import { fallbackSubjectName } from "../lib/subjects";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { getDailyMotto } from "../lib/dailyMotto";
+import { LearningCoachDashboard } from "../components/LearningCoachDashboard";
 
 interface TodayPageProps {
   entry: DayEntry | null;
@@ -30,6 +31,25 @@ interface TodayPageProps {
   onAddToReview?: (recordId: string) => void;
   onOpenCloudSyncSettings?: () => void;
   onCloudSyncRestored?: () => Promise<void> | void;
+  learningCoachSettings?: LearningCoachSettings | null;
+  learningCoachSnapshot?: LearningCoachSnapshot;
+  learningCoachTasks?: LearningCoachTask[];
+  learningCoachRecords?: RecordBlock[];
+  learningCoachAiRuns?: LearningCoachAiRun[];
+  learningCoachEvidence?: LearningEvidence[];
+  knowledgePoints?: KnowledgePoint[];
+  knowledgeRelations?: KnowledgeRelation[];
+  onConfirmKnowledgeRelation?: (fromKnowledgePointId: string, toKnowledgePointId: string, sourceRefs: LearningCoachEvidenceRef[]) => void;
+  onRetireKnowledgeRelation?: (relationId: string) => void;
+  knowledgePointSnapshot?: KnowledgePointCoachSnapshot;
+  coachAiAvailability?: "checking" | "available" | "unavailable";
+  onEnsureLearningCoach?: () => Promise<unknown>;
+  onSkipLearningCoachTask?: (taskId: string, reason: LearningCoachSkipReason, note?: string) => void;
+  onAskCoachAi?: () => void;
+  onAcceptCoachCandidate?: (runId: string, index: number) => void;
+  onDecideRelationProposal?: (runId: string, proposalId: string, decision: "accepted" | "rejected") => void;
+  onStartCoachTask?: (task: LearningCoachTask) => void;
+  onOpenCoachTaskRecord?: (task: LearningCoachTask) => void;
 }
 
 export const TodayPage = ({
@@ -52,7 +72,27 @@ export const TodayPage = ({
   onAddToReview = () => undefined,
   onOpenCloudSyncSettings = () => undefined,
   onCloudSyncRestored = () => undefined,
+  learningCoachSettings,
+  learningCoachSnapshot,
+  learningCoachTasks = [],
+  learningCoachRecords = [],
+  learningCoachAiRuns = [],
+  learningCoachEvidence = [],
+  knowledgePoints = [],
+  knowledgeRelations = [],
+  onConfirmKnowledgeRelation,
+  onRetireKnowledgeRelation,
+  knowledgePointSnapshot,
+  coachAiAvailability = "checking",
+  onEnsureLearningCoach,
+  onSkipLearningCoachTask,
+  onAskCoachAi,
+  onAcceptCoachCandidate,
+  onDecideRelationProposal,
+  onStartCoachTask,
+  onOpenCoachTaskRecord,
 }: TodayPageProps) => {
+  const [coachDetailOpen, setCoachDetailOpen] = useState(false);
   const [subject, setSubject] = useState<Subject>(() =>
     subjects.find((item) => !item.archivedAt)?.name ??
     fallbackSubjectName({ id: "settings", examDate, theme: "system", accentColor: "", backupReminderDays: 7, fontScale: 1, lineHeight: 1.7, subjects }),
@@ -65,6 +105,50 @@ export const TodayPage = ({
   const overdue = dueReviewStates.filter((review) => review.nextReviewDate && review.nextReviewDate < today);
   const previewDue = dueReviewStates.slice(0, 3).map((review) => reviewTitlesByRecord[review.recordId]).filter(Boolean);
   const selectedTemplate = templates.find((template) => template.id === templateId);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const refreshCoach = async () => {
+    if (!onEnsureLearningCoach) return;
+    setCoachLoading(true);
+    try { await onEnsureLearningCoach(); } finally { setCoachLoading(false); }
+  };
+  useEffect(() => {
+    if (learningCoachSettings?.dashboardEnabled) void refreshCoach();
+  }, [learningCoachSettings?.dashboardEnabled]);
+
+  if (learningCoachSettings?.dashboardEnabled && coachDetailOpen) {
+    return <main className="page today-page today-coach-page">
+      <PageHeader
+        eyebrow="学习辅助"
+        title="学习驾驶舱"
+        subtitle="先看当前最值得处理的一件事，需要时再展开依据。"
+        density="compact"
+        actions={<button type="button" className="secondary-button" onClick={() => setCoachDetailOpen(false)}><ArrowLeft size={17} />返回今天</button>}
+      />
+      <LearningCoachDashboard
+        variant="detail"
+        snapshot={learningCoachSnapshot}
+        tasks={learningCoachTasks}
+        aiRuns={learningCoachAiRuns}
+        aiAvailability={coachAiAvailability}
+        loading={coachLoading}
+        onRefresh={() => void refreshCoach()}
+        onSkip={(taskId, reason, note) => onSkipLearningCoachTask?.(taskId, reason, note)}
+        onAskAi={onAskCoachAi}
+        onAcceptCandidate={onAcceptCoachCandidate}
+        onDecideRelationProposal={onDecideRelationProposal}
+        onStartTask={onStartCoachTask}
+        onOpenTaskRecord={onOpenCoachTaskRecord}
+        records={learningCoachRecords}
+        evidence={learningCoachEvidence}
+        reviewLogs={Object.values(reviewLogsByRecord).flat()}
+        knowledgePoints={knowledgePoints}
+        knowledgeRelations={knowledgeRelations}
+        onConfirmKnowledgeRelation={onConfirmKnowledgeRelation}
+        onRetireKnowledgeRelation={onRetireKnowledgeRelation}
+        knowledgePointSnapshot={knowledgePointSnapshot}
+      />
+    </main>;
+  }
 
   return (
     <main className="page today-page">
@@ -115,22 +199,6 @@ export const TodayPage = ({
         </SurfaceCard>
       </section>
 
-      {dueReviewStates.length > 0 && (
-        <section className="review-due-banner">
-          <div>
-            <CalendarCheck size={22} />
-            <span>
-              <strong>今天有 {todayDue.length} 条待复习</strong>
-              {overdue.length > 0 && <small>另有 {overdue.length} 条已过期</small>}
-            </span>
-          </div>
-          {previewDue.length > 0 && <p>{previewDue.join("、")}</p>}
-          <button type="button" className="primary-button" onClick={onOpenReview}>
-            开始复习
-          </button>
-        </section>
-      )}
-
       {entry && (
         <section className="entry-meta-panel">
           <input
@@ -162,6 +230,32 @@ export const TodayPage = ({
           ))
         )}
       </section>
+
+      {dueReviewStates.length > 0 && (
+        <section className="review-due-banner">
+          <div>
+            <CalendarCheck size={22} />
+            <span>
+              <strong>今天有 {todayDue.length} 条待复习</strong>
+              {overdue.length > 0 && <small>另有 {overdue.length} 条已过期</small>}
+            </span>
+          </div>
+          {previewDue.length > 0 && <p>{previewDue.join("、")}</p>}
+          <button type="button" className="secondary-button" onClick={onOpenReview}>打开复习队列</button>
+        </section>
+      )}
+
+      {learningCoachSettings?.dashboardEnabled && !coachDetailOpen && (
+        <LearningCoachDashboard
+          variant="summary"
+          snapshot={learningCoachSnapshot}
+          tasks={learningCoachTasks}
+          onOpenDetail={() => setCoachDetailOpen(true)}
+          onRefresh={() => void refreshCoach()}
+          onSkip={() => undefined}
+        />
+      )}
+
     </main>
   );
 };

@@ -11,6 +11,7 @@ import type {
 import { addDaysISO, todayISO } from "../lib/date";
 import { parseLinearRecordContent } from "../lib/recordContent";
 import { normalizeRecordTags, recordTagKey, subjectTagKey } from "../lib/recordTags";
+import { canonicalStudySubject } from "../lib/subjects";
 import { describeOcrForAi } from "./ocrDiagnostics";
 
 const MAX_SELECTED_CHARS = 12_000;
@@ -169,7 +170,7 @@ export const aiKnowledgeScopeTitle = (scope: AiKnowledgeScope, referenceDate = t
     case "date":
       return `${scope.date} 日志`;
     case "tag":
-      return `${scope.subject} / #${scope.tag}`;
+      return `${canonicalStudySubject(scope.subject)} / #${scope.tag}`;
     case "recent": {
       const start = addDaysISO(referenceDate, 1 - scope.days);
       return `最近 ${scope.days} 天（${start} 至 ${referenceDate}）`;
@@ -184,7 +185,7 @@ export const aiKnowledgeScopeKey = (scope: AiKnowledgeScope): string => {
     case "date":
       return `date:${scope.date}`;
     case "tag":
-      return `tag:${subjectTagKey(scope.subject, scope.tag)}`;
+      return `tag:${subjectTagKey(canonicalStudySubject(scope.subject), scope.tag)}`;
     case "recent":
       return `recent:${scope.days}`;
     case "records":
@@ -206,7 +207,7 @@ export const getAiKnowledgeScopeRecords = (
   const matched = records.filter((record) => {
     if (scope.kind === "date") return record.date === scope.date;
     if (scope.kind === "tag") {
-      const sameSubject = record.subject.trim().toLocaleLowerCase("zh-CN") === scope.subject.trim().toLocaleLowerCase("zh-CN");
+      const sameSubject = canonicalStudySubject(record.subject) === canonicalStudySubject(scope.subject);
       return sameSubject && normalizeRecordTags(record.tags).some((tag) => recordTagKey(tag) === recordTagKey(scope.tag));
     }
     if (scope.kind === "records") return selectedRecordIds?.has(record.id) ?? false;
@@ -219,7 +220,7 @@ export const getAiKnowledgeScopeRecords = (
 
 const buildSummary = (scopeTitle: string, records: RecordBlock[], chunks: AiContextChunk[]): string => {
   if (records.length === 0) return `${scopeTitle} 没有可用于 AI 问答的正式日志。`;
-  const subjects = Array.from(new Set(records.map((record) => record.subject))).join("、");
+  const subjects = Array.from(new Set(records.map((record) => canonicalStudySubject(record.subject)))).join("、");
   const titles = records.map((record) => `《${record.title}》`).slice(0, 6).join("、");
   const more = records.length > 6 ? `等 ${records.length} 条记录` : `${records.length} 条记录`;
   return `${scopeTitle} 共 ${more}，涉及 ${subjects || "未分类"}。主要记录：${titles}。可用上下文片段 ${chunks.length} 个。`;
@@ -316,12 +317,14 @@ const pushChunk = (state: ContextBuildState, chunk: Omit<AiContextChunk, "order"
 
 const sourcePrefix = (record: RecordBlock): string => {
   const tags = normalizeRecordTags(record.tags);
-  return `${record.date} / ${record.subject} / ${record.title}${tags.length ? ` / 标签：${tags.map((tag) => `#${tag}`).join(" ")}` : ""}`;
+  const subject = canonicalStudySubject(record.subject);
+  return `${record.date} / ${subject} / ${record.title}${tags.length ? ` / 标签：${tags.map((tag) => `#${tag}`).join(" ")}` : ""}`;
 };
 
 const appendRecord = (state: ContextBuildState, record: RecordBlock, assets: Asset[]) => {
   const tags = normalizeRecordTags(record.tags);
-  state.markdownLines.push(`## ${record.subject} / ${record.title}`, tags.length ? `标签：${tags.map((tag) => `#${tag}`).join(" ")}` : "", "");
+  const subject = canonicalStudySubject(record.subject);
+  state.markdownLines.push(`## ${subject} / ${record.title}`, tags.length ? `标签：${tags.map((tag) => `#${tag}`).join(" ")}` : "", "");
   const nodes = parseLinearRecordContent(record, assets);
   if (nodes.length === 0) {
     state.markdownLines.push("（空记录）", "");
@@ -340,7 +343,7 @@ const appendRecord = (state: ContextBuildState, record: RecordBlock, assets: Ass
           chunkId: `${record.id}-${node.kind}-${nodeIndex}-${partIndex + 1}`,
           recordId: record.id,
           date: record.date,
-          subject: record.subject,
+          subject,
           tags,
           title: record.title,
           kind: "text",
@@ -361,7 +364,7 @@ const appendRecord = (state: ContextBuildState, record: RecordBlock, assets: Ass
           chunkId: `${record.id}-formula-${node.formula.id || nodeIndex}`,
           recordId: record.id,
           date: record.date,
-          subject: record.subject,
+          subject,
           tags,
           title: record.title,
           kind: "formula",
@@ -387,7 +390,7 @@ const appendRecord = (state: ContextBuildState, record: RecordBlock, assets: Ass
             chunkId: `${record.id}-image-${node.ref.id}-${partIndex + 1}`,
             recordId: record.id,
             date: record.date,
-            subject: record.subject,
+            subject,
             tags,
             title: record.title,
             kind: "imageOcr",

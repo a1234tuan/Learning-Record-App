@@ -7,6 +7,7 @@ import {
   ensureSettingsSubjects,
   getActiveSubjects,
   getAllVisibleSubjects,
+  normalizeSubjectName,
   validateSubjectName,
 } from "./subjects";
 
@@ -45,7 +46,7 @@ describe("dynamic subjects", () => {
     const migrated = ensureSettingsSubjects({ ...settings([]), subjects: undefined, schemaVersion: 2 }, []);
 
     expect(migrated.schemaVersion).toBe(3);
-    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["读书笔记", "数学", "英语", "其他"]);
+    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS"]);
   });
 
   it("exports defaults and inferred subjects deterministically", () => {
@@ -55,11 +56,12 @@ describe("dynamic subjects", () => {
     expect(first.subjects).toEqual(second.subjects);
   });
 
-  it("keeps other as a first-class default subject", () => {
-    const migrated = ensureSettingsSubjects(settings(), [record("其他")]);
+  it("keeps an unknown historical subject only when a record still references it", () => {
+    const legacy = ["读书笔记", "数学", "英语", "其他"].map((name, order) => createSubjectConfig(name, order));
+    const migrated = ensureSettingsSubjects(settings(legacy), [record("其他")]);
 
     expect(migrated.subjects?.map((subject) => subject.name)).toContain("其他");
-    expect(migrated.subjects?.map((subject) => subject.name)).not.toContain("数据结构");
+    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS", "其他"]);
   });
 
   it("replaces the old exam-biased default subject set while keeping referenced legacy subjects", () => {
@@ -68,7 +70,14 @@ describe("dynamic subjects", () => {
     );
     const migrated = ensureSettingsSubjects(settings(legacySubjects), [record("OS")]);
 
-    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["读书笔记", "数学", "英语", "其他", "OS"]);
+    expect(migrated.subjects?.map((subject) => subject.name)).toEqual(["OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS"]);
+  });
+
+  it("maps legacy exam labels to canonical identities without changing unrelated labels", () => {
+    expect(normalizeSubjectName("操作系统")).toBe("OS");
+    expect(normalizeSubjectName("组成原理")).toBe("计组");
+    expect(normalizeSubjectName("计算机网络")).toBe("计网");
+    expect(normalizeSubjectName("其他")).toBe("其他");
   });
 
   it("adds unknown record subjects during migration", () => {

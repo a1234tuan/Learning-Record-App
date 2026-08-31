@@ -1,9 +1,9 @@
 import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Search, Star, Trash2, Volume2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, ContentTemplate, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { Asset, ContentTemplate, KnowledgePoint, KnowledgePointExtractionRun, RecordBlock, RecordDraft, RecordKnowledgePointLink, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordTagChips, recordTagStyle } from "../components/RecordTagChips";
@@ -33,6 +33,8 @@ import {
 import { useRestoreInProgress } from "../services/restoreLockService";
 import { registerDesktopFlushHandler } from "../services/desktopLifecycleService";
 
+const RecordKnowledgePointPanel = lazy(() => import("../components/RecordKnowledgePointPanel").then((module) => ({ default: module.RecordKnowledgePointPanel })));
+
 interface RecordEditorPageProps {
   record: RecordBlock;
   initialEditing?: boolean;
@@ -60,6 +62,17 @@ interface RecordEditorPageProps {
   onResetReview?: (recordId: string) => Promise<void> | void;
   onRemoveReview?: (recordId: string) => Promise<void> | void;
   onExportRecord?: (recordId: string) => Promise<string> | string;
+  knowledgePoints?: KnowledgePoint[];
+  knowledgePointLinks?: RecordKnowledgePointLink[];
+  knowledgePointExtractionRuns?: KnowledgePointExtractionRun[];
+  knowledgePointAiAvailable?: boolean;
+  requiredKnowledgePointId?: string;
+  onConfirmKnowledgePointLink?: (input: { name: string; existingKnowledgePointId?: string; sourceQuote?: string; confirmationSource: "manual" | "ai-proposal" }) => Promise<void>;
+  onRemoveKnowledgePointLink?: (linkId: string) => Promise<void>;
+  onExtractKnowledgePoints?: () => Promise<void>;
+  onDecideKnowledgePointProposal?: (runId: string, proposalId: string, decision: "accepted" | "rejected", existingKnowledgePointId?: string) => Promise<void>;
+  onMergeKnowledgePoints?: (sourceId: string, targetId: string) => Promise<void>;
+  onUndoKnowledgePointMerge?: (sourceId: string) => Promise<void>;
 }
 
 const cloneRecord = (record: RecordBlock): RecordBlock =>
@@ -144,6 +157,17 @@ export const RecordEditorPage = ({
   onResetReview,
   onRemoveReview,
   onExportRecord,
+  knowledgePoints = [],
+  knowledgePointLinks = [],
+  knowledgePointExtractionRuns = [],
+  knowledgePointAiAvailable = false,
+  requiredKnowledgePointId,
+  onConfirmKnowledgePointLink,
+  onRemoveKnowledgePointLink,
+  onExtractKnowledgePoints,
+  onDecideKnowledgePointProposal,
+  onMergeKnowledgePoints,
+  onUndoKnowledgePointMerge,
 }: RecordEditorPageProps) => {
   const native = isNativePlatform();
   const restoreLocked = useRestoreInProgress();
@@ -910,6 +934,23 @@ export const RecordEditorPage = ({
           </div>
         )}
       </section>
+
+      {onConfirmKnowledgePointLink && onRemoveKnowledgePointLink && onExtractKnowledgePoints && onDecideKnowledgePointProposal && onMergeKnowledgePoints && onUndoKnowledgePointMerge && (
+        <Suspense fallback={<p className="settings-hint">正在读取知识点关联...</p>}><RecordKnowledgePointPanel
+          record={record}
+          points={knowledgePoints}
+          links={knowledgePointLinks}
+          extractionRuns={knowledgePointExtractionRuns}
+          aiAvailable={knowledgePointAiAvailable}
+          requiredKnowledgePointId={requiredKnowledgePointId}
+          onConfirmLink={onConfirmKnowledgePointLink}
+          onRemoveLink={onRemoveKnowledgePointLink}
+          onExtract={onExtractKnowledgePoints}
+          onDecideProposal={onDecideKnowledgePointProposal}
+          onMerge={onMergeKnowledgePoints}
+          onUndoMerge={onUndoKnowledgePointMerge}
+        /></Suspense>
+      )}
 
       {editing ? (
         <>

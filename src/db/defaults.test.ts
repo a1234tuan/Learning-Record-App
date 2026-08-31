@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createDefaultAiPresets,
+  createTemplateBlocks,
   DEFAULT_SETTINGS,
   isCodeBiasedDefaultAiPresetSet,
   isLegacyDefaultAiPresetSet,
@@ -17,6 +18,17 @@ describe("default AI settings", () => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-pro",
     });
+  });
+
+  it("initializes exactly the formal eight-subject system", () => {
+    expect(DEFAULT_SETTINGS.subjects?.map((subject) => subject.name)).toEqual([
+      "OS", "计组", "计网", "数据结构", "数学", "英语", "政治", "CS",
+    ]);
+    expect(DEFAULT_SETTINGS.subjects?.map((subject) => subject.name)).not.toEqual(expect.arrayContaining(["读书笔记", "其他"]));
+  });
+
+  it("uses a formal subject for the default new-record template", () => {
+    expect(createTemplateBlocks("2026-08-30")[0]).toMatchObject({ subject: "OS" });
   });
 
   it("creates the five built-in learning coach prompts", () => {
