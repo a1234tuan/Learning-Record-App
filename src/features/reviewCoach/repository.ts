@@ -56,6 +56,7 @@ export interface ReviewCoachRepository {
   listRestorableDecisionBlockArchives(recordId: string): Promise<DecisionBlockArchive[]>;
   addFeedback(feedback: DecisionBlockFeedback, queueItem?: AnalysisQueueItem): Promise<DecisionBlockFeedback>;
   deleteFeedback(feedbackId: string, deletedAt: string): Promise<DecisionBlockFeedback>;
+  updateQueueItemAnalysisNote(id: string, analysisNote: string, updatedAt: string): Promise<AnalysisQueueItem>;
   saveFeedbackInterpretation(interpretation: FeedbackInterpretation): Promise<FeedbackInterpretation>;
   transitionQueueItem(id: string, status: AnalysisQueueStatus, updatedAt: string, batchId?: string): Promise<AnalysisQueueItem>;
   createAnalysisBatch(batch: AnalysisBatch): Promise<AnalysisBatch>;
@@ -110,6 +111,49 @@ const ensureIdempotentInsert = async <T extends { id: string; idempotencyKey: st
     throw new ReviewCoachValidationError("duplicate-event", `Idempotency key ${value.idempotencyKey} already has different content.`);
   }
   return existing;
+};
+
+const sameFeedbackOperation = (left: DecisionBlockFeedback, right: DecisionBlockFeedback) =>
+  left.decisionBlockId === right.decisionBlockId
+  && left.recordId === right.recordId
+  && left.contentVersion === right.contentVersion
+  && left.comment === right.comment
+  && left.includeInAnalysis === right.includeInAnalysis
+  && left.source === right.source;
+
+export const persistDecisionBlockFeedbackInTransaction = async (
+  database: StudyJournalDatabase,
+  feedback: DecisionBlockFeedback,
+  queueItem?: AnalysisQueueItem,
+): Promise<{ feedback: DecisionBlockFeedback; created: boolean }> => {
+  if (!feedback.comment.trim()) throw new ReviewCoachValidationError("empty-feedback", "Empty feedback is not a formal event.");
+  const existingByKey = await database.decisionBlockFeedback.where("idempotencyKey").equals(feedback.idempotencyKey).first();
+  if (existingByKey) {
+    if (!sameFeedbackOperation(existingByKey, feedback)) {
+      throw new ReviewCoachValidationError("duplicate-event", `Idempotency key ${feedback.idempotencyKey} already has different feedback content.`);
+    }
+    return { feedback: existingByKey, created: false };
+  }
+  const existingById = await database.decisionBlockFeedback.get(feedback.id);
+  if (existingById) {
+    throw new ReviewCoachValidationError("duplicate-event", `Feedback ID ${feedback.id} already exists.`);
+  }
+  assertCurrentDecisionBlockRef(await database.decisionBlocks.get(feedback.decisionBlockId), feedback);
+  if (feedback.reviewLogId) {
+    const log = await database.recordReviewLogs.get(feedback.reviewLogId);
+    if (!log || log.recordId !== feedback.recordId) throw new ReviewCoachValidationError("dangling-review-log", "Feedback review log does not exist or belongs to another record.");
+  }
+  if (feedback.includeInAnalysis) {
+    if (!queueItem || queueItem.feedbackId !== feedback.id) throw new ReviewCoachValidationError("missing-queue-item", "Analysis-enabled feedback requires a matching queue item.");
+    if (queueItem.decisionBlockId !== feedback.decisionBlockId || queueItem.contentVersion !== feedback.contentVersion || queueItem.recordId !== feedback.recordId) {
+      throw new ReviewCoachValidationError("dangling-queue-item", "Queue item does not match feedback.");
+    }
+  } else if (queueItem) {
+    throw new ReviewCoachValidationError("unexpected-queue-item", "Opted-out feedback cannot create a queue item.");
+  }
+  await database.decisionBlockFeedback.add(feedback);
+  if (queueItem) await database.analysisQueueItems.add(queueItem);
+  return { feedback, created: true };
 };
 
 export const reviewCoachFormalTables = (database: StudyJournalDatabase) => [
@@ -343,6 +387,58 @@ const latestFactTime = (snapshot: ReviewCoachFormalSnapshot) => {
   return times.at(-1) ?? "1970-01-01T00:00:00.000Z";
 };
 
+export const rebuildReviewCoachProjectionsInTransaction = async (database: StudyJournalDatabase) => {
+  const snapshot = await getReviewCoachFormalSnapshot(database);
+  const records = (await database.blocks.toArray()).filter((block) => block.type === "record").map((block) => block.id);
+  validateReviewCoachFormalSnapshot(snapshot, new Set(records));
+  const replayedAt = latestFactTime(snapshot);
+  const states = replayAllDecisionBlockStates(snapshot, replayedAt);
+  const effects = replayInterventionEffectSummaries({
+    interpretations: snapshot.feedbackInterpretations,
+    blueprints: snapshot.sessionBlueprints,
+    tasks: snapshot.adaptiveReviewTasks,
+    turns: snapshot.adaptiveQuizTurns,
+    outcomes: snapshot.taskOutcomeEvents,
+    verifications: snapshot.delayedVerifications,
+    replayedAt,
+  });
+  await Promise.all([
+    database.decisionBlockStates.clear(),
+    database.interventionEffectSummaries.clear(),
+  ]);
+  await Promise.all([
+    database.decisionBlockStates.bulkPut(states),
+    database.interventionEffectSummaries.bulkPut(effects),
+  ]);
+  return { states, effects };
+};
+
+export const tombstoneDecisionBlockFeedbackInTransaction = async (
+  database: StudyJournalDatabase,
+  feedbackIds: readonly string[],
+  reviewLogId: string,
+  deletedAt: string,
+): Promise<DecisionBlockFeedback[]> => {
+  const linked = await database.decisionBlockFeedback.where("reviewLogId").equals(reviewLogId).toArray();
+  const ids = new Set([...feedbackIds, ...linked.map((feedback) => feedback.id)]);
+  const feedback = (await Promise.all([...ids].map((id) => database.decisionBlockFeedback.get(id))))
+    .filter((item): item is DecisionBlockFeedback => Boolean(item));
+  const tombstoned: DecisionBlockFeedback[] = [];
+  for (const item of feedback) {
+    if (item.deletedAt) continue;
+    transitionFeedbackStatus("active", "deleted");
+    const updated = { ...item, deletedAt, updatedAt: deletedAt };
+    await database.decisionBlockFeedback.put(updated);
+    const queue = await database.analysisQueueItems.where("feedbackId").equals(item.id).first();
+    if (queue && queue.status !== "deleted") {
+      transitionAnalysisQueueItem(queue.status, "deleted");
+      await database.analysisQueueItems.put({ ...queue, status: "deleted", deletedAt, updatedAt: deletedAt });
+    }
+    tombstoned.push(updated);
+  }
+  return tombstoned;
+};
+
 export class DexieReviewCoachRepository implements ReviewCoachRepository {
   constructor(private readonly database: StudyJournalDatabase = defaultDatabase) {}
 
@@ -373,29 +469,7 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
   }
 
   private async rebuildProjectionsInTransaction() {
-    const snapshot = await getReviewCoachFormalSnapshot(this.database);
-    const records = (await this.database.blocks.toArray()).filter((block) => block.type === "record").map((block) => block.id);
-    validateReviewCoachFormalSnapshot(snapshot, new Set(records));
-    const replayedAt = latestFactTime(snapshot);
-    const states = replayAllDecisionBlockStates(snapshot, replayedAt);
-    const effects = replayInterventionEffectSummaries({
-      interpretations: snapshot.feedbackInterpretations,
-      blueprints: snapshot.sessionBlueprints,
-      tasks: snapshot.adaptiveReviewTasks,
-      turns: snapshot.adaptiveQuizTurns,
-      outcomes: snapshot.taskOutcomeEvents,
-      verifications: snapshot.delayedVerifications,
-      replayedAt,
-    });
-    await Promise.all([
-      this.database.decisionBlockStates.clear(),
-      this.database.interventionEffectSummaries.clear(),
-    ]);
-    await Promise.all([
-      this.database.decisionBlockStates.bulkPut(states),
-      this.database.interventionEffectSummaries.bulkPut(effects),
-    ]);
-    return { states, effects };
+    return rebuildReviewCoachProjectionsInTransaction(this.database);
   }
 
   async saveDecisionBlock(block: DecisionBlock): Promise<DecisionBlock> {
@@ -587,28 +661,12 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
   }
 
   async addFeedback(feedback: DecisionBlockFeedback, queueItem?: AnalysisQueueItem): Promise<DecisionBlockFeedback> {
-    if (!feedback.comment.trim()) throw new ReviewCoachValidationError("empty-feedback", "Empty feedback is not a formal event.");
     return this.database.transaction("rw", [this.database.recordReviewLogs, this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
-      const existing = await ensureIdempotentInsert(this.database.decisionBlockFeedback, feedback);
-      if (existing) return existing;
-      assertCurrentDecisionBlockRef(await this.database.decisionBlocks.get(feedback.decisionBlockId), feedback);
-      if (feedback.reviewLogId) {
-        const log = await this.database.recordReviewLogs.get(feedback.reviewLogId);
-        if (!log || log.recordId !== feedback.recordId) throw new ReviewCoachValidationError("dangling-review-log", "Feedback review log does not exist or belongs to another record.");
-      }
-      if (feedback.includeInAnalysis) {
-        if (!queueItem || queueItem.feedbackId !== feedback.id) throw new ReviewCoachValidationError("missing-queue-item", "Analysis-enabled feedback requires a matching queue item.");
-        if (queueItem.decisionBlockId !== feedback.decisionBlockId || queueItem.contentVersion !== feedback.contentVersion || queueItem.recordId !== feedback.recordId) {
-          throw new ReviewCoachValidationError("dangling-queue-item", "Queue item does not match feedback.");
-        }
-      } else if (queueItem) {
-        throw new ReviewCoachValidationError("unexpected-queue-item", "Opted-out feedback cannot create a queue item.");
-      }
-      await this.database.decisionBlockFeedback.add(feedback);
-      if (queueItem) await this.database.analysisQueueItems.add(queueItem);
+      const persisted = await persistDecisionBlockFeedbackInTransaction(this.database, feedback, queueItem);
+      if (!persisted.created) return persisted.feedback;
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
-      return feedback;
+      return persisted.feedback;
     });
   }
 
@@ -624,6 +682,20 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return updated;
+    });
+  }
+
+  async updateQueueItemAnalysisNote(id: string, analysisNote: string, updatedAt: string): Promise<AnalysisQueueItem> {
+    return this.database.transaction("rw", [this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
+      const current = await this.database.analysisQueueItems.get(id);
+      if (!current || current.status === "deleted" || current.status === "stale" || current.status === "consumed") {
+        throw new ReviewCoachValidationError("inactive-queue-item", `Queue item ${id} cannot be edited.`);
+      }
+      const normalizedNote = analysisNote.trim();
+      const next = { ...current, analysisNote: normalizedNote || undefined, updatedAt };
+      await this.database.analysisQueueItems.put(next);
+      await this.bumpMutation();
+      return next;
     });
   }
 
@@ -655,7 +727,7 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
         status,
         updatedAt,
         batchId: status === "batched" ? batchId : undefined,
-        excludedAt: status === "excluded" ? updatedAt : current.excludedAt,
+        excludedAt: status === "excluded" ? updatedAt : status === "eligible" ? undefined : current.excludedAt,
         consumedAt: status === "consumed" ? updatedAt : current.consumedAt,
         deletedAt: status === "deleted" ? updatedAt : current.deletedAt,
       };

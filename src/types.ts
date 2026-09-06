@@ -152,11 +152,20 @@ export interface RecordReviewUndoToken {
   previousReview: RecordReviewState;
   previousLog?: RecordReviewLog;
   previousDayStat?: RecordReviewDayStat;
+  decisionBlockFeedbackIds?: EntityId[];
 }
 
 export interface RecordReviewRateResult {
   review: RecordReviewState;
   undoToken: RecordReviewUndoToken;
+}
+
+export interface RecordReviewDecisionBlockFeedbackInput {
+  decisionBlockId: EntityId;
+  contentVersion: number;
+  comment: string;
+  includeInAnalysis: boolean;
+  operationId: string;
 }
 
 export interface RecordReviewDayStat extends BaseEntity {
@@ -1007,7 +1016,13 @@ export interface StorageAdapter {
   addRecordToReview(recordId: EntityId, kind?: RecordReviewKind): Promise<RecordReviewState | undefined>;
   addRecordsToReview(recordIds: EntityId[], kind?: RecordReviewKind): Promise<RecordReviewBulkResult>;
   setRecordReviewKind(recordId: EntityId, kind: RecordReviewKind): Promise<RecordReviewState | undefined>;
-  rateRecordReview(recordId: EntityId, rating: RecordReviewRating, reviewedAt?: ISODateTime, evaluationText?: string): Promise<RecordReviewRateResult | undefined>;
+  rateRecordReview(
+    recordId: EntityId,
+    rating: RecordReviewRating,
+    reviewedAt?: ISODateTime,
+    evaluationText?: string,
+    decisionBlockFeedback?: readonly RecordReviewDecisionBlockFeedbackInput[],
+  ): Promise<RecordReviewRateResult | undefined>;
   undoRecordReview(token: RecordReviewUndoToken): Promise<RecordReviewState | undefined>;
   resetRecordReview(recordId: EntityId): Promise<RecordReviewState | undefined>;
   removeRecordFromReview(recordId: EntityId): Promise<RecordReviewState | undefined>;

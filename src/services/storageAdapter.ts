@@ -18,6 +18,7 @@ import type {
   RecordBlock,
   RecordReviewBulkResult,
   RecordReviewDayStat,
+  RecordReviewDecisionBlockFeedbackInput,
   RecordReviewLog,
   RecordReviewKind,
   RecordReviewRateResult,
@@ -63,14 +64,22 @@ import { normalizeRecordTags, sameRecordTags } from "../lib/recordTags";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
 import { normalizeTtsConfig } from "../lib/ttsProviders";
-import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT, type ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
+import {
+  EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT,
+  type AnalysisQueueItem,
+  type DecisionBlockFeedback,
+  type ReviewCoachFormalSnapshot,
+} from "../features/reviewCoach/domain";
 import {
   DexieReviewCoachRepository,
   getReviewCoachFormalSnapshot,
+  persistDecisionBlockFeedbackInTransaction,
+  rebuildReviewCoachProjectionsInTransaction,
   restoreReviewCoachFormalSnapshot,
   reviewCoachFormalTables,
   reviewCoachRestoreTables,
   purgeReviewCoachFactsForRecord,
+  tombstoneDecisionBlockFeedbackInTransaction,
 } from "../features/reviewCoach/repository";
 import { validateReviewCoachFormalSnapshot } from "../features/reviewCoach/validation";
 import { extractDecisionBlocks, prepareDecisionBlockContentForSave } from "../features/reviewCoach/decisionBlockContent";
@@ -1110,6 +1119,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     rating: RecordReviewRating,
     reviewedAt = nowISO(),
     evaluationText?: string,
+    decisionBlockFeedback: readonly RecordReviewDecisionBlockFeedbackInput[] = [],
   ): Promise<RecordReviewRateResult | undefined> {
     const record = await this.activeRecord(recordId);
     const review = await db.recordReviews.get(recordId);
@@ -1124,7 +1134,10 @@ export class DexieStorageAdapter implements StorageAdapter {
     const normalizedEvaluationText = normalizeReviewEvaluationText(evaluationText);
 
     await markCloudSyncMutation();
-    const result = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+    const result = await db.transaction(
+      "rw",
+      [db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
+      async () => {
       const current = await db.recordReviews.get(recordId);
       if (!current || current.status !== "active") {
         return undefined;
@@ -1175,6 +1188,40 @@ export class DexieStorageAdapter implements StorageAdapter {
       }
       await db.recordReviews.put(nextState);
       await db.recordReviewLogs.put(log);
+      const feedbackIds: string[] = [];
+      let createdFeedback = false;
+      for (const input of decisionBlockFeedback) {
+        const comment = input.comment.trim();
+        if (!comment) continue;
+        const feedback: DecisionBlockFeedback = {
+          id: newId(),
+          createdAt: reviewedAt,
+          updatedAt: reviewedAt,
+          decisionBlockId: input.decisionBlockId,
+          recordId,
+          contentVersion: input.contentVersion,
+          reviewLogId: log.id,
+          comment,
+          includeInAnalysis: input.includeInAnalysis,
+          source: "review",
+          occurredAt: reviewedAt,
+          idempotencyKey: `feedback:${input.operationId}`,
+        };
+        const queueItem: AnalysisQueueItem | undefined = input.includeInAnalysis ? {
+          id: newId(),
+          createdAt: reviewedAt,
+          updatedAt: reviewedAt,
+          decisionBlockId: input.decisionBlockId,
+          recordId,
+          contentVersion: input.contentVersion,
+          feedbackId: feedback.id,
+          status: "eligible",
+          eligibilityReason: "user-feedback",
+        } : undefined;
+        const persisted = await persistDecisionBlockFeedbackInTransaction(db, feedback, queueItem);
+        feedbackIds.push(persisted.feedback.id);
+        createdFeedback ||= persisted.created;
+      }
       const existingStat = await db.recordReviewDayStats.get(reviewedDate);
       const stat = existingStat ?? {
         ...createBaseEntity(),
@@ -1199,8 +1246,9 @@ export class DexieStorageAdapter implements StorageAdapter {
           goodCount: (stat.goodCount ?? 0) + (normalizedRating === "good" ? 1 : 0),
           easyCount: (stat.easyCount ?? 0) + (normalizedRating === "easy" ? 1 : 0),
           updatedAt: nowISO(),
-        };
+      };
       await db.recordReviewDayStats.put(nextStat);
+      if (createdFeedback) await rebuildReviewCoachProjectionsInTransaction(db);
       return {
         review: nextState,
         undoToken: {
@@ -1210,9 +1258,11 @@ export class DexieStorageAdapter implements StorageAdapter {
           previousReview: current,
           previousLog: correctionLog,
           previousDayStat: existingStat,
+          decisionBlockFeedbackIds: feedbackIds,
         },
       };
-    });
+      },
+    );
 
     if (!result) {
       return undefined;
@@ -1261,7 +1311,10 @@ export class DexieStorageAdapter implements StorageAdapter {
     }
 
     await markCloudSyncMutation();
-    const result = await db.transaction("rw", db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, async () => {
+    const result = await db.transaction(
+      "rw",
+      [db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
+      async () => {
       const [current, currentLog, recordLogs] = await Promise.all([
         db.recordReviews.get(token.recordId),
         db.recordReviewLogs.get(token.reviewLogId),
@@ -1285,6 +1338,12 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...reviewActionLog("rating-undone", current, token.previousReview),
         revertedEventId: currentLog.id,
       });
+      const deletedFeedback = await tombstoneDecisionBlockFeedbackInTransaction(
+        db,
+        token.decisionBlockFeedbackIds ?? [],
+        currentLog.id,
+        nowISO(),
+      );
 
       const reviewedDate = isoDateTimeToLocalDate(token.reviewedAt);
       if (token.previousDayStat) {
@@ -1292,8 +1351,10 @@ export class DexieStorageAdapter implements StorageAdapter {
       } else {
         await db.recordReviewDayStats.delete(reviewedDate);
       }
+      if (deletedFeedback.length > 0) await rebuildReviewCoachProjectionsInTransaction(db);
       return token.previousReview;
-    });
+      },
+    );
     return result;
   }
 

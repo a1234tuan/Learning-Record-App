@@ -3,6 +3,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
+import type { AnalysisQueueItem, DecisionBlockFeedback } from "../features/reviewCoach/domain";
 import { createInitialReviewLibraryState } from "../lib/tabNavigation";
 
 const richTextEditorMock = vi.hoisted(() => ({
@@ -42,6 +43,40 @@ const record = (id: string, title: string, subject: string): RecordBlock => ({
   assets: [],
   formulas: [],
   mistakeRefs: [],
+});
+
+const withDecisionBlock = (item: RecordBlock, decisionBlockId = `decision-${item.id}`): RecordBlock => ({
+  ...item,
+  contentHtml: `<p>content</p><record-decision-block data-decision-block-id="${decisionBlockId}" data-content-version="1" data-created-at="${stamp}" data-updated-at="${stamp}"><p>${item.title} 的关键边界</p></record-decision-block>`,
+});
+
+const decisionBlockFeedback = (patch: Partial<DecisionBlockFeedback> = {}): DecisionBlockFeedback => ({
+  id: "feedback-active",
+  decisionBlockId: "decision-active",
+  recordId: "active",
+  contentVersion: 1,
+  reviewLogId: "log-active",
+  comment: "入队时机仍然容易混淆",
+  includeInAnalysis: true,
+  source: "review",
+  occurredAt: "2026-07-02T16:30:00.000Z",
+  idempotencyKey: "feedback-operation-active",
+  createdAt: "2026-07-02T16:30:00.000Z",
+  updatedAt: "2026-07-02T16:30:00.000Z",
+  ...patch,
+});
+
+const analysisQueueItem = (patch: Partial<AnalysisQueueItem> = {}): AnalysisQueueItem => ({
+  id: "queue-active",
+  decisionBlockId: "decision-active",
+  recordId: "active",
+  contentVersion: 1,
+  feedbackId: "feedback-active",
+  status: "eligible",
+  eligibilityReason: "user-feedback",
+  createdAt: "2026-07-02T16:30:00.000Z",
+  updatedAt: "2026-07-02T16:30:00.000Z",
+  ...patch,
 });
 
 const review = (recordId: string, patch: Partial<RecordReviewState> = {}): RecordReviewState => ({
@@ -619,9 +654,10 @@ describe("ReviewPage", () => {
     await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good"));
   });
 
-  it("submits the current evaluation draft with the rating and clears the saved draft", async () => {
+  it("submits non-empty decision-block feedback with the rating", async () => {
     const onRate = vi.fn().mockResolvedValue(undefined);
     renderReviewPage({
+      records: records.map((item) => item.id === "active" ? withDecisionBlock(item) : item),
       mode: "queue",
       dueReviews: [review("active")],
       reviewStates: [review("active")],
@@ -630,19 +666,24 @@ describe("ReviewPage", () => {
       onRate,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
-    fireEvent.change(screen.getByLabelText("本次复习评价"), {
+    fireEvent.change(screen.getByLabelText("复习重点 1 本次评论"), {
       target: { value: "- 新理解\n1. 掌握更稳" },
     });
     clickRating(/良好/);
 
-    await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good", "- 新理解\n1. 掌握更稳"));
-    expect(window.localStorage.getItem("study-journal-review-evaluation-draft:active")).toBeNull();
+    await waitFor(() => expect(onRate).toHaveBeenCalledWith("active", "good", [expect.objectContaining({
+      decisionBlockId: "decision-active",
+      contentVersion: 1,
+      comment: "- 新理解\n1. 掌握更稳",
+      includeInAnalysis: true,
+      operationId: expect.any(String),
+    })]));
   });
 
-  it("keeps the evaluation draft when rating fails", async () => {
+  it("keeps decision-block feedback when rating fails", async () => {
     const onRate = vi.fn().mockRejectedValue(new Error("数据库写入失败"));
     renderReviewPage({
+      records: records.map((item) => item.id === "active" ? withDecisionBlock(item) : item),
       mode: "queue",
       dueReviews: [review("active")],
       reviewStates: [review("active")],
@@ -651,17 +692,16 @@ describe("ReviewPage", () => {
       onRate,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
-    fireEvent.change(screen.getByLabelText("本次复习评价"), {
+    fireEvent.change(screen.getByLabelText("复习重点 1 本次评论"), {
       target: { value: "这次还是容易混淆" },
     });
     clickRating(/良好/);
 
     await waitFor(() => expect(screen.getByText(/复习评分失败/)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByLabelText("本次复习评价")).toHaveValue("这次还是容易混淆"));
+    await waitFor(() => expect(screen.getByLabelText("复习重点 1 本次评论")).toHaveValue("这次还是容易混淆"));
   });
 
-  it("shows historical evaluation text in the review evaluation panel", () => {
+  it("shows legacy record-level evaluation as collapsed read-only history", () => {
     renderReviewPage({
       mode: "queue",
       dueReviews: [review("active")],
@@ -673,9 +713,55 @@ describe("ReviewPage", () => {
       currentRecordId: "active",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
-
+    expect(screen.getByText("旧版整条日志评价（1）").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("- 上次把页表和 TLB 关系理顺了")).toBeInTheDocument();
+  });
+
+  it("manages queued block feedback and explicitly links legacy evaluations", async () => {
+    const onTransitionAnalysisQueueItem = vi.fn().mockResolvedValue(undefined);
+    const onUpdateAnalysisQueueItemNote = vi.fn().mockResolvedValue(undefined);
+    const onDeleteDecisionBlockFeedback = vi.fn().mockResolvedValue(undefined);
+    const onLinkLegacyReviewFeedback = vi.fn().mockResolvedValue(undefined);
+    renderReviewPage({
+      records: records.map((item) => item.id === "active" ? withDecisionBlock(item) : item),
+      mode: "queue",
+      dueReviews: [review("active")],
+      reviewStates: [review("active")],
+      reviewLogsByRecord: {
+        active: [reviewLog("active", { evaluationText: "旧评价待手动确认" })],
+      },
+      decisionBlockFeedback: [decisionBlockFeedback()],
+      analysisQueueItems: [analysisQueueItem()],
+      queueIds: ["active"],
+      currentRecordId: "active",
+      onTransitionAnalysisQueueItem,
+      onUpdateAnalysisQueueItemNote,
+      onDeleteDecisionBlockFeedback,
+      onLinkLegacyReviewFeedback,
+    });
+
+    fireEvent.click(screen.getByText("1 条历史评论"));
+    fireEvent.click(screen.getByRole("button", { name: "排除本次" }));
+    await waitFor(() => expect(onTransitionAnalysisQueueItem).toHaveBeenCalledWith("queue-active", "excluded"));
+
+    fireEvent.change(screen.getByLabelText("评论 feedback-active 的本次分析说明"), { target: { value: "只检查入队时机" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存说明" }));
+    await waitFor(() => expect(onUpdateAnalysisQueueItemNote).toHaveBeenCalledWith("queue-active", "只检查入队时机"));
+
+    fireEvent.click(screen.getByRole("button", { name: "永久删除评论：入队时机仍然容易混淆" }));
+    await waitFor(() => expect(onDeleteDecisionBlockFeedback).toHaveBeenCalledWith("feedback-active"));
+
+    fireEvent.click(screen.getByText("旧版整条日志评价（1）"));
+    fireEvent.change(screen.getByLabelText("为旧评价 log-active 选择复习重点"), { target: { value: "decision-active" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认关联" }));
+    await waitFor(() => expect(onLinkLegacyReviewFeedback).toHaveBeenCalledWith({
+      recordId: "active",
+      reviewLogId: "log-active",
+      decisionBlockId: "decision-active",
+      contentVersion: 1,
+      comment: "旧评价待手动确认",
+      includeInAnalysis: true,
+    }));
   });
 
   it("disables rating buttons while a rating is in flight and avoids duplicate rate calls", async () => {
@@ -723,7 +809,7 @@ describe("ReviewPage", () => {
     expect(onCurrentRecordChange).toHaveBeenLastCalledWith("active");
   });
 
-  it("undoes consecutive ratings in reverse order and restores the evaluation draft", async () => {
+  it("undoes consecutive ratings in reverse order and restores decision-block feedback", async () => {
     const onRate = vi.fn()
       .mockResolvedValueOnce(undoToken("active"))
       .mockResolvedValueOnce(undoToken("second"));
@@ -731,6 +817,7 @@ describe("ReviewPage", () => {
     const onQueueChange = vi.fn();
     const onCurrentRecordChange = vi.fn();
     renderReviewPage({
+      records: records.map((item) => item.id === "active" ? withDecisionBlock(item) : item),
       mode: "queue",
       dueReviews: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
       reviewStates: [review("active"), review("second", { nextReviewDate: "2026-07-03" })],
@@ -742,8 +829,7 @@ describe("ReviewPage", () => {
       onCurrentRecordChange,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /添加本次复习笔记/ }));
-    fireEvent.change(screen.getByLabelText("本次复习评价"), { target: { value: "要重新理解 BFS 层序边界" } });
+    fireEvent.change(screen.getByLabelText("复习重点 1 本次评论"), { target: { value: "要重新理解 BFS 层序边界" } });
     clickRating(/良好/);
     fireEvent.click(screen.getByRole("button", { name: "打开复习更多菜单" }));
     await waitFor(() => expect(screen.getByRole("menuitem", { name: /撤回上次评分/ })).toBeEnabled());
@@ -761,7 +847,7 @@ describe("ReviewPage", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /撤回上次评分/ }));
     await waitFor(() => expect(onUndo).toHaveBeenCalledWith(expect.objectContaining({ recordId: "active" })));
     await waitFor(() => expect(screen.getByText("BFS 队列")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByLabelText("本次复习评价")).toHaveValue("要重新理解 BFS 层序边界"));
+    await waitFor(() => expect(screen.getByLabelText("复习重点 1 本次评论")).toHaveValue("要重新理解 BFS 层序边界"));
     expect(onQueueChange).toHaveBeenLastCalledWith(["active", "second"]);
     expect(onCurrentRecordChange).toHaveBeenLastCalledWith("active");
   });

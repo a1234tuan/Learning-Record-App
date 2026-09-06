@@ -11,6 +11,7 @@ import type {
   RecordBlock,
   RecordReviewBulkResult,
   RecordReviewDayStat,
+  RecordReviewDecisionBlockFeedbackInput,
   RecordReviewLog,
   RecordReviewKind,
   RecordReviewRating,
@@ -22,8 +23,8 @@ import type {
   SubjectConfig,
 } from "../types";
 import { storage } from "../services/storageAdapter";
-import { createBaseEntity } from "../lib/entity";
-import { todayISO } from "../lib/date";
+import { createBaseEntity, newId } from "../lib/entity";
+import { nowISO, todayISO } from "../lib/date";
 import { createTemplateBlocks } from "../db/defaults";
 import { extractDecisionBlocks, renewDecisionBlockIdentitiesInHtml } from "../features/reviewCoach/decisionBlockContent";
 import {
@@ -39,6 +40,15 @@ import { enqueueAutoOcrForRecord } from "../services/ocrJobService";
 import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupService";
 import { cancelAllKnowledgePodcastJobs, recoverKnowledgePodcastJobs, subscribeKnowledgePodcastJobs, syncNativeKnowledgePodcastTtsJobs } from "../services/knowledgePodcastJobService";
 import { cleanupCloudRecoverySnapshotsIfDue, getCurrentCloudUser } from "../services/cloudSyncService";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT, type AnalysisQueueStatus, type ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
+import { ReviewCoachOrchestrator } from "../features/reviewCoach/orchestrator";
+import { reviewCoachRepository } from "../features/reviewCoach/repository";
+
+const reviewCoachOrchestrator = new ReviewCoachOrchestrator({
+  repository: reviewCoachRepository,
+  ids: { next: newId },
+  clock: { now: nowISO },
+});
 
 export const useAppData = () => {
   const [initialized, setInitialized] = useState(false);
@@ -54,10 +64,11 @@ export const useAppData = () => {
   const [dueRecordReviews, setDueRecordReviews] = useState<RecordReviewState[]>([]);
   const [recordReviewLogs, setRecordReviewLogs] = useState<RecordReviewLog[]>([]);
   const [recordReviewStats, setRecordReviewStats] = useState<RecordReviewStats | null>(null);
+  const [reviewCoachSnapshot, setReviewCoachSnapshot] = useState<ReviewCoachFormalSnapshot>(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
   const [assetsVersion, setAssetsVersion] = useState(0);
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList, currentAutoBackupState] = await Promise.all([
+    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList, currentAutoBackupState, coachSnapshot] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.listTemplates(),
@@ -70,6 +81,7 @@ export const useAppData = () => {
       storage.getRecordReviewStats(todayISO()),
       storage.listKnowledgePodcasts?.() ?? Promise.resolve([]),
       storage.getAutoBackupState(),
+      reviewCoachRepository.getFormalSnapshot(),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
@@ -83,6 +95,7 @@ export const useAppData = () => {
     setRecordReviewLogs(reviewLogs);
     setRecordReviewStats(reviewStats);
     setPodcasts(podcastList);
+    setReviewCoachSnapshot(coachSnapshot);
   }, []);
 
   useEffect(() => {
@@ -263,10 +276,10 @@ export const useAppData = () => {
   );
 
   const rateRecordReview = useCallback(
-    async (recordId: string, rating: RecordReviewRating, evaluationText?: string) => {
-      const result = evaluationText === undefined
-        ? await storage.rateRecordReview(recordId, rating)
-        : await storage.rateRecordReview(recordId, rating, undefined, evaluationText);
+    async (recordId: string, rating: RecordReviewRating, feedback?: readonly RecordReviewDecisionBlockFeedbackInput[]) => {
+      const result = feedback && feedback.length > 0
+        ? await storage.rateRecordReview(recordId, rating, undefined, undefined, feedback)
+        : await storage.rateRecordReview(recordId, rating);
       await refresh();
       if (result) {
         await markAutoBackupDirty("record-review-rate");
@@ -275,6 +288,45 @@ export const useAppData = () => {
     },
     [refresh],
   );
+
+  const deleteDecisionBlockFeedback = useCallback(async (feedbackId: string) => {
+    const deleted = await reviewCoachRepository.deleteFeedback(feedbackId, nowISO());
+    await refresh();
+    await markAutoBackupDirty("decision-block-feedback-delete");
+    return deleted;
+  }, [refresh]);
+
+  const transitionAnalysisQueueItem = useCallback(async (queueItemId: string, status: Extract<AnalysisQueueStatus, "eligible" | "excluded">) => {
+    const updated = await reviewCoachRepository.transitionQueueItem(queueItemId, status, nowISO());
+    await refresh();
+    await markAutoBackupDirty("analysis-queue-update");
+    return updated;
+  }, [refresh]);
+
+  const updateAnalysisQueueItemNote = useCallback(async (queueItemId: string, analysisNote: string) => {
+    const updated = await reviewCoachRepository.updateQueueItemAnalysisNote(queueItemId, analysisNote, nowISO());
+    await refresh();
+    await markAutoBackupDirty("analysis-queue-note");
+    return updated;
+  }, [refresh]);
+
+  const linkLegacyReviewFeedback = useCallback(async (input: {
+    recordId: string;
+    reviewLogId: string;
+    decisionBlockId: string;
+    contentVersion: number;
+    comment: string;
+    includeInAnalysis: boolean;
+  }) => {
+    const feedback = await reviewCoachOrchestrator.recordFeedback({
+      ...input,
+      source: "legacy-manual-link",
+      operationId: `legacy-link:${input.reviewLogId}:${input.decisionBlockId}:${input.contentVersion}`,
+    });
+    await refresh();
+    await markAutoBackupDirty("legacy-review-feedback-link");
+    return feedback;
+  }, [refresh]);
 
   const undoRecordReview = useCallback(
     async (token: RecordReviewUndoToken) => {
@@ -611,6 +663,7 @@ export const useAppData = () => {
     dueRecordReviews,
     recordReviewLogs,
     recordReviewStats,
+    reviewCoachSnapshot,
     subjects,
     activeSubjects,
     todayEntry,
@@ -633,6 +686,10 @@ export const useAppData = () => {
     setRecordReviewKind,
     rateRecordReview,
     undoRecordReview,
+    deleteDecisionBlockFeedback,
+    transitionAnalysisQueueItem,
+    updateAnalysisQueueItemNote,
+    linkLegacyReviewFeedback,
     resetRecordReview,
     removeRecordFromReview,
     ensureRecordReviewDay,

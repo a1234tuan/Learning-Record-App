@@ -21,6 +21,24 @@ const mocks = vi.hoisted(() => ({
   purgeExpiredDeletedBlocks: vi.fn().mockResolvedValue(0),
   refresh: vi.fn().mockResolvedValue(undefined),
   markAutoBackupDirty: vi.fn().mockResolvedValue(undefined),
+  getReviewCoachFormalSnapshot: vi.fn().mockResolvedValue({
+    decisionBlocks: [],
+    decisionBlockArchives: [],
+    decisionBlockFeedback: [],
+    feedbackInterpretations: [],
+    analysisQueueItems: [],
+    analysisBatches: [],
+    sessionBlueprints: [],
+    adaptiveReviewTasks: [],
+    adaptiveQuizTurns: [],
+    taskOutcomeEvents: [],
+    delayedVerifications: [],
+    aiRoleConfigs: [],
+    legacyLearningEvidence: [],
+    legacyKnowledgePoints: [],
+    legacyRecordKnowledgePointLinks: [],
+    legacyKnowledgeRelations: [],
+  }),
 }));
 
 vi.mock("../services/storageAdapter", () => ({
@@ -38,6 +56,11 @@ vi.mock("../services/knowledgePodcastJobService", () => ({
   syncNativeKnowledgePodcastTtsJobs: vi.fn(),
 }));
 vi.mock("../services/cloudSyncService", () => ({ cleanupCloudRecoverySnapshotsIfDue: vi.fn(), getCurrentCloudUser: vi.fn() }));
+vi.mock("../features/reviewCoach/repository", () => ({
+  reviewCoachRepository: {
+    getFormalSnapshot: mocks.getReviewCoachFormalSnapshot,
+  },
+}));
 
 import { useAppData } from "./useAppData";
 

@@ -11,15 +11,26 @@
   RefreshCw,
   RotateCcw,
   Search,
+  Trash2,
   Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { RecordBlock, RecordReviewLog, RecordReviewRating, RecordReviewState, RecordReviewStats, RecordReviewUndoToken, SubjectConfig } from "../types";
+import type {
+  RecordBlock,
+  RecordReviewDecisionBlockFeedbackInput,
+  RecordReviewLog,
+  RecordReviewRating,
+  RecordReviewState,
+  RecordReviewStats,
+  RecordReviewUndoToken,
+  SubjectConfig,
+} from "../types";
 import { RichTextEditor } from "../components/RichTextEditor";
 import { RecordTagChips } from "../components/RecordTagChips";
 import { PageHeader } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
+import { newId } from "../lib/entity";
 import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
 import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
 import {
@@ -31,12 +42,16 @@ import {
   reviewKindLabel,
 } from "../lib/reviewScheduler";
 import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode, ReviewSessionProgress } from "../lib/tabNavigation";
+import { decisionBlockPreview, extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
+import type { AnalysisQueueItem, DecisionBlockFeedback } from "../features/reviewCoach/domain";
 
 interface ReviewPageProps {
   records: RecordBlock[];
   dueReviews: RecordReviewState[];
   reviewStates: RecordReviewState[];
   reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
+  decisionBlockFeedback?: readonly DecisionBlockFeedback[];
+  analysisQueueItems?: readonly AnalysisQueueItem[];
   stats: RecordReviewStats | null;
   mode: ReviewMode;
   queueIds: string[];
@@ -49,8 +64,23 @@ interface ReviewPageProps {
   onReviewProgressChange?: (progress?: ReviewSessionProgress) => void;
   onLibraryStateChange: (state: ReviewLibraryState) => void;
   onEnsureDay: (date: string, dueCountAtFirstOpen: number) => Promise<unknown>;
-  onRate: (recordId: string, rating: RecordReviewRating, evaluationText?: string) => Promise<RecordReviewUndoToken | undefined>;
+  onRate: (
+    recordId: string,
+    rating: RecordReviewRating,
+    decisionBlockFeedback?: readonly RecordReviewDecisionBlockFeedbackInput[],
+  ) => Promise<RecordReviewUndoToken | undefined>;
   onUndo: (token: RecordReviewUndoToken) => Promise<void>;
+  onDeleteDecisionBlockFeedback?: (feedbackId: string) => Promise<unknown>;
+  onTransitionAnalysisQueueItem?: (queueItemId: string, status: "eligible" | "excluded") => Promise<unknown>;
+  onUpdateAnalysisQueueItemNote?: (queueItemId: string, analysisNote: string) => Promise<unknown>;
+  onLinkLegacyReviewFeedback?: (input: {
+    recordId: string;
+    reviewLogId: string;
+    decisionBlockId: string;
+    contentVersion: number;
+    comment: string;
+    includeInAnalysis: boolean;
+  }) => Promise<unknown>;
   onRefresh: () => Promise<void>;
   onOpenStats?: () => void;
   onOpenRecord: (record: RecordBlock) => void;
@@ -84,10 +114,15 @@ interface ReviewUndoEntry {
   token: RecordReviewUndoToken;
   queueIds: string[];
   currentRecordId: string;
-  evaluationText: string;
+  blockFeedbackDrafts: Record<string, DecisionBlockFeedbackDraft>;
   dailyLimitIds: string[];
   showAllDue: boolean;
   reviewProgress: ReviewSessionProgress;
+}
+
+interface DecisionBlockFeedbackDraft {
+  comment: string;
+  includeInAnalysis: boolean;
 }
 
 const ratingConfig: Array<{ rating: RecordReviewRating; label: string; className: string }> = [
@@ -148,40 +183,9 @@ const normalizeReviewSessionProgress = (progress: ReviewSessionProgress | undefi
 };
 
 const EMPTY_REVIEW_LOGS: RecordReviewLog[] = [];
-const REVIEW_EVALUATION_DRAFT_PREFIX = "study-journal-review-evaluation-draft:";
-
+const EMPTY_DECISION_BLOCK_FEEDBACK: DecisionBlockFeedback[] = [];
+const EMPTY_ANALYSIS_QUEUE_ITEMS: AnalysisQueueItem[] = [];
 const hasEvaluationText = (log: RecordReviewLog) => Boolean(log.evaluationText?.trim());
-
-const reviewEvaluationDraftKey = (recordId: string) => `${REVIEW_EVALUATION_DRAFT_PREFIX}${recordId}`;
-
-const readReviewEvaluationDraft = (recordId: string): string => {
-  try {
-    return window.localStorage.getItem(reviewEvaluationDraftKey(recordId)) ?? "";
-  } catch {
-    return "";
-  }
-};
-
-const writeReviewEvaluationDraft = (recordId: string, text: string) => {
-  try {
-    const key = reviewEvaluationDraftKey(recordId);
-    if (text.trim()) {
-      window.localStorage.setItem(key, text);
-    } else {
-      window.localStorage.removeItem(key);
-    }
-  } catch {
-    // Storage may be unavailable in private contexts; the in-memory draft still works for this session.
-  }
-};
-
-const removeReviewEvaluationDraft = (recordId: string) => {
-  try {
-    window.localStorage.removeItem(reviewEvaluationDraftKey(recordId));
-  } catch {
-    // Ignore unavailable storage.
-  }
-};
 
 const suggestedDailyLimitIds = (reviews: RecordReviewState[], today: string) =>
   reviews
@@ -233,6 +237,8 @@ export const ReviewPage = ({
   dueReviews,
   reviewStates,
   reviewLogsByRecord = {},
+  decisionBlockFeedback = EMPTY_DECISION_BLOCK_FEEDBACK,
+  analysisQueueItems = EMPTY_ANALYSIS_QUEUE_ITEMS,
   stats,
   mode,
   queueIds,
@@ -247,6 +253,10 @@ export const ReviewPage = ({
   onEnsureDay,
   onRate,
   onUndo,
+  onDeleteDecisionBlockFeedback,
+  onTransitionAnalysisQueueItem,
+  onUpdateAnalysisQueueItemNote,
+  onLinkLegacyReviewFeedback,
   onRefresh,
   onOpenStats,
   onOpenRecord,
@@ -272,9 +282,12 @@ export const ReviewPage = ({
   const [undoing, setUndoing] = useState(false);
   const [ratingError, setRatingError] = useState("");
   const [showAllDue, setShowAllDue] = useState(false);
-  const [evaluationOpen, setEvaluationOpen] = useState(false);
-  const [evaluationDraft, setEvaluationDraft] = useState("");
-  const [evaluationDraftRecordId, setEvaluationDraftRecordId] = useState<string | undefined>();
+  const [blockFeedbackDrafts, setBlockFeedbackDrafts] = useState<Record<string, DecisionBlockFeedbackDraft>>({});
+  const [queueNoteDrafts, setQueueNoteDrafts] = useState<Record<string, string>>({});
+  const [legacyLinkTargets, setLegacyLinkTargets] = useState<Record<string, string>>({});
+  const [legacyIncludeInAnalysis, setLegacyIncludeInAnalysis] = useState<Record<string, boolean>>({});
+  const [feedbackActionId, setFeedbackActionId] = useState<string>();
+  const feedbackDraftRecordIdRef = useRef<string>();
   const today = todayISO();
   const [dailyLimitIds, setDailyLimitIds] = useState<string[]>(() => suggestedDailyLimitIds(dueReviews, today));
   const [sessionProgress, setSessionProgress] = useState<ReviewSessionProgress | undefined>(
@@ -343,6 +356,20 @@ export const ReviewPage = ({
   const currentEvaluationLogs = useMemo(
     () => currentReviewLogs.filter(hasEvaluationText),
     [currentReviewLogs],
+  );
+  const currentDecisionBlocks = useMemo(
+    () => currentRecord ? extractDecisionBlocks(normalizeRecordContent(currentRecord), currentRecord.updatedAt) : [],
+    [currentRecord],
+  );
+  const currentBlockFeedback = useMemo(
+    () => currentId
+      ? decisionBlockFeedback.filter((feedback) => feedback.recordId === currentId && !feedback.deletedAt)
+      : [],
+    [currentId, decisionBlockFeedback],
+  );
+  const queueByFeedbackId = useMemo(
+    () => new Map(analysisQueueItems.map((item) => [item.feedbackId, item])),
+    [analysisQueueItems],
   );
   const fallbackProgress: ReviewSessionProgress = {
     total: effectiveQueue.length + ratedRecordIds.size,
@@ -505,18 +532,26 @@ export const ReviewPage = ({
   }, [today, updateSessionProgress]);
 
   useEffect(() => {
-    const savedDraft = currentId ? readReviewEvaluationDraft(currentId) : "";
-    setEvaluationDraft(savedDraft);
-    setEvaluationDraftRecordId(currentId);
-    setEvaluationOpen(Boolean(savedDraft));
+    if (feedbackDraftRecordIdRef.current === currentId) return;
+    feedbackDraftRecordIdRef.current = currentId;
+    setBlockFeedbackDrafts({});
+    setLegacyLinkTargets({});
+    setLegacyIncludeInAnalysis({});
   }, [currentId]);
 
   useEffect(() => {
-    if (!currentId || evaluationDraftRecordId !== currentId) {
-      return;
-    }
-    writeReviewEvaluationDraft(currentId, evaluationDraft);
-  }, [currentId, evaluationDraft, evaluationDraftRecordId]);
+    setQueueNoteDrafts((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const item of analysisQueueItems) {
+        if (next[item.id] === undefined) {
+          next[item.id] = item.analysisNote ?? "";
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [analysisQueueItems]);
 
   useEffect(() => {
     if (!pendingUndoRestore) {
@@ -546,12 +581,20 @@ export const ReviewPage = ({
       completed: Math.min(previousProgress.total, previousProgress.completed + 1),
     };
     const nextQueue = effectiveQueue.filter((id) => id !== currentId);
-    const evaluationText = evaluationDraftRecordId === ratedId
-      ? evaluationDraft.trim()
-      : readReviewEvaluationDraft(ratedId).trim();
-    if (evaluationText) {
-      writeReviewEvaluationDraft(ratedId, evaluationText);
-    }
+    const submittedDrafts = Object.fromEntries(
+      Object.entries(blockFeedbackDrafts).map(([id, draft]) => [id, { ...draft }]),
+    );
+    const feedbackInputs: RecordReviewDecisionBlockFeedbackInput[] = currentDecisionBlocks.flatMap((block) => {
+      const draft = submittedDrafts[block.decisionBlockId];
+      const comment = draft?.comment.trim() ?? "";
+      return comment ? [{
+        decisionBlockId: block.decisionBlockId,
+        contentVersion: block.contentVersion,
+        comment,
+        includeInAnalysis: draft.includeInAnalysis,
+        operationId: newId(),
+      }] : [];
+    });
     setRatingError("");
     setRatingRecordId(ratedId);
     setRatedRecordIds((current) => new Set(current).add(ratedId));
@@ -559,40 +602,23 @@ export const ReviewPage = ({
     onQueueChange(nextQueue);
     onCurrentRecordChange(nextQueue[0]);
     try {
-      if (evaluationText) {
-        const token = await onRate(ratedId, rating, evaluationText);
-        if (token) {
-          setUndoHistory((current) => [
-            ...current,
-            {
-              token,
-              queueIds: previousQueue,
-              currentRecordId: previousCurrentId,
-              evaluationText,
-              dailyLimitIds,
-              showAllDue,
-              reviewProgress: previousProgress,
-            },
-          ]);
-        }
-      } else {
-        const token = await onRate(ratedId, rating);
-        if (token) {
-          setUndoHistory((current) => [
-            ...current,
-            {
-              token,
-              queueIds: previousQueue,
-              currentRecordId: previousCurrentId,
-              evaluationText,
-              dailyLimitIds,
-              showAllDue,
-              reviewProgress: previousProgress,
-            },
-          ]);
-        }
+      const token = feedbackInputs.length > 0
+        ? await onRate(ratedId, rating, feedbackInputs)
+        : await onRate(ratedId, rating);
+      if (token) {
+        setUndoHistory((current) => [
+          ...current,
+          {
+            token,
+            queueIds: previousQueue,
+            currentRecordId: previousCurrentId,
+            blockFeedbackDrafts: submittedDrafts,
+            dailyLimitIds,
+            showAllDue,
+            reviewProgress: previousProgress,
+          },
+        ]);
       }
-      removeReviewEvaluationDraft(ratedId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
       setRatedRecordIds((current) => {
@@ -601,6 +627,8 @@ export const ReviewPage = ({
         return next;
       });
       updateSessionProgress(previousProgress);
+      feedbackDraftRecordIdRef.current = previousCurrentId;
+      setBlockFeedbackDrafts(submittedDrafts);
       onQueueChange(previousQueue);
       onCurrentRecordChange(previousCurrentId);
       setRatingError(`复习评分失败：${message}`);
@@ -627,14 +655,8 @@ export const ReviewPage = ({
         return next;
       });
       updateSessionProgress(entry.reviewProgress);
-      if (entry.evaluationText) {
-        writeReviewEvaluationDraft(entry.currentRecordId, entry.evaluationText);
-      } else {
-        removeReviewEvaluationDraft(entry.currentRecordId);
-      }
-      setEvaluationDraft(entry.evaluationText);
-      setEvaluationDraftRecordId(entry.currentRecordId);
-      setEvaluationOpen(Boolean(entry.evaluationText));
+      feedbackDraftRecordIdRef.current = entry.currentRecordId;
+      setBlockFeedbackDrafts(entry.blockFeedbackDrafts);
       setShowAllDue(entry.showAllDue);
       setDailyLimitIds(entry.dailyLimitIds);
       onModeChange("queue");
@@ -674,6 +696,20 @@ export const ReviewPage = ({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [pendingUndoRestore, ratingRecordId, undoHistory.length, undoLastRating, undoing]);
+
+  const runFeedbackAction = async (actionId: string, action: () => Promise<unknown>) => {
+    if (feedbackActionId) return;
+    setRatingError("");
+    setFeedbackActionId(actionId);
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setRatingError(`复习评论操作失败：${message}`);
+    } finally {
+      setFeedbackActionId(undefined);
+    }
+  };
 
   const continueRemainingDue = () => {
     const nextQueue = availableDueReviews.map((review) => review.recordId).filter((id) => recordMap.has(id));
@@ -864,69 +900,202 @@ export const ReviewPage = ({
                 <span style={{ width: `${progressPercent}%` }} />
               </div>
             </section>
-            <article className="review-record-card">
+            <article className={`review-record-card ${currentDecisionBlocks.length > 0 ? "has-decision-blocks" : ""}`}>
               <header className="record-view-header">
                 <p className="eyebrow">{currentRecord.date}</p>
                 <h1>{currentRecord.title}</h1>
                 <RecordTagChips subject={currentRecord.subject} tags={currentRecord.tags} className="review-record-tags" />
                 <span className="review-record-meta">{currentRecord.subject} · {reviewKindLabel(currentReview?.reviewKind)}</span>
               </header>
-              <RichTextEditor
-                value={normalizeRecordContent(currentRecord)}
-                onChange={() => undefined}
-                placeholder=""
-                readOnly
-                currentRecordId={currentRecord.id}
-                referenceRecords={referenceRecords}
-                referenceSubjects={referenceSubjects}
-                onOpenRecordReference={onOpenRecordReference ? (targetRecordId) => onOpenRecordReference(currentRecord.id, targetRecordId) : undefined}
-              />
-              <section className={`review-evaluation-panel ${evaluationOpen ? "open" : ""}`} aria-label="复习笔记">
-                <button
-                  type="button"
-                  className="review-evaluation-toggle"
-                  onClick={() => setEvaluationOpen((open) => !open)}
-                  aria-expanded={evaluationOpen}
-                >
-                  <MessageSquare size={17} />
-                  <span>
-                    <strong>添加本次复习笔记</strong>
-                    <small>
-                      {evaluationDraft.trim()
-                        ? "草稿已保存"
-                        : currentEvaluationLogs.length > 0
-                          ? `${currentEvaluationLogs.length} 条历史评价`
-                          : "暂无评价"}
-                    </small>
-                  </span>
-                  <ChevronDown size={17} />
-                </button>
-                {evaluationOpen && (
-                  <div className="review-evaluation-body">
-                    <textarea
-                      value={evaluationDraft}
-                      onChange={(event) => setEvaluationDraft(event.target.value)}
-                      disabled={Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
-                      aria-label="本次复习评价"
-                      placeholder="新的理解、掌握程度、待补点..."
-                    />
-                    <div className="review-evaluation-state">
-                      <small>{evaluationDraft.trim() ? "评分后写入历史评价" : "评分时随卡片提交"}</small>
-                      {currentEvaluationLogs.length > 0 && <small>{currentEvaluationLogs.length} 条历史评价</small>}
-                    </div>
-                    {currentEvaluationLogs.length > 0 && (
-                      <div className="review-evaluation-history">
-                        {currentEvaluationLogs.slice(0, 8).map((log) => (
-                          <article key={log.id}>
-                            <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
-                            <p>{log.evaluationText}</p>
-                          </article>
-                        ))}
+              <div className={`review-learning-layout ${currentDecisionBlocks.length > 0 ? "has-decision-blocks" : ""}`}>
+                <RichTextEditor
+                  value={normalizeRecordContent(currentRecord)}
+                  onChange={() => undefined}
+                  placeholder=""
+                  readOnly
+                  currentRecordId={currentRecord.id}
+                  referenceRecords={referenceRecords}
+                  referenceSubjects={referenceSubjects}
+                  onOpenRecordReference={onOpenRecordReference ? (targetRecordId) => onOpenRecordReference(currentRecord.id, targetRecordId) : undefined}
+                />
+                {currentDecisionBlocks.length > 0 && (
+                  <section className="decision-block-reflection-list" aria-label="复习重点评论">
+                    <header>
+                      <MessageSquare size={17} />
+                      <div>
+                        <strong>针对复习重点写下真实卡点</strong>
+                        <small>评论会和整卡评分一起保存</small>
                       </div>
-                    )}
-                  </div>
+                    </header>
+                    {currentDecisionBlocks.map((block, index) => {
+                      const draft = blockFeedbackDrafts[block.decisionBlockId] ?? { comment: "", includeInAnalysis: true };
+                      const history = currentBlockFeedback
+                        .filter((feedback) => feedback.decisionBlockId === block.decisionBlockId)
+                        .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
+                      return (
+                        <article className="decision-block-reflection" key={block.decisionBlockId}>
+                          <div className="decision-block-reflection-heading">
+                            <span>复习重点 {index + 1}</span>
+                            <small>v{block.contentVersion}</small>
+                          </div>
+                          <p className="decision-block-reflection-preview">{decisionBlockPreview(block.contentHtml)}</p>
+                          <textarea
+                            value={draft.comment}
+                            onChange={(event) => setBlockFeedbackDrafts((current) => ({
+                              ...current,
+                              [block.decisionBlockId]: { ...draft, comment: event.target.value },
+                            }))}
+                            disabled={Boolean(ratingRecordId) || undoing || Boolean(pendingUndoRestore)}
+                            aria-label={`复习重点 ${index + 1} 本次评论`}
+                            placeholder="具体哪里卡住、为什么容易错，或这次想验证什么？"
+                          />
+                          <label className="decision-block-analysis-toggle">
+                            <input
+                              type="checkbox"
+                              checked={draft.includeInAnalysis}
+                              onChange={(event) => setBlockFeedbackDrafts((current) => ({
+                                ...current,
+                                [block.decisionBlockId]: { ...draft, includeInAnalysis: event.target.checked },
+                              }))}
+                            />
+                            <span>加入待分析</span>
+                          </label>
+                          {history.length > 0 && (
+                            <details className="decision-block-feedback-history">
+                              <summary>{history.length} 条历史评论</summary>
+                              <div>
+                                {history.map((feedback) => {
+                                  const queueItem = queueByFeedbackId.get(feedback.id);
+                                  const queueEditable = queueItem && ["eligible", "excluded", "batched"].includes(queueItem.status);
+                                  return (
+                                    <article key={feedback.id}>
+                                      <div className="decision-block-feedback-meta">
+                                        <strong>{isoDateTimeToLocalDate(feedback.occurredAt)}</strong>
+                                        <small>{feedback.source === "legacy-manual-link" ? "旧评价手动关联" : `v${feedback.contentVersion}`}</small>
+                                      </div>
+                                      <p>{feedback.comment}</p>
+                                      {queueEditable && (
+                                        <div className="decision-block-queue-controls">
+                                          <textarea
+                                            value={queueNoteDrafts[queueItem.id] ?? queueItem.analysisNote ?? ""}
+                                            onChange={(event) => setQueueNoteDrafts((current) => ({ ...current, [queueItem.id]: event.target.value }))}
+                                            aria-label={`评论 ${feedback.id} 的本次分析说明`}
+                                            placeholder="可选：只对本次分析补充背景"
+                                          />
+                                          <div>
+                                            {onTransitionAnalysisQueueItem && queueItem.status !== "batched" && (
+                                              <button
+                                                type="button"
+                                                onClick={() => void runFeedbackAction(queueItem.id, () => onTransitionAnalysisQueueItem(
+                                                  queueItem.id,
+                                                  queueItem.status === "excluded" ? "eligible" : "excluded",
+                                                ))}
+                                                disabled={Boolean(feedbackActionId)}
+                                              >
+                                                {queueItem.status === "excluded" ? "恢复分析" : "排除本次"}
+                                              </button>
+                                            )}
+                                            {onUpdateAnalysisQueueItemNote && (
+                                              <button
+                                                type="button"
+                                                onClick={() => void runFeedbackAction(`${queueItem.id}:note`, () => onUpdateAnalysisQueueItemNote(
+                                                  queueItem.id,
+                                                  queueNoteDrafts[queueItem.id] ?? queueItem.analysisNote ?? "",
+                                                ))}
+                                                disabled={Boolean(feedbackActionId)}
+                                              >
+                                                保存说明
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                      {feedback.includeInAnalysis && !queueEditable && (
+                                        <small className="decision-block-feedback-status">{queueItem?.status === "stale" ? "源内容已更新" : "已离开待分析队列"}</small>
+                                      )}
+                                      {!feedback.includeInAnalysis && <small className="decision-block-feedback-status">未加入分析</small>}
+                                      {onDeleteDecisionBlockFeedback && (
+                                        <button
+                                          type="button"
+                                          className="decision-block-feedback-delete"
+                                          aria-label={`永久删除评论：${feedback.comment}`}
+                                          title="永久删除评论"
+                                          onClick={() => void runFeedbackAction(feedback.id, () => onDeleteDecisionBlockFeedback(feedback.id))}
+                                          disabled={Boolean(feedbackActionId)}
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      )}
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            </details>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </section>
                 )}
-              </section>
+              </div>
+              {currentEvaluationLogs.length > 0 && (
+                <details className="legacy-review-evaluation-history">
+                  <summary>旧版整条日志评价（{currentEvaluationLogs.length}）</summary>
+                  <div>
+                    {currentEvaluationLogs.slice(0, 8).map((log) => {
+                      const targetId = legacyLinkTargets[log.id] ?? "";
+                      const target = currentDecisionBlocks.find((block) => block.decisionBlockId === targetId);
+                      const alreadyLinked = Boolean(target && currentBlockFeedback.some((feedback) => (
+                        feedback.source === "legacy-manual-link"
+                        && feedback.reviewLogId === log.id
+                        && feedback.decisionBlockId === target.decisionBlockId
+                      )));
+                      return (
+                        <article key={log.id}>
+                          <strong>{isoDateTimeToLocalDate(log.reviewedAt)} · {ratingLabel(log.rating)}</strong>
+                          <p>{log.evaluationText}</p>
+                          {currentDecisionBlocks.length > 0 && onLinkLegacyReviewFeedback && (
+                            <div className="legacy-review-link-controls">
+                              <select
+                                value={targetId}
+                                onChange={(event) => setLegacyLinkTargets((current) => ({ ...current, [log.id]: event.target.value }))}
+                                aria-label={`为旧评价 ${log.id} 选择复习重点`}
+                              >
+                                <option value="">选择复习重点</option>
+                                {currentDecisionBlocks.map((block, index) => (
+                                  <option key={block.decisionBlockId} value={block.decisionBlockId}>复习重点 {index + 1}</option>
+                                ))}
+                              </select>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={legacyIncludeInAnalysis[log.id] ?? true}
+                                  onChange={(event) => setLegacyIncludeInAnalysis((current) => ({ ...current, [log.id]: event.target.checked }))}
+                                />
+                                <span>加入待分析</span>
+                              </label>
+                              <button
+                                type="button"
+                                disabled={!target || alreadyLinked || Boolean(feedbackActionId)}
+                                onClick={() => target && void runFeedbackAction(`legacy:${log.id}`, () => onLinkLegacyReviewFeedback({
+                                  recordId: currentRecord.id,
+                                  reviewLogId: log.id,
+                                  decisionBlockId: target.decisionBlockId,
+                                  contentVersion: target.contentVersion,
+                                  comment: log.evaluationText?.trim() ?? "",
+                                  includeInAnalysis: legacyIncludeInAnalysis[log.id] ?? true,
+                                }))}
+                              >
+                                {alreadyLinked ? "已关联" : "确认关联"}
+                              </button>
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
             </article>
             <section className="review-bottom-controls">
               <section className="review-rating-bar">

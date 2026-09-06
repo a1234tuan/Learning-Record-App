@@ -1213,6 +1213,8 @@ export const App = () => {
             dueReviews={app.dueRecordReviews}
             reviewStates={app.recordReviews}
             reviewLogsByRecord={reviewLogsByRecord}
+            decisionBlockFeedback={app.reviewCoachSnapshot.decisionBlockFeedback}
+            analysisQueueItems={app.reviewCoachSnapshot.analysisQueueItems}
             stats={app.recordReviewStats}
             mode={tabMemory.review.mode}
             queueIds={tabMemory.review.queueIds}
@@ -1275,13 +1277,17 @@ export const App = () => {
             referenceSubjects={app.subjects}
             onOpenRecordReference={openReviewQueueRecordReference}
             restoreScrollY={tabMemory.review.restoreScrollY}
-            onRate={async (recordId, rating, evaluationText) => {
-              const result = await app.rateRecordReview(recordId, rating, evaluationText);
+            onRate={async (recordId, rating, feedback) => {
+              const result = await app.rateRecordReview(recordId, rating, feedback);
               return result?.undoToken;
             }}
             onUndo={async (token) => {
               await app.undoRecordReview(token);
             }}
+            onDeleteDecisionBlockFeedback={app.deleteDecisionBlockFeedback}
+            onTransitionAnalysisQueueItem={app.transitionAnalysisQueueItem}
+            onUpdateAnalysisQueueItemNote={app.updateAnalysisQueueItemNote}
+            onLinkLegacyReviewFeedback={app.linkLegacyReviewFeedback}
             onRefresh={app.refresh}
             onOpenStats={() => openMoreSubRoute("stats")}
             onOpenRecord={(record) => openRecordInTab(record, "review")}

@@ -79,6 +79,53 @@ describe("DexieReviewCoachRepository", () => {
     expect(await database.decisionBlockFeedback.count()).toBe(1);
   });
 
+  it("excludes and restores an analysis queue item without retaining excludedAt", async () => {
+    await repository.saveDecisionBlock(coachTestBlock);
+    await repository.addFeedback(coachTestFeedback, { ...coachTestQueueItem, status: "eligible", batchId: undefined, consumedAt: undefined });
+
+    const excluded = await repository.transitionQueueItem(coachTestQueueItem.id, "excluded", "2026-09-04T09:00:00.000Z");
+    const restored = await repository.transitionQueueItem(coachTestQueueItem.id, "eligible", "2026-09-04T09:05:00.000Z");
+
+    expect(excluded).toMatchObject({ status: "excluded", excludedAt: "2026-09-04T09:00:00.000Z" });
+    expect(restored.status).toBe("eligible");
+    expect(restored.excludedAt).toBeUndefined();
+    expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "needs-analysis" });
+  });
+
+  it("saves, normalizes, and clears a queue item's one-time analysis note", async () => {
+    await repository.saveDecisionBlock(coachTestBlock);
+    await repository.addFeedback(coachTestFeedback, { ...coachTestQueueItem, status: "eligible", batchId: undefined, consumedAt: undefined });
+
+    const saved = await repository.updateQueueItemAnalysisNote(coachTestQueueItem.id, "  Focus on visited timing.  ", "2026-09-04T09:00:00.000Z");
+    const cleared = await repository.updateQueueItemAnalysisNote(coachTestQueueItem.id, "  ", "2026-09-04T09:05:00.000Z");
+
+    expect(saved.analysisNote).toBe("Focus on visited timing.");
+    expect(cleared.analysisNote).toBeUndefined();
+    expect((await repository.getFormalSnapshot()).analysisQueueItems[0].analysisNote).toBeUndefined();
+  });
+
+  it("tombstones deleted feedback and its queue item in the synchronized snapshot", async () => {
+    await repository.saveDecisionBlock(coachTestBlock);
+    await repository.addFeedback(coachTestFeedback, { ...coachTestQueueItem, status: "eligible", batchId: undefined, consumedAt: undefined });
+
+    await repository.deleteFeedback(coachTestFeedback.id, "2026-09-04T09:00:00.000Z");
+
+    expect(await database.decisionBlockFeedback.get(coachTestFeedback.id)).toMatchObject({
+      deletedAt: "2026-09-04T09:00:00.000Z",
+    });
+    expect(await database.analysisQueueItems.get(coachTestQueueItem.id)).toMatchObject({
+      status: "deleted",
+      deletedAt: "2026-09-04T09:00:00.000Z",
+    });
+    const snapshot = await repository.getFormalSnapshot();
+    expect(snapshot.decisionBlockFeedback).toEqual([
+      expect.objectContaining({ id: coachTestFeedback.id, deletedAt: "2026-09-04T09:00:00.000Z" }),
+    ]);
+    expect(snapshot.analysisQueueItems).toEqual([
+      expect.objectContaining({ id: coachTestQueueItem.id, status: "deleted" }),
+    ]);
+  });
+
   it("rejects a feedback event for an old content version", async () => {
     await repository.saveDecisionBlock(coachTestBlock);
     await repository.saveDecisionBlock({

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Block, RecordBlock, RecordReviewDayStat, RecordReviewLog, RecordReviewState } from "../types";
+import type { AnalysisQueueItem, DecisionBlock, DecisionBlockFeedback } from "../features/reviewCoach/domain";
 
 class MemoryTable<T extends { id: string }> {
   private rows = new Map<string, T>();
@@ -20,6 +21,12 @@ class MemoryTable<T extends { id: string }> {
     return item.id;
   }
 
+  async add(item: T): Promise<string> {
+    if (this.rows.has(item.id)) throw new Error(`Duplicate key ${item.id}`);
+    this.rows.set(item.id, item);
+    return item.id;
+  }
+
   async delete(id: string): Promise<void> {
     this.rows.delete(id);
   }
@@ -30,8 +37,23 @@ class MemoryTable<T extends { id: string }> {
     }
   }
 
+  async clear(): Promise<void> {
+    this.rows.clear();
+  }
+
   async toArray(): Promise<T[]> {
     return Array.from(this.rows.values());
+  }
+
+  snapshot(): T[] {
+    return Array.from(this.rows.values());
+  }
+
+  restore(items: readonly T[]): void {
+    this.rows.clear();
+    for (const item of items) {
+      this.rows.set(item.id, item);
+    }
   }
 
   where(index: string) {
@@ -84,17 +106,80 @@ const review = (patch: Partial<RecordReviewState> = {}): RecordReviewState => ({
   ...patch,
 });
 
-const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[], reviewLogs: RecordReviewLog[] = []) => {
+const decisionBlock = (patch: Partial<DecisionBlock> = {}): DecisionBlock => ({
+  id: "decision-1",
+  recordId: "record-1",
+  contentVersion: 1,
+  position: 0,
+  contentUpdatedAt: stamp,
+  createdAt: stamp,
+  updatedAt: stamp,
+  ...patch,
+});
+
+const feedbackInput = (patch: Partial<{
+  decisionBlockId: string;
+  contentVersion: number;
+  comment: string;
+  includeInAnalysis: boolean;
+  operationId: string;
+}> = {}) => ({
+  decisionBlockId: "decision-1",
+  contentVersion: 1,
+  comment: "入队时机仍然容易混淆",
+  includeInAnalysis: true,
+  operationId: "review-feedback-operation-1",
+  ...patch,
+});
+
+const loadAdapter = async (
+  blocks: Block[],
+  reviews: RecordReviewState[],
+  reviewLogs: RecordReviewLog[] = [],
+  coach: {
+    decisionBlocks?: DecisionBlock[];
+    feedback?: DecisionBlockFeedback[];
+    queueItems?: AnalysisQueueItem[];
+  } = {},
+) => {
   vi.resetModules();
+  const emptyTable = () => new MemoryTable<any>();
   const fakeDb = {
     blocks: new MemoryTable<Block>(blocks),
     recordReviews: new MemoryTable<RecordReviewState>(reviews),
     recordReviewLogs: new MemoryTable<RecordReviewLog>(reviewLogs),
     recordReviewDayStats: new MemoryTable<RecordReviewDayStat>(),
-    transaction: async (_mode: string, ...args: unknown[]) => {
-      const callback = args.at(-1) as () => Promise<unknown>;
-      return callback();
-    },
+    cloudSyncMutation: emptyTable(),
+    decisionBlocks: new MemoryTable<DecisionBlock>(coach.decisionBlocks),
+    decisionBlockArchives: emptyTable(),
+    decisionBlockFeedback: new MemoryTable<DecisionBlockFeedback>(coach.feedback),
+    feedbackInterpretations: emptyTable(),
+    analysisQueueItems: new MemoryTable<AnalysisQueueItem>(coach.queueItems),
+    analysisBatches: emptyTable(),
+    sessionBlueprints: emptyTable(),
+    adaptiveReviewTasks: emptyTable(),
+    adaptiveQuizTurns: emptyTable(),
+    taskOutcomeEvents: emptyTable(),
+    delayedVerifications: emptyTable(),
+    decisionBlockStates: emptyTable(),
+    interventionEffectSummaries: emptyTable(),
+    aiRoleConfigs: emptyTable(),
+    learningEvidence: emptyTable(),
+    knowledgePoints: emptyTable(),
+    recordKnowledgePointLinks: emptyTable(),
+    knowledgeRelations: emptyTable(),
+    transaction: undefined as unknown as (_mode: string, ...args: unknown[]) => Promise<unknown>,
+  };
+  fakeDb.transaction = async (_mode: string, ...args: unknown[]) => {
+    const callback = args.at(-1) as () => Promise<unknown>;
+    const tables = args.slice(0, -1).flat().filter((item): item is MemoryTable<any> => item instanceof MemoryTable);
+    const snapshots = tables.map((table) => [table, table.snapshot()] as const);
+    try {
+      return await callback();
+    } catch (error) {
+      for (const [table, snapshot] of snapshots) table.restore(snapshot);
+      throw error;
+    }
   };
   vi.doMock("../db/database", () => ({ db: fakeDb }));
   const { DexieStorageAdapter } = await import("./storageAdapter");
@@ -102,6 +187,116 @@ const loadAdapter = async (blocks: Block[], reviews: RecordReviewState[], review
 };
 
 describe("DexieStorageAdapter record review invariants", () => {
+  it("commits rating, block feedback, and its queue item in one transaction", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()], [], { decisionBlocks: [decisionBlock()] });
+
+    const saved = await adapter.rateRecordReview(
+      "record-1",
+      "good",
+      "2026-07-03T01:30:00.000Z",
+      undefined,
+      [feedbackInput()],
+    );
+
+    const [feedback] = await fakeDb.decisionBlockFeedback.toArray();
+    const [queueItem] = await fakeDb.analysisQueueItems.toArray();
+    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
+    expect(feedback).toMatchObject({
+      decisionBlockId: "decision-1",
+      recordId: "record-1",
+      contentVersion: 1,
+      reviewLogId: saved?.undoToken.reviewLogId,
+      comment: "入队时机仍然容易混淆",
+      includeInAnalysis: true,
+    });
+    expect(queueItem).toMatchObject({ feedbackId: feedback.id, status: "eligible", eligibilityReason: "user-feedback" });
+    expect(saved?.undoToken.decisionBlockFeedbackIds).toEqual([feedback.id]);
+  });
+
+  it("does not create feedback or queue facts for a blank block comment", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()], [], { decisionBlocks: [decisionBlock()] });
+
+    await adapter.rateRecordReview(
+      "record-1",
+      "good",
+      "2026-07-03T01:30:00.000Z",
+      undefined,
+      [feedbackInput({ comment: " \n " })],
+    );
+
+    expect(await fakeDb.recordReviewLogs.toArray()).toHaveLength(1);
+    expect(await fakeDb.decisionBlockFeedback.toArray()).toEqual([]);
+    expect(await fakeDb.analysisQueueItems.toArray()).toEqual([]);
+  });
+
+  it("stores opted-out block feedback without creating an analysis queue item", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()], [], { decisionBlocks: [decisionBlock()] });
+
+    await adapter.rateRecordReview(
+      "record-1",
+      "good",
+      "2026-07-03T01:30:00.000Z",
+      undefined,
+      [feedbackInput({ includeInAnalysis: false })],
+    );
+
+    expect(await fakeDb.decisionBlockFeedback.toArray()).toEqual([
+      expect.objectContaining({ comment: "入队时机仍然容易混淆", includeInAnalysis: false }),
+    ]);
+    expect(await fakeDb.analysisQueueItems.toArray()).toEqual([]);
+  });
+
+  it("does not duplicate feedback or queue facts when an operation is retried", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()], [], { decisionBlocks: [decisionBlock()] });
+    const input = feedbackInput();
+
+    const first = await adapter.rateRecordReview("record-1", "good", "2026-07-03T01:30:00.000Z", undefined, [input]);
+    const retried = await adapter.rateRecordReview("record-1", "good", "2026-07-03T01:31:00.000Z", undefined, [input]);
+
+    expect(await fakeDb.decisionBlockFeedback.toArray()).toHaveLength(1);
+    expect(await fakeDb.analysisQueueItems.toArray()).toHaveLength(1);
+    expect(retried?.undoToken.decisionBlockFeedbackIds).toEqual(first?.undoToken.decisionBlockFeedbackIds);
+  });
+
+  it("tombstones feedback and its queue item when the linked rating is undone", async () => {
+    const { adapter, fakeDb } = await loadAdapter([record()], [review()], [], { decisionBlocks: [decisionBlock()] });
+    const saved = await adapter.rateRecordReview(
+      "record-1",
+      "good",
+      "2026-07-03T01:30:00.000Z",
+      undefined,
+      [feedbackInput()],
+    );
+
+    await adapter.undoRecordReview(saved!.undoToken);
+
+    expect(await fakeDb.decisionBlockFeedback.toArray()).toEqual([
+      expect.objectContaining({ deletedAt: expect.any(String) }),
+    ]);
+    expect(await fakeDb.analysisQueueItems.toArray()).toEqual([
+      expect.objectContaining({ status: "deleted", deletedAt: expect.any(String) }),
+    ]);
+  });
+
+  it("rolls back the entire rating when feedback targets an old content version", async () => {
+    const originalReview = review();
+    const { adapter, fakeDb } = await loadAdapter([record()], [originalReview], [], { decisionBlocks: [decisionBlock({ contentVersion: 2 })] });
+
+    await expect(adapter.rateRecordReview(
+      "record-1",
+      "good",
+      "2026-07-03T01:30:00.000Z",
+      undefined,
+      [feedbackInput({ contentVersion: 1 })],
+    )).rejects.toMatchObject({ code: "stale-content-version" });
+
+    expect(await fakeDb.recordReviews.get("record-1")).toEqual(originalReview);
+    expect(await fakeDb.recordReviewLogs.toArray()).toEqual([]);
+    expect(await fakeDb.recordReviewDayStats.toArray()).toEqual([]);
+    expect(await fakeDb.decisionBlockFeedback.toArray()).toEqual([]);
+    expect(await fakeDb.analysisQueueItems.toArray()).toEqual([]);
+  });
+
   it("persists the strictly later easy interval for an overview card", async () => {
     const { adapter, fakeDb } = await loadAdapter([record()], [review({ intervalDays: 10 })]);
 

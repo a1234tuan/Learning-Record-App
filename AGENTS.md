@@ -5,7 +5,7 @@
 - Active v2 branch: `feature/review-effect-coach-v2`.
 - Product boundary: `docs/新的方案.md`.
 - Database version: schema 17. Store definitions live in `src/db/reviewCoachSchema.ts`.
-- Stages 0-2 were completed and verified on 2026-09-06. Stage 3 is the next allowed scope.
+- Stages 0-3 were completed and verified on 2026-09-06. Stage 4 is the next allowed scope.
 
 ## Review Coach Boundaries
 
@@ -13,7 +13,7 @@
 - Formal review-coach writes go through `src/features/reviewCoach/repository.ts`; cross-entity workflows belong in `orchestrator.ts`, not `useAppData.ts`.
 - Projections must be rebuildable from formal facts. AI responses and local execution caches are not truth sources.
 - Record-level FSRS remains responsible for whole-record scheduling. Decision-block facts must not silently rewrite FSRS state.
-- Stage 3 may add block feedback, immutable history, tombstones, queue enrollment, exclusion/restoration, analysis notes, and manual legacy-comment association.
+- Stage 3 added block feedback, immutable history, tombstones, queue enrollment, exclusion/restoration, analysis notes, and manual legacy-comment association.
 - Stage 3 must not call AI, implement `FeedbackInterpretation`, generate `SessionBlueprint`, schedule adaptive tasks, or begin stages 4-9.
 
 ## Cross-Cutting Checks
