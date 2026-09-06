@@ -2828,6 +2828,11 @@
   backdrop-filter: none;
 }
 
+.review-bottom-controls.has-decision-blocks {
+  position: static;
+  margin-top: 12px;
+}
+
 .review-rating-bar {
   gap: 0;
 }

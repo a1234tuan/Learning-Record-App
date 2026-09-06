@@ -1097,7 +1097,7 @@ export const ReviewPage = ({
                 </details>
               )}
             </article>
-            <section className="review-bottom-controls">
+            <section className={`review-bottom-controls ${currentDecisionBlocks.length > 0 ? "has-decision-blocks" : ""}`}>
               <section className="review-rating-bar">
                 {ratingConfig.map((item) => {
                   const preview = ratingPreviews.get(item.rating as typeof ACTIVE_REVIEW_RATINGS[number]);

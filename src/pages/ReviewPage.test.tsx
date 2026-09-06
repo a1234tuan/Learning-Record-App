@@ -666,6 +666,7 @@ describe("ReviewPage", () => {
       onRate,
     });
 
+    expect(document.querySelector(".review-bottom-controls")).toHaveClass("has-decision-blocks");
     fireEvent.change(screen.getByLabelText("复习重点 1 本次评论"), {
       target: { value: "- 新理解\n1. 掌握更稳" },
     });

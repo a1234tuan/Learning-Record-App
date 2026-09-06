@@ -35,3 +35,5 @@ git diff --check
 ```
 
 Use deterministic mocks in automated tests. Real AI providers are reserved for the controlled acceptance stage defined in the product plan.
+
+For local Stage 3 UI acceptance, run `npm run build`, start `npm run preview -- --host 127.0.0.1 --port 4177`, and open `http://127.0.0.1:4177/?preview=stage3`. This localhost-only query seeds an isolated `BFS Stage3 Preview` record with an overdue review, block feedback, and an analysis-queue item; it is gated out of normal URLs and native shells.
