@@ -76,6 +76,7 @@ import {
   isCurrentWebNavigationSession,
   restoreWebNavigationSnapshot,
 } from "./lib/webNavigationHistory";
+import { reviewCoachRepository } from "./features/reviewCoach/repository";
 
 const sameIds = (left: string[], right: string[]) =>
   left.length === right.length && left.every((id, index) => id === right[index]);
@@ -202,6 +203,7 @@ export const App = () => {
   const navigationStateRef = useRef<NavigationState>({ activeTab, tabMemory, activeAiSessionId });
   const webNavigationSessionRef = useRef<string | null>(null);
   const historyScrollRestoreRef = useRef(0);
+  const newlyCreatedRecordIdsRef = useRef(new Set<string>());
   const app = useAppData();
   const keyboardVisible = useKeyboardVisible();
 
@@ -714,7 +716,10 @@ export const App = () => {
       initialEditing={Boolean(currentRecordState.recordEditing)}
       onEditingChange={setCurrentRecordEditing}
       onBack={closeRecordInCurrentTab}
-      onSave={async (nextRecord) => app.saveBlock(nextRecord)}
+      onSave={async (nextRecord, options) => {
+        await app.saveBlock(nextRecord, options);
+        newlyCreatedRecordIdsRef.current.delete(nextRecord.id);
+      }}
       onDelete={async (recordId) => {
         await app.deleteBlock(recordId);
         closeRecordInCurrentTab();
@@ -747,6 +752,8 @@ export const App = () => {
         await app.removeRecordFromReview(recordId);
       }}
       onExportRecord={(recordId) => exportRecordTransferPackage(storage, [recordId])}
+      isNewRecord={newlyCreatedRecordIdsRef.current.has(record.id)}
+      onListDecisionBlockArchives={(recordId) => reviewCoachRepository.listRestorableDecisionBlockArchives(recordId)}
     />
   );
 
@@ -1037,7 +1044,11 @@ export const App = () => {
             subjects={app.activeSubjects}
             templates={app.templates}
             onSaveEntry={(entry) => void app.saveEntry(entry)}
-            onCreateRecord={(date: string, subject: Subject, contentHtml?: string) => app.createRecordBlock(date, subject, contentHtml)}
+            onCreateRecord={async (date: string, subject: Subject, contentHtml?: string) => {
+              const created = await app.createRecordBlock(date, subject, contentHtml);
+              newlyCreatedRecordIdsRef.current.add(created.id);
+              return created;
+            }}
             onOpenFavorites={() => openMoreSubRoute("favorites")}
             onOpenRecord={(record) => openRecordInTab(record, "today")}
             onOpenReview={() => switchTab("review")}

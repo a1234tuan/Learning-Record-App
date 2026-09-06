@@ -7,7 +7,7 @@ import type { EditorView } from "@tiptap/pm/view";
 import { redoDepth, undoDepth } from "@tiptap/pm/history";
 import { TextSelection, type SelectionBookmark, type Transaction } from "@tiptap/pm/state";
 import { search as searchPlugin } from "prosemirror-search";
-import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, Redo2, Undo2, X } from "lucide-react";
+import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, Redo2, RotateCcw, Target, Undo2, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -50,6 +50,13 @@ import {
   type HighlightTone,
 } from "./RecordHighlightBlockNode";
 import { SearchReplacePanel } from "./SearchReplacePanel";
+import { RecordDecisionBlockNode } from "./RecordDecisionBlockNode";
+import {
+  decisionBlockPreview,
+  newDecisionBlockId,
+  type PendingDecisionBlockRemoval,
+} from "../features/reviewCoach/decisionBlockContent";
+import { nowISO } from "../lib/date";
 import { computePopoverPosition, type PopoverPosition } from "../lib/popoverPosition";
 import { createPortal } from "react-dom";
 import {
@@ -763,7 +770,40 @@ interface RichTextEditorProps {
   findReplaceOpen?: boolean;
   onFindReplaceOpen?: () => void;
   onFindReplaceClose?: () => void;
+  restorableDecisionBlocks?: readonly RestorableDecisionBlock[];
+  onDecisionBlockRemoved?: (removal: PendingDecisionBlockRemoval) => void;
+  onDecisionBlockRestored?: (archive: RestorableDecisionBlock) => void;
 }
+
+export interface RestorableDecisionBlock {
+  archiveId: string;
+  decisionBlockId: string;
+  contentHtml: string;
+  archivedAt: string;
+}
+
+const renewDecisionBlockIdentities = (slice: Slice): Slice => {
+  const stamp = nowISO();
+  const mapFragment = (fragment: Fragment): Fragment => {
+    const nodes: ProseMirrorNode[] = [];
+    fragment.forEach((node) => {
+      const content = node.content.size > 0 ? mapFragment(node.content) : node.content;
+      if (node.type.name === "recordDecisionBlock") {
+        nodes.push(node.type.create({
+          ...node.attrs,
+          decisionBlockId: newDecisionBlockId(),
+          contentVersion: 1,
+          createdAt: stamp,
+          updatedAt: stamp,
+        }, content, node.marks));
+      } else {
+        nodes.push(node.copy(content));
+      }
+    });
+    return Fragment.fromArray(nodes);
+  };
+  return new Slice(mapFragment(slice.content), slice.openStart, slice.openEnd);
+};
 
 const rawMarkdownChunkNode = (source: string): JSONContent => {
   const content: JSONContent[] = [];
@@ -930,6 +970,9 @@ export const RichTextEditor = ({
   findReplaceOpen = false,
   onFindReplaceOpen,
   onFindReplaceClose,
+  restorableDecisionBlocks = [],
+  onDecisionBlockRemoved,
+  onDecisionBlockRestored,
 }: RichTextEditorProps) => {
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
   const historyAvailabilityRef = useRef(historyAvailability);
@@ -939,6 +982,7 @@ export const RichTextEditor = ({
   const recordReferenceListenersRef = useRef(new Set<() => void>());
   const onOpenRecordReferenceRef = useRef(onOpenRecordReference);
   const onFindReplaceOpenRef = useRef(onFindReplaceOpen);
+  const onDecisionBlockRemovedRef = useRef(onDecisionBlockRemoved);
   const editorViewRef = useRef<EditorView | undefined>();
   const editorInstanceRef = useRef<Editor | undefined>();
   const currentRecordIdRef = useRef(currentRecordId);
@@ -989,6 +1033,9 @@ export const RichTextEditor = ({
   useEffect(() => {
     onFindReplaceOpenRef.current = onFindReplaceOpen;
   }, [onFindReplaceOpen]);
+  useEffect(() => {
+    onDecisionBlockRemovedRef.current = onDecisionBlockRemoved;
+  }, [onDecisionBlockRemoved]);
 
   const openImageGallery = useCallback((assetRef: RecordAssetRef, position: number) => {
     const currentEditor = editorInstanceRef.current;
@@ -1588,6 +1635,9 @@ export const RichTextEditor = ({
       RecordCollapseBlockNode,
       RecordMermaidNode,
       RecordHighlightBlockNode,
+      RecordDecisionBlockNode.configure({
+        onRemove: (removal) => onDecisionBlockRemovedRef.current?.(removal),
+      }),
       TrailingEditableParagraph,
       DesktopEditorShortcuts,
       SearchReplaceExtension,
@@ -1601,6 +1651,7 @@ export const RichTextEditor = ({
     content: value,
     editorProps: {
       clipboardTextSerializer: serializeClipboardText,
+      transformPasted: renewDecisionBlockIdentities,
       attributes: {
         class: "rich-editor",
         draggable: "false",
@@ -1962,6 +2013,46 @@ export const RichTextEditor = ({
             </button>
           )}
           <HighlightInsertMenu editor={editor} />
+          <button
+            type="button"
+            className={editor.isActive("recordDecisionBlock") ? "active" : ""}
+            title={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
+            aria-label={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
+            disabled={editor.isActive("recordDecisionBlock")}
+            onClick={() => {
+              const chain = editor.chain().focus();
+              if (editor.state.selection.empty) {
+                chain.insertDecisionBlock().run();
+              } else {
+                chain.wrapSelectionInDecisionBlock().run();
+              }
+            }}
+          >
+            <Target size={16} />
+          </button>
+          {restorableDecisionBlocks.length > 0 && (
+            <label className="decision-block-restore-control" title="恢复已删除或已转为普通内容的复习重点">
+              <RotateCcw size={15} />
+              <select
+                aria-label="恢复复习重点"
+                value=""
+                onChange={(event) => {
+                  const archive = restorableDecisionBlocks.find((item) => item.archiveId === event.target.value);
+                  if (archive) {
+                    editor.chain().focus().insertContent(archive.contentHtml).run();
+                    onDecisionBlockRestored?.(archive);
+                  }
+                }}
+              >
+                <option value="">恢复</option>
+                {restorableDecisionBlocks.map((archive) => (
+                  <option key={archive.archiveId} value={archive.archiveId}>
+                    {decisionBlockPreview(archive.contentHtml)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {renderInsertTools?.(editor)}
         </div>
       )}

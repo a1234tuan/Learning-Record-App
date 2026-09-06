@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 
 import type { BackupPayload, ContentTemplate, RecordBlock, StorageSnapshot } from "../types";
+import { completeCoachTestSnapshot } from "../features/reviewCoach/reviewCoachTestFixtures";
 import { snapshotToZip, zipToSnapshot } from "./backup";
 
 const stamp = "2026-06-21T00:00:00.000Z";
@@ -98,5 +99,31 @@ describe("backup import", () => {
 
     expect(restored.payload.manifest.version).toBe(5);
     expect(restored.payload.templates).toEqual([template]);
+  });
+
+  it("round-trips schema 17 formal review-coach facts in a version 6 backup", async () => {
+    const coach = completeCoachTestSnapshot();
+    const sourceRecord = { ...record("Data Structures"), id: "record-1" };
+    const reviewCoachPayload: BackupPayload = {
+      ...payload([sourceRecord]),
+      manifest: {
+        ...payload([sourceRecord]).manifest,
+        version: 6,
+        counts: {
+          ...payload([sourceRecord]).manifest.counts,
+          reviewCoach: { decisionBlocks: 1, taskOutcomeEvents: 3, delayedVerifications: 1 },
+        },
+      },
+      reviewCoach: coach,
+    };
+    const zip = await snapshotToZip({ payload: reviewCoachPayload, assets: [] });
+    const file = new File([zip], "backup.zip", { type: "application/zip" });
+
+    const restored = await zipToSnapshot(file);
+
+    expect(restored.payload.manifest.version).toBe(6);
+    expect(restored.payload.reviewCoach).toEqual(coach);
+    expect(restored.payload.reviewCoach).not.toHaveProperty("decisionBlockStates");
+    expect(restored.payload.reviewCoach).not.toHaveProperty("interventionEffectSummaries");
   });
 });

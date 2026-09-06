@@ -1,3 +1,5 @@
+import type { ReviewCoachFormalSnapshot } from "./features/reviewCoach/domain";
+
 export type EntityId = string;
 export type ISODate = string;
 export type ISODateTime = string;
@@ -73,6 +75,8 @@ export interface RecordDraft {
   recordId: EntityId;
   baseUpdatedAt: ISODateTime;
   draft: RecordBlock;
+  decisionBlockRemovals?: RecordSaveOptions["decisionBlockRemovals"];
+  restoredDecisionBlocks?: RecordSaveOptions["restoredDecisionBlocks"];
   updatedAt: ISODateTime;
 }
 
@@ -741,7 +745,7 @@ export interface AppSettings {
 
 export interface BackupManifest {
   format: "408-study-journal" | "study-journal";
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   exportedAt: ISODateTime;
   appVersion: string;
   counts: {
@@ -756,6 +760,7 @@ export interface BackupManifest {
     recordReviewLogs?: number;
     recordReviewDayStats?: number;
     templates?: number;
+    reviewCoach?: Partial<Record<keyof ReviewCoachFormalSnapshot, number>>;
   };
 }
 
@@ -774,6 +779,7 @@ export interface BackupPayload {
   studySessions: StudySession[];
   settings: AppSettings;
   podcasts?: KnowledgePodcast[];
+  reviewCoach?: ReviewCoachFormalSnapshot;
 }
 
 export interface SearchResult {
@@ -804,7 +810,23 @@ export type CloudSyncEntityType =
   | "settings"
   | "asset"
   | "review-state"
-  | "review-day-stat";
+  | "review-day-stat"
+  | "decision-block"
+  | "decision-block-archive"
+  | "decision-block-feedback"
+  | "feedback-interpretation"
+  | "analysis-queue-item"
+  | "analysis-batch"
+  | "session-blueprint"
+  | "adaptive-review-task"
+  | "adaptive-quiz-turn"
+  | "task-outcome-event"
+  | "delayed-verification"
+  | "ai-role-config"
+  | "legacy-learning-evidence"
+  | "legacy-knowledge-point"
+  | "legacy-record-kp-link"
+  | "legacy-knowledge-relation";
 
 /** Local-only cursor and device identity for the incremental cloud protocol. */
 export interface CloudSyncStateRecord {
@@ -971,7 +993,7 @@ export interface StorageAdapter {
   listEntries(): Promise<DayEntry[]>;
   saveEntry(entry: DayEntry): Promise<DayEntry>;
   listBlocks(date?: ISODate): Promise<Block[]>;
-  saveBlock(block: Block): Promise<Block>;
+  saveBlock(block: Block, options?: RecordSaveOptions): Promise<Block>;
   listTemplates(): Promise<ContentTemplate[]>;
   saveTemplate(template: ContentTemplate): Promise<ContentTemplate>;
   deleteTemplate(templateId: EntityId): Promise<void>;
@@ -1054,6 +1076,18 @@ export interface StorageAdapter {
   getAiSecret?(providerId?: EntityId): Promise<AiSecret | undefined>;
   saveAiSecret?(apiKey: string, providerId?: EntityId, apiKeySecondary?: string): Promise<AiSecret>;
   clearAiSecret?(providerId?: EntityId): Promise<void>;
+}
+
+export interface RecordSaveOptions {
+  decisionBlockRemovals?: Array<{
+    decisionBlockId: EntityId;
+    reason: "deleted" | "converted-to-plain";
+    contentHtml: string;
+  }>;
+  restoredDecisionBlocks?: Array<{
+    decisionBlockId: EntityId;
+    contentHtml: string;
+  }>;
 }
 
 export interface SyncAdapter {

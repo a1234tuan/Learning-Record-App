@@ -8,6 +8,7 @@ import type {
   StorageAdapter,
   StreamableBackupSnapshot,
 } from "../types";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT } from "../features/reviewCoach/domain";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
 import { withRestoreLock } from "./restoreLockService";
@@ -163,7 +164,7 @@ const normalizeSnapshot = (parsed: RepositorySnapshotFile): StreamableBackupSnap
   if (
     !payload?.manifest ||
     !["408-study-journal", "study-journal"].includes(payload.manifest.format) ||
-    ![1, 2, 3, 4].includes(payload.manifest.version)
+    ![1, 2, 3, 4, 5, 6].includes(payload.manifest.version)
   ) {
     throw new Error("自动备份仓库快照格式不兼容或已损坏。");
   }
@@ -183,6 +184,7 @@ const normalizeSnapshot = (parsed: RepositorySnapshotFile): StreamableBackupSnap
       recordReviewDayStats: payload.recordReviewDayStats ?? [],
       studySessions: payload.studySessions ?? [],
       settings: ensureSettingsSubjects({ ...payload.settings, schemaVersion: 4 }, recordBlocks),
+      reviewCoach: payload.reviewCoach ?? structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT),
     },
     assets: parsed.assets ?? [],
     recordDrafts: payload.recordDrafts ?? parsed.recordDrafts ?? [],

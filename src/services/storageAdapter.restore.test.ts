@@ -176,7 +176,35 @@ const restorePayload = {
   },
 };
 
+const createReviewCoachMemoryTables = () => ({
+  decisionBlocks: new MemoryTable(),
+  decisionBlockArchives: new MemoryTable(),
+  decisionBlockFeedback: new MemoryTable(),
+  feedbackInterpretations: new MemoryTable(),
+  analysisQueueItems: new MemoryTable(),
+  analysisBatches: new MemoryTable(),
+  sessionBlueprints: new MemoryTable(),
+  adaptiveReviewTasks: new MemoryTable(),
+  adaptiveQuizTurns: new MemoryTable(),
+  taskOutcomeEvents: new MemoryTable(),
+  delayedVerifications: new MemoryTable(),
+  decisionBlockStates: new MemoryTable(),
+  interventionEffectSummaries: new MemoryTable(),
+  aiRoleConfigs: new MemoryTable(),
+  learningEvidence: new MemoryTable(),
+  knowledgePoints: new MemoryTable(),
+  recordKnowledgePointLinks: new MemoryTable(),
+  knowledgeRelations: new MemoryTable(),
+  learningCoachSettings: new MemoryTable(),
+  learningCoachSnapshots: new MemoryTable(),
+  learningCoachTasks: new MemoryTable(),
+  learningCoachAiRuns: new MemoryTable(),
+  knowledgePointExtractionRuns: new MemoryTable(),
+  knowledgePointCoachSnapshots: new MemoryTable(),
+});
+
 const createRestoreDb = (podcasts: KnowledgePodcast[] = [], assets: Asset[] = [podcastAudioAsset]) => ({
+  ...createReviewCoachMemoryTables(),
   entries: new MemoryTable(),
   blocks: new MemoryTable(),
   templates: new MemoryTable(),

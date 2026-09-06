@@ -6,6 +6,7 @@ import {
   buildAiContextPack,
   buildAiContextPackAsync,
   buildAiKnowledgeContextPack,
+  buildDecisionBlockAiContextPack,
   clearAiContextCache,
   estimateAiContextSourceTokens,
   estimateAiTokens,
@@ -75,6 +76,34 @@ describe("aiContextService", () => {
       expect.objectContaining({ id: "audio-1", kind: "audio" }),
     ]));
     expect(pack.ocrSummary).toEqual({ includedImages: 1, skippedImages: 1 });
+  });
+
+  it("serializes only the selected decision block with its structure, formulas, and OCR diagnostics", () => {
+    const selected = [
+      '<record-decision-block data-decision-block-id="block-1" data-content-version="2" data-created-at="2026-06-20T00:00:00.000Z" data-updated-at="2026-06-21T00:00:00.000Z">',
+      "<p>块内结论</p>",
+      '<record-formula data-formula-id="inside-formula" data-title="复杂度" data-latex="O(log n)"></record-formula>',
+      '<record-highlight-block data-tone="yellow"><p>块内高亮</p><record-asset data-asset-id="highlight-image" data-kind="image" data-title="高亮图"></record-asset></record-highlight-block>',
+      '<record-asset data-asset-id="inside-image" data-kind="image" data-title="块内图"></record-asset>',
+      "</record-decision-block>",
+    ].join("");
+    const other = '<record-decision-block data-decision-block-id="block-2" data-content-version="1"><p>另一个块不应出现</p></record-decision-block>';
+    const source = record({ contentHtml: `<p>块外内容不应出现</p>${selected}${other}` });
+
+    const pack = buildDecisionBlockAiContextPack(source, "block-1", [
+      asset({ id: "inside-image", title: "块内图", ocrStatus: "failed" }),
+      asset({ id: "highlight-image", title: "高亮图", ocrStatus: "done", ocrText: "高亮图片文字" }),
+    ]);
+
+    const content = pack.allChunks.map((chunk) => chunk.content).join("\n");
+    expect(pack).toMatchObject({ decisionBlockId: "block-1", contentVersion: 2 });
+    expect(content).toContain("块内结论");
+    expect(content).toContain("O(log n)");
+    expect(content).toContain("块内高亮");
+    expect(content).toContain("高亮图片文字");
+    expect(content).not.toContain("块外内容不应出现");
+    expect(content).not.toContain("另一个块不应出现");
+    expect(pack.missingOcrAssetIds).toEqual(["inside-image"]);
   });
 
   it("selects chunks by title, subject, content, and OCR text", () => {

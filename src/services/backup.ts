@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import { saveAs } from "file-saver";
 
 import type { Asset, BackupPayload, ExportOptions, ImportOptions, ImportSummary, RecordBlock, StorageSnapshot } from "../types";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT } from "../features/reviewCoach/domain";
 import { entryToMarkdown } from "../lib/markdown";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
@@ -151,7 +152,7 @@ export const zipToSnapshot = async (file: File, options: ImportOptions = {}): Pr
   if (
     !data.manifest ||
     !["408-study-journal", "study-journal"].includes(data.manifest.format) ||
-    ![1, 2, 3, 4, 5].includes(data.manifest.version)
+    ![1, 2, 3, 4, 5, 6].includes(data.manifest.version)
   ) {
     const format = data.manifest?.format ?? "未知";
     const version = data.manifest?.version ?? "未知";
@@ -200,6 +201,7 @@ export const zipToSnapshot = async (file: File, options: ImportOptions = {}): Pr
       recordReviewDayStats: data.recordReviewDayStats ?? [],
       studySessions: data.studySessions ?? [],
       settings: ensureSettingsSubjects({ ...data.settings, schemaVersion: 4 }, recordBlocks),
+      reviewCoach: data.reviewCoach ?? structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT),
     },
     assets,
   };

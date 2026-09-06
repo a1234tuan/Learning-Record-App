@@ -136,6 +136,163 @@ describe("RichTextEditor", () => {
     expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
   });
 
+  it("creates a decision block with a stable identity and version one", async () => {
+    const onChange = vi.fn();
+    render(<RichTextEditor value="<p>正文</p>" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /复习重点/ }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const html = onChange.mock.calls.at(-1)?.[0] as string;
+    const node = new DOMParser().parseFromString(html, "text/html").querySelector("record-decision-block");
+    expect(node?.getAttribute("data-decision-block-id")).toBeTruthy();
+    expect(node?.getAttribute("data-content-version")).toBe("1");
+    expect(node?.getAttribute("data-created-at")).toBeTruthy();
+  });
+
+  it("activates decision-block controls for a text selection inside the block", async () => {
+    let editorRef: Editor | undefined;
+    const { container } = render(
+      <RichTextEditor
+        value={'<record-decision-block data-decision-block-id="focus-block" data-content-version="1"><p>需要复习的内容</p></record-decision-block><p>普通正文</p>'}
+        onChange={vi.fn()}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    await waitFor(() => expect(editorRef).toBeDefined());
+
+    act(() => editorRef!.commands.setTextSelection(2));
+
+    const block = container.querySelector(".record-decision-block");
+    await waitFor(() => expect(block).toHaveClass("selection-inside"));
+    const content = block?.querySelector(".decision-block-content");
+    const toolbar = block?.querySelector(".decision-block-toolbar");
+    expect(content?.compareDocumentPosition(toolbar!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    act(() => editorRef!.commands.setTextSelection(editorRef!.state.doc.content.size - 1));
+    await waitFor(() => expect(block).not.toHaveClass("selection-inside"));
+  });
+
+  it("wraps selected existing content as a decision block", async () => {
+    let editorRef: Editor | undefined;
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value="<p>第一段</p><p>第二段</p>"
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    await waitFor(() => expect(editorRef).toBeDefined());
+    act(() => {
+      editorRef!.commands.setTextSelection({ from: 1, to: editorRef!.state.doc.content.size - 1 });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /复习重点/ }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const html = onChange.mock.calls.at(-1)?.[0] as string;
+    expect(html).toContain("<record-decision-block");
+    expect(html).toContain("第一段");
+    expect(html).toContain("第二段");
+  });
+
+  it("restores an archived decision block at the current selection", async () => {
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value="<p>现有正文</p>"
+        onChange={onChange}
+        restorableDecisionBlocks={[{
+          archiveId: "archive-1",
+          decisionBlockId: "restored-block",
+          archivedAt: "2026-09-04T00:00:00.000Z",
+          contentHtml: '<record-decision-block data-decision-block-id="restored-block" data-content-version="2"><p>恢复内容</p></record-decision-block>',
+        }]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("combobox", { name: "恢复复习重点" }), { target: { value: "archive-1" } });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls.at(-1)?.[0]).toContain('data-decision-block-id="restored-block"');
+  });
+
+  it("copies a decision block with a new identity and keeps the original content", async () => {
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value={'<record-decision-block data-decision-block-id="original" data-content-version="4" data-created-at="2026-09-01T00:00:00.000Z" data-updated-at="2026-09-02T00:00:00.000Z"><p>需要复习的内容</p></record-decision-block>'}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "复制复习重点" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const html = onChange.mock.calls.at(-1)?.[0] as string;
+    const nodes = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("record-decision-block"));
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map((node) => node.getAttribute("data-decision-block-id"))).toEqual(["original", expect.any(String)]);
+    expect(nodes[1].getAttribute("data-decision-block-id")).not.toBe("original");
+    expect(nodes[1].getAttribute("data-content-version")).toBe("1");
+    expect(nodes[1].textContent).toContain("需要复习的内容");
+  });
+
+  it("repairs duplicate decision identities from programmatic content insertion", async () => {
+    let editorRef: Editor | undefined;
+    const onChange = vi.fn();
+    render(
+      <RichTextEditor
+        value={'<record-decision-block data-decision-block-id="original" data-content-version="3"><p>已有内容</p></record-decision-block>'}
+        onChange={onChange}
+        renderInsertTools={(editor) => {
+          editorRef = editor;
+          return null;
+        }}
+      />,
+    );
+    await waitFor(() => expect(editorRef).toBeDefined());
+
+    act(() => {
+      editorRef!.commands.insertContent('<record-decision-block data-decision-block-id="original" data-content-version="3"><p>模板内容</p></record-decision-block>');
+    });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const nodes = Array.from(new DOMParser().parseFromString(onChange.mock.calls.at(-1)?.[0] as string, "text/html").querySelectorAll("record-decision-block"));
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0].getAttribute("data-decision-block-id")).toBe("original");
+    expect(nodes[1].getAttribute("data-decision-block-id")).not.toBe("original");
+    expect(nodes[1].getAttribute("data-content-version")).toBe("1");
+  });
+
+  it("reports the complete fragment before converting a decision block to plain content", async () => {
+    const onChange = vi.fn();
+    const onDecisionBlockRemoved = vi.fn();
+    render(
+      <RichTextEditor
+        value={'<record-decision-block data-decision-block-id="original" data-content-version="2"><p>结论</p><record-asset data-asset-id="image-1" data-kind="image" data-title="图"></record-asset></record-decision-block>'}
+        onChange={onChange}
+        onDecisionBlockRemoved={onDecisionBlockRemoved}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "转为普通内容" }));
+
+    expect(onDecisionBlockRemoved).toHaveBeenCalledWith(expect.objectContaining({
+      decisionBlockId: "original",
+      reason: "converted-to-plain",
+      contentHtml: expect.stringContaining('data-asset-id="image-1"'),
+    }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.not.stringContaining("record-decision-block")));
+  });
+
   it("uses the toolbar to undo and redo a deleted formula node", async () => {
     let editorRef: Editor | undefined;
     render(

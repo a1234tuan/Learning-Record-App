@@ -14,6 +14,26 @@ import type {
   StudySession,
   Tag,
 } from "../types";
+import {
+  EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT,
+  type AdaptiveQuizTurn,
+  type AdaptiveReviewTask,
+  type AiRoleConfig,
+  type AnalysisBatch,
+  type AnalysisQueueItem,
+  type DecisionBlock,
+  type DecisionBlockArchive,
+  type DecisionBlockFeedback,
+  type DelayedVerification,
+  type FeedbackInterpretation,
+  type LegacyKnowledgePoint,
+  type LegacyKnowledgeRelation,
+  type LegacyLearningEvidence,
+  type LegacyRecordKnowledgePointLink,
+  type ReviewCoachFormalSnapshot,
+  type SessionBlueprint,
+  type TaskOutcomeEvent,
+} from "../features/reviewCoach/domain";
 import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import { nowISO } from "../lib/date";
 import { sha256 as javascriptSha256 } from "@noble/hashes/sha256";
@@ -296,6 +316,7 @@ const mapEntities = async <T extends { id: string; deletedAt?: string }>(
 ): Promise<CloudSyncEntity[]> => Promise.all(values.map((value) => entity(entityType, value)));
 
 export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudSyncExport> => {
+  const coach = snapshot.payload.reviewCoach ?? EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT;
   const ordinary = await Promise.all([
     mapEntities("entry", snapshot.payload.entries),
     mapEntities("block", snapshot.payload.blocks),
@@ -305,6 +326,22 @@ export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudS
     mapEntities("study-session", snapshot.payload.studySessions),
     mapEntities("review-state", snapshot.payload.recordReviews ?? []),
     mapEntities("review-day-stat", snapshot.payload.recordReviewDayStats ?? []),
+    mapEntities("decision-block", coach.decisionBlocks),
+    mapEntities("decision-block-archive", coach.decisionBlockArchives),
+    mapEntities("decision-block-feedback", coach.decisionBlockFeedback),
+    mapEntities("feedback-interpretation", coach.feedbackInterpretations),
+    mapEntities("analysis-queue-item", coach.analysisQueueItems),
+    mapEntities("analysis-batch", coach.analysisBatches),
+    mapEntities("session-blueprint", coach.sessionBlueprints),
+    mapEntities("adaptive-review-task", coach.adaptiveReviewTasks),
+    mapEntities("adaptive-quiz-turn", coach.adaptiveQuizTurns),
+    mapEntities("task-outcome-event", coach.taskOutcomeEvents),
+    mapEntities("delayed-verification", coach.delayedVerifications),
+    mapEntities("ai-role-config", coach.aiRoleConfigs),
+    mapEntities("legacy-learning-evidence", coach.legacyLearningEvidence),
+    mapEntities("legacy-knowledge-point", coach.legacyKnowledgePoints),
+    mapEntities("legacy-record-kp-link", coach.legacyRecordKnowledgePointLinks),
+    mapEntities("legacy-knowledge-relation", coach.legacyKnowledgeRelations),
   ]);
   const settings = await entity("settings", snapshot.payload.settings);
   const assetBlobs = new Map<string, Blob>();
@@ -329,11 +366,16 @@ export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudS
 const values = <T>(entities: CloudSyncEntity[], type: CloudSyncEntityType) =>
   entities.filter((entity) => entity.entityType === type && !entity.deleted).map((entity) => entity.payload as unknown as T);
 
+const coachValues = <T extends { id: string }>(entities: CloudSyncEntity[], type: CloudSyncEntityType) =>
+  entities
+    .filter((entity) => entity.entityType === type && (!entity.deleted || typeof entity.payload.id === "string"))
+    .map((entity) => entity.payload as unknown as T);
+
 const manifestFor = (entities: CloudSyncEntity[], reviewEvents: CloudReviewEvent[]): BackupManifest => {
   const count = (type: CloudSyncEntityType) => entities.filter((entity) => entity.entityType === type && !entity.deleted).length;
   return {
     format: "study-journal",
-    version: 5,
+    version: 6,
     exportedAt: nowISO(),
     appVersion: "0.1.0",
     counts: {
@@ -348,6 +390,24 @@ const manifestFor = (entities: CloudSyncEntity[], reviewEvents: CloudReviewEvent
       recordReviews: count("review-state"),
       recordReviewLogs: reviewEvents.length,
       recordReviewDayStats: count("review-day-stat"),
+      reviewCoach: {
+        decisionBlocks: count("decision-block"),
+        decisionBlockArchives: count("decision-block-archive"),
+        decisionBlockFeedback: count("decision-block-feedback"),
+        feedbackInterpretations: count("feedback-interpretation"),
+        analysisQueueItems: count("analysis-queue-item"),
+        analysisBatches: count("analysis-batch"),
+        sessionBlueprints: count("session-blueprint"),
+        adaptiveReviewTasks: count("adaptive-review-task"),
+        adaptiveQuizTurns: count("adaptive-quiz-turn"),
+        taskOutcomeEvents: count("task-outcome-event"),
+        delayedVerifications: count("delayed-verification"),
+        aiRoleConfigs: count("ai-role-config"),
+        legacyLearningEvidence: count("legacy-learning-evidence"),
+        legacyKnowledgePoints: count("legacy-knowledge-point"),
+        legacyRecordKnowledgePointLinks: count("legacy-record-kp-link"),
+        legacyKnowledgeRelations: count("legacy-knowledge-relation"),
+      },
     },
   };
 };
@@ -367,6 +427,24 @@ export const materializeCloudSyncSnapshot = (
   });
   const settings = values<AppSettings>(entities, "settings")[0] ?? DEFAULT_SETTINGS;
   const recordDrafts = values<RecordDraft>(entities, "draft");
+  const reviewCoach: ReviewCoachFormalSnapshot = {
+    decisionBlocks: coachValues<DecisionBlock>(entities, "decision-block"),
+    decisionBlockArchives: coachValues<DecisionBlockArchive>(entities, "decision-block-archive"),
+    decisionBlockFeedback: coachValues<DecisionBlockFeedback>(entities, "decision-block-feedback"),
+    feedbackInterpretations: coachValues<FeedbackInterpretation>(entities, "feedback-interpretation"),
+    analysisQueueItems: coachValues<AnalysisQueueItem>(entities, "analysis-queue-item"),
+    analysisBatches: coachValues<AnalysisBatch>(entities, "analysis-batch"),
+    sessionBlueprints: coachValues<SessionBlueprint>(entities, "session-blueprint"),
+    adaptiveReviewTasks: coachValues<AdaptiveReviewTask>(entities, "adaptive-review-task"),
+    adaptiveQuizTurns: coachValues<AdaptiveQuizTurn>(entities, "adaptive-quiz-turn"),
+    taskOutcomeEvents: coachValues<TaskOutcomeEvent>(entities, "task-outcome-event"),
+    delayedVerifications: coachValues<DelayedVerification>(entities, "delayed-verification"),
+    aiRoleConfigs: coachValues<AiRoleConfig>(entities, "ai-role-config"),
+    legacyLearningEvidence: coachValues<LegacyLearningEvidence>(entities, "legacy-learning-evidence"),
+    legacyKnowledgePoints: coachValues<LegacyKnowledgePoint>(entities, "legacy-knowledge-point"),
+    legacyRecordKnowledgePointLinks: coachValues<LegacyRecordKnowledgePointLink>(entities, "legacy-record-kp-link"),
+    legacyKnowledgeRelations: coachValues<LegacyKnowledgeRelation>(entities, "legacy-knowledge-relation"),
+  };
   return {
     payload: {
       manifest: manifestFor(entities, reviewEvents),
@@ -382,6 +460,7 @@ export const materializeCloudSyncSnapshot = (
       recordReviewDayStats: values<RecordReviewDayStat>(entities, "review-day-stat"),
       studySessions: values<StudySession>(entities, "study-session"),
       settings,
+      reviewCoach,
     },
     assets: assetValues,
     recordDrafts,

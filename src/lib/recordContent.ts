@@ -74,7 +74,7 @@ const serializeFormulaNode = (formula: RecordFormula): string =>
   `<record-formula data-formula-id="${escapeHtml(formula.id)}" data-title="${escapeHtml(formula.title ?? "")}" data-latex="${escapeHtml(formula.latex)}"></record-formula>`;
 
 export const hasLinearRecordNodes = (contentHtml: string): boolean =>
-  /<record-(asset|formula|inline-math|reference|tab|structure-diagram|comparison-table|sticky-board|collapse|highlight-block|mermaid-diagram)\b/i.test(contentHtml);
+  /<record-(asset|formula|inline-math|reference|tab|structure-diagram|comparison-table|sticky-board|collapse|highlight-block|mermaid-diagram|decision-block)\b/i.test(contentHtml);
 
 export const normalizeRecordContent = (record: RecordBlock, options: RecordContentSyncOptions = {}): string => {
   if (hasLinearRecordNodes(record.contentHtml)) {
@@ -218,11 +218,24 @@ const highlightToneLabel = (tone: string | null): string => {
   }
 };
 
-const highlightElementText = (element: Element, useReferenceMarkdown = false): string =>
-  useReferenceMarkdown ? inlineMarkdownText(element.innerHTML) : decodeHtml(stripHtml(element.innerHTML));
+const highlightElementText = (
+  element: Element,
+  assetMap: Map<string, Asset> = new Map(),
+  useReferenceMarkdown = false,
+): string => {
+  const body = useReferenceMarkdown ? inlineMarkdownText(element.innerHTML) : decodeHtml(stripHtml(element.innerHTML));
+  const formulas = Array.from(element.querySelectorAll("record-formula, record-inline-math"))
+    .map((node) => [node.getAttribute("data-title"), node.getAttribute("data-latex")].filter(Boolean).join("\n"));
+  const assets = Array.from(element.querySelectorAll("record-asset")).map((node) => {
+    const id = node.getAttribute("data-asset-id") ?? "";
+    const asset = assetMap.get(id);
+    return [node.getAttribute("data-title"), asset?.title, asset?.fileName, asset?.ocrText].filter(Boolean).join("\n");
+  });
+  return [body, ...formulas, ...assets].filter(Boolean).join("\n");
+};
 
-const highlightElementMarkdown = (element: Element): string => {
-  const text = highlightElementText(element, true);
+const highlightElementMarkdown = (element: Element, assetMap: Map<string, Asset> = new Map()): string => {
+  const text = highlightElementText(element, assetMap, true);
   const lines = text.split("\n").filter(Boolean);
   return [`> ${highlightToneLabel(element.getAttribute("data-tone"))}`, ...lines.map((line) => `> ${line}`)].join("\n");
 };
@@ -237,6 +250,10 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
     if (child.nodeType === 1) {
       const element = child as HTMLElement;
       const tag = element.tagName.toLowerCase();
+      if (tag === "record-decision-block") {
+        nodes.push(...parseLinearRecordContent({ ...record, contentHtml: element.innerHTML }, assets));
+        continue;
+      }
       if (tag === "record-asset") {
         const id = element.getAttribute("data-asset-id") ?? "";
         const asset = assetMap.get(id);
@@ -283,8 +300,8 @@ export const parseLinearRecordContent = (record: RecordBlock, assets: Asset[] = 
       if (tag === "record-highlight-block") {
         nodes.push({
           kind: "highlight",
-          text: highlightElementText(element),
-          markdown: highlightElementMarkdown(element),
+          text: highlightElementText(element, assetMap),
+          markdown: highlightElementMarkdown(element, assetMap),
         });
         continue;
       }

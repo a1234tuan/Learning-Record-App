@@ -8,6 +8,7 @@ import type {
   ISODate,
   RecordBlock,
 } from "../types";
+import { extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
 import { addDaysISO, todayISO } from "../lib/date";
 import { parseLinearRecordContent } from "../lib/recordContent";
 import { normalizeRecordTags, recordTagKey, subjectTagKey } from "../lib/recordTags";
@@ -536,6 +537,35 @@ export const buildAiKnowledgeContextPack = (
   query = "",
   options: AiKnowledgeContextOptions = {},
 ): AiContextPack => buildContext(scope, blocks, assets, query, options);
+
+export interface DecisionBlockAiContextPack extends AiContextPack {
+  decisionBlockId: string;
+  contentVersion: number;
+}
+
+export const buildDecisionBlockAiContextPack = (
+  record: RecordBlock,
+  decisionBlockId: string,
+  assets: Asset[],
+  query = "",
+  options: AiContextSelectionOptions = {},
+): DecisionBlockAiContextPack => {
+  const decisionBlock = extractDecisionBlocks(record.contentHtml, record.updatedAt)
+    .find((block) => block.decisionBlockId === decisionBlockId);
+  if (!decisionBlock) throw new Error("指定的复习重点不存在或已被删除。");
+
+  const scope: AiKnowledgeScope = { kind: "records", recordIds: [record.id] };
+  const scopeTitle = `${record.title} / 复习重点`;
+  const scopedRecord: RecordBlock = { ...record, contentHtml: decisionBlock.innerHtml };
+  const state = createState(scopeTitle);
+  appendRecord(state, scopedRecord, assets);
+  const pack = finalizeState(scope, scopeTitle, record.date, [scopedRecord], state, query, options);
+  return {
+    ...pack,
+    decisionBlockId,
+    contentVersion: decisionBlock.contentVersion,
+  };
+};
 
 export const buildAiContextPack = (
   date: string,

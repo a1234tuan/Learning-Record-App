@@ -17,6 +17,7 @@ import type {
   RecordReviewState,
   RecordReviewStats,
   RecordReviewUndoToken,
+  RecordSaveOptions,
   Subject,
   SubjectConfig,
 } from "../types";
@@ -24,6 +25,7 @@ import { storage } from "../services/storageAdapter";
 import { createBaseEntity } from "../lib/entity";
 import { todayISO } from "../lib/date";
 import { createTemplateBlocks } from "../db/defaults";
+import { extractDecisionBlocks, renewDecisionBlockIdentitiesInHtml } from "../features/reviewCoach/decisionBlockContent";
 import {
   createSubjectConfig,
   fallbackSubjectName,
@@ -152,8 +154,8 @@ export const useAppData = () => {
   );
 
   const saveBlock = useCallback(
-    async (block: Block) => {
-      const saved = await storage.saveBlock(block);
+    async (block: Block, options?: RecordSaveOptions) => {
+      const saved = await storage.saveBlock(block, options);
       await refresh();
       await markAutoBackupDirty("block");
       if (saved.type === "record") {
@@ -325,24 +327,29 @@ export const useAppData = () => {
       const dayBlocks = await storage.listBlocks(date);
       const currentSettings = await storage.getSettings();
       const normalizedSubject = normalizeSubject(subject ?? fallbackSubjectName(currentSettings));
+      const created = createBaseEntity();
+      const initialContentHtml = renewDecisionBlockIdentitiesInHtml(contentHtml, created.createdAt);
       const subjectCount = dayBlocks.filter(
         (block) => block.type === "record" && block.subject === normalizedSubject,
       ).length;
       const record: RecordBlock = {
-        ...createBaseEntity(),
+        ...created,
         type: "record",
         date,
         order: dayBlocks.length,
         subject: normalizedSubject,
         tags: [],
         title: nextRecordTitle(normalizedSubject, subjectCount),
-        contentHtml,
+        contentHtml: initialContentHtml,
         assets: [],
         formulas: [],
         mistakeRefs: [],
         favorite: false,
       };
       await storage.saveBlock(record);
+      if (extractDecisionBlocks(record.contentHtml).length > 0) {
+        await storage.addRecordToReview(record.id);
+      }
       await refresh();
       await markAutoBackupDirty("record-create");
       return record;

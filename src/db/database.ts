@@ -1,6 +1,28 @@
 import Dexie, { type Table } from "dexie";
 
 import type {
+  AdaptiveQuizTurn,
+  AdaptiveReviewTask,
+  AiRoleConfig,
+  AnalysisBatch,
+  AnalysisQueueItem,
+  CoachMigrationBackup,
+  DecisionBlock,
+  DecisionBlockArchive,
+  DecisionBlockFeedback,
+  DecisionBlockState,
+  DelayedVerification,
+  FeedbackInterpretation,
+  InterventionEffectSummary,
+  LegacyKnowledgePoint,
+  LegacyKnowledgeRelation,
+  LegacyLearningEvidence,
+  LegacyRecordKnowledgePointLink,
+  SessionBlueprint,
+  TaskOutcomeEvent,
+} from "../features/reviewCoach/domain";
+
+import type {
   AiChatAttachment,
   AiChatMessage,
   AiChatSession,
@@ -25,6 +47,11 @@ import type {
   StudySession,
   Tag,
 } from "../types";
+import {
+  LEGACY_SCHEMA_16_STORES,
+  REVIEW_COACH_SCHEMA_17_STORES,
+  migrateToReviewCoachSchema17,
+} from "./reviewCoachSchema";
 
 export interface RestoreStagingAsset {
   stagingId: string;
@@ -57,9 +84,34 @@ export class StudyJournalDatabase extends Dexie {
   cloudSyncOperations!: Table<CloudSyncOperationRecord, string>;
   cloudSyncMutation!: Table<CloudSyncMutationRecord, string>;
   autoBackupState!: Table<AutoBackupStateRecord, string>;
+  learningCoachSettings!: Table<Record<string, unknown>, string>;
+  learningEvidence!: Table<LegacyLearningEvidence, string>;
+  learningCoachSnapshots!: Table<Record<string, unknown>, string>;
+  learningCoachTasks!: Table<Record<string, unknown>, string>;
+  learningCoachAiRuns!: Table<Record<string, unknown>, string>;
+  knowledgePoints!: Table<LegacyKnowledgePoint, string>;
+  recordKnowledgePointLinks!: Table<LegacyRecordKnowledgePointLink, string>;
+  knowledgePointExtractionRuns!: Table<Record<string, unknown>, string>;
+  knowledgePointCoachSnapshots!: Table<Record<string, unknown>, string>;
+  knowledgeRelations!: Table<LegacyKnowledgeRelation, string>;
+  decisionBlocks!: Table<DecisionBlock, string>;
+  decisionBlockArchives!: Table<DecisionBlockArchive, string>;
+  decisionBlockFeedback!: Table<DecisionBlockFeedback, string>;
+  feedbackInterpretations!: Table<FeedbackInterpretation, string>;
+  analysisQueueItems!: Table<AnalysisQueueItem, string>;
+  analysisBatches!: Table<AnalysisBatch, string>;
+  sessionBlueprints!: Table<SessionBlueprint, string>;
+  adaptiveReviewTasks!: Table<AdaptiveReviewTask, string>;
+  adaptiveQuizTurns!: Table<AdaptiveQuizTurn, string>;
+  taskOutcomeEvents!: Table<TaskOutcomeEvent, string>;
+  delayedVerifications!: Table<DelayedVerification, string>;
+  decisionBlockStates!: Table<DecisionBlockState, string>;
+  interventionEffectSummaries!: Table<InterventionEffectSummary, string>;
+  aiRoleConfigs!: Table<AiRoleConfig, string>;
+  coachMigrationBackups!: Table<CoachMigrationBackup, string>;
 
-  constructor() {
-    super("study-journal-408");
+  constructor(name = "study-journal-408") {
+    super(name);
     this.version(1).stores({
       entries: "id, date, updatedAt, pinned, favorite",
       blocks: "id, date, type, order, updatedAt",
@@ -263,6 +315,10 @@ export class StudyJournalDatabase extends Dexie {
       cloudSyncMutation: "id",
       autoBackupState: "id",
     });
+    this.version(16).stores(LEGACY_SCHEMA_16_STORES);
+    this.version(17)
+      .stores(REVIEW_COACH_SCHEMA_17_STORES)
+      .upgrade(migrateToReviewCoachSchema17);
   }
 }
 

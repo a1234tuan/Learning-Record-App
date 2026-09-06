@@ -110,6 +110,34 @@ describe("recordTransferService", () => {
     expect(committed[0].tags).toEqual(["积分", "重点"]);
   });
 
+  it("assigns copied decision blocks new identities and resets their saved version", async () => {
+    const source = {
+      ...makeRecord("record-source", "asset-source"),
+      contentHtml: '<record-decision-block data-decision-block-id="source-decision" data-content-version="7" data-created-at="2026-07-01T00:00:00.000Z" data-updated-at="2026-07-02T00:00:00.000Z"><p>需要复习</p></record-decision-block>',
+    };
+    const sourceAsset = makeAsset("asset-source");
+    let committed: RecordBlock[] = [];
+    const store = {
+      listBlocks: vi.fn(async () => []),
+      listDeletedBlocks: vi.fn(async () => []),
+      getAsset: vi.fn(async () => undefined),
+      stageRecordTransferAsset: vi.fn(async () => undefined),
+      commitRecordTransfer: vi.fn(async (_sessionId: string, records: RecordBlock[]) => {
+        committed = records;
+        return { records: 1, assets: 1, images: 1, audio: 0, attachments: 0, subjects: 1 };
+      }),
+      discardRecordTransfer: vi.fn(async () => undefined),
+    } as unknown as StorageAdapter;
+
+    await importRecordTransferPackage(store, transfer(source, sourceAsset), [source.id]);
+
+    const node = new DOMParser().parseFromString(committed[0].contentHtml, "text/html").querySelector("record-decision-block");
+    expect(node?.getAttribute("data-decision-block-id")).not.toBe("source-decision");
+    expect(node?.getAttribute("data-content-version")).toBe("1");
+    expect(node?.hasAttribute("data-created-at")).toBe(false);
+    expect(node?.hasAttribute("data-updated-at")).toBe(false);
+  });
+
   it("accepts a legacy transfer record without tags and normalizes it on import", async () => {
     const source = makeRecord("legacy-source", "legacy-asset");
     const legacySource = { ...source } as Omit<RecordBlock, "tags"> & { tags?: string[] };

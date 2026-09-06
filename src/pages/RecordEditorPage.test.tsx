@@ -221,6 +221,62 @@ afterEach(() => {
 });
 
 describe("RecordEditorPage", () => {
+  const decisionBlockHtml = '<record-decision-block data-decision-block-id="block-1" data-content-version="1"><p>需要复习</p></record-decision-block>';
+
+  it("automatically enrolls a newly created record when its first save contains a decision block", async () => {
+    const onAddToReview = vi.fn().mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm");
+    const { onGetDraft, onSave, saveButton } = renderEditor({ isNewRecord: true, onAddToReview });
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalled());
+    act(() => {
+      richEditorMock.html = decisionBlockHtml;
+      richEditorMock.props.onChange(decisionBlockHtml);
+    });
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onAddToReview).toHaveBeenCalledWith(record.id);
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("asks once before enrolling an existing unscheduled record with its first decision block", async () => {
+    const onAddToReview = vi.fn().mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { onGetDraft, onSave, saveButton } = renderEditor({ onAddToReview });
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalled());
+    act(() => {
+      richEditorMock.html = decisionBlockHtml;
+      richEditorMock.props.onChange(decisionBlockHtml);
+    });
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onAddToReview).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("does not re-enroll or prompt for a record whose FSRS review is already active", async () => {
+    const onAddToReview = vi.fn().mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm");
+    const { onGetDraft, onSave, saveButton } = renderEditor({ reviewState, onAddToReview });
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalled());
+    act(() => {
+      richEditorMock.html = decisionBlockHtml;
+      richEditorMock.props.onChange(decisionBlockHtml);
+    });
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onAddToReview).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
   it("marks a menu-inserted collapse block for one-time summary autofocus", async () => {
     const { onGetDraft } = renderEditor();
 
@@ -252,6 +308,27 @@ describe("RecordEditorPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /翻译复盘/ }));
 
     expect(richEditorMock.insertContent).toHaveBeenCalledWith(template.contentHtml);
+  });
+
+  it("renews decision-block identity when inserting a reusable template", async () => {
+    const template = {
+      id: "template-decision-block",
+      createdAt: stamp,
+      updatedAt: stamp,
+      title: "重点模板",
+      contentHtml: decisionBlockHtml,
+    };
+    const { onGetDraft } = renderEditor({ templates: [template] });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    fireEvent.click(screen.getByRole("button", { name: "插入模板" }));
+    fireEvent.click(await screen.findByRole("button", { name: /重点模板/ }));
+
+    const inserted = String(richEditorMock.insertContent.mock.calls.at(-1)?.[0]);
+    expect(inserted).toContain("record-decision-block");
+    expect(inserted).not.toContain('data-decision-block-id="block-1"');
+    expect(inserted).toContain('data-content-version="1"');
+    expect(inserted).toContain("data-created-at=");
   });
 
   it("does not expose subject creation while editing a record", async () => {
@@ -507,6 +584,42 @@ describe("RecordEditorPage", () => {
     expect(screen.getAllByRole("button", { name: /轻回看 06-22/ })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "收藏记录" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "删除记录" })).toHaveLength(2);
+  });
+
+  it("restores pending decision-block removal metadata from an autosaved draft", async () => {
+    const decisionRecord: RecordBlock = {
+      ...record,
+      contentHtml: decisionBlockHtml,
+    };
+    const latestRemovedHtml = decisionBlockHtml.replace("需要复习", "删除前的最新内容");
+    const storedDraft: RecordDraft = {
+      id: record.id,
+      recordId: record.id,
+      baseUpdatedAt: record.updatedAt,
+      draft: { ...decisionRecord, contentHtml: "<p>保留正文</p>" },
+      decisionBlockRemovals: [{
+        decisionBlockId: "block-1",
+        reason: "deleted",
+        contentHtml: latestRemovedHtml,
+      }],
+      updatedAt: "2026-06-21T00:01:00.000Z",
+    };
+    const onGetDraft = vi.fn().mockResolvedValue(storedDraft);
+    const onSave = vi.fn().mockResolvedValue(storedDraft.draft);
+    const { saveButton } = renderEditor({ record: decisionRecord, onGetDraft, onSave });
+
+    await waitFor(() => expect(screen.getByText("已恢复未保存草稿，点击保存后才会写入正式记录。")).toBeInTheDocument());
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][1]).toEqual({
+      decisionBlockRemovals: [{
+        decisionBlockId: "block-1",
+        reason: "deleted",
+        contentHtml: latestRemovedHtml,
+      }],
+      restoredDecisionBlocks: [],
+    });
   });
 
   it("keeps edit visible in preview and exposes secondary preview actions from the more menu", async () => {

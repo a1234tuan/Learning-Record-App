@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
 
-import type { Asset, ContentTemplate, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
-import { RichTextEditor } from "../components/RichTextEditor";
+import type { Asset, ContentTemplate, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, RecordSaveOptions, Subject, SubjectConfig } from "../types";
+import { RichTextEditor, type RestorableDecisionBlock } from "../components/RichTextEditor";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordTagChips, recordTagStyle } from "../components/RecordTagChips";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
@@ -32,13 +32,19 @@ import {
 } from "../services/nativeAudioRecorder";
 import { useRestoreInProgress } from "../services/restoreLockService";
 import { registerDesktopFlushHandler } from "../services/desktopLifecycleService";
+import {
+  extractDecisionBlocks,
+  renewDecisionBlockIdentitiesInHtml,
+  type PendingDecisionBlockRemoval,
+} from "../features/reviewCoach/decisionBlockContent";
+import type { DecisionBlockArchive } from "../features/reviewCoach/domain";
 
 interface RecordEditorPageProps {
   record: RecordBlock;
   initialEditing?: boolean;
   onEditingChange?: (editing: boolean) => void;
   onBack: () => void;
-  onSave: (record: RecordBlock) => Promise<RecordBlock | void>;
+  onSave: (record: RecordBlock, options?: RecordSaveOptions) => Promise<RecordBlock | void>;
   onDelete: (recordId: string) => Promise<void>;
   onToggleFavorite: (record: RecordBlock, favorite: boolean) => Promise<void> | void;
   onAddAsset: (file: File, kind: Asset["kind"], title?: string) => Promise<Asset>;
@@ -60,6 +66,8 @@ interface RecordEditorPageProps {
   onResetReview?: (recordId: string) => Promise<void> | void;
   onRemoveReview?: (recordId: string) => Promise<void> | void;
   onExportRecord?: (recordId: string) => Promise<string> | string;
+  isNewRecord?: boolean;
+  onListDecisionBlockArchives?: (recordId: string) => Promise<DecisionBlockArchive[]>;
 }
 
 const cloneRecord = (record: RecordBlock): RecordBlock =>
@@ -117,6 +125,14 @@ const hasDraftChanges = (draft: RecordBlock, record: RecordBlock) =>
   JSON.stringify(draft.assets) !== JSON.stringify(record.assets) ||
   JSON.stringify(draft.formulas) !== JSON.stringify(record.formulas);
 
+const draftDecisionBlockOptions = (
+  removals: ReadonlyMap<string, PendingDecisionBlockRemoval>,
+  restoredBlocks: ReadonlyMap<string, string>,
+): Pick<RecordDraft, "decisionBlockRemovals" | "restoredDecisionBlocks"> => ({
+  decisionBlockRemovals: Array.from(removals.values()),
+  restoredDecisionBlocks: Array.from(restoredBlocks, ([decisionBlockId, contentHtml]) => ({ decisionBlockId, contentHtml })),
+});
+
 export const RecordEditorPage = ({
   record,
   initialEditing = false,
@@ -144,6 +160,8 @@ export const RecordEditorPage = ({
   onResetReview,
   onRemoveReview,
   onExportRecord,
+  isNewRecord = false,
+  onListDecisionBlockArchives,
 }: RecordEditorPageProps) => {
   const native = isNativePlatform();
   const restoreLocked = useRestoreInProgress();
@@ -174,6 +192,29 @@ export const RecordEditorPage = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const pendingDecisionBlockRemovalsRef = useRef<Map<string, PendingDecisionBlockRemoval>>(new Map());
+  const restoredDecisionBlocksRef = useRef(new Map<string, string>());
+  const [restorableDecisionBlocks, setRestorableDecisionBlocks] = useState<RestorableDecisionBlock[]>([]);
+
+  const refreshDecisionBlockArchives = useCallback(async () => {
+    if (!onListDecisionBlockArchives) {
+      setRestorableDecisionBlocks([]);
+      return;
+    }
+    const archives = await onListDecisionBlockArchives(record.id);
+    setRestorableDecisionBlocks(archives.map((archive) => ({
+      archiveId: archive.id,
+      decisionBlockId: archive.decisionBlockId,
+      contentHtml: archive.contentHtml,
+      archivedAt: archive.archivedAt,
+    })));
+  }, [onListDecisionBlockArchives, record.id]);
+
+  useEffect(() => {
+    pendingDecisionBlockRemovalsRef.current.clear();
+    restoredDecisionBlocksRef.current.clear();
+    void refreshDecisionBlockArchives().catch(() => setRestorableDecisionBlocks([]));
+  }, [refreshDecisionBlockArchives]);
 
   useEffect(() => {
     if (draftLoading || restoreScrollY === undefined) {
@@ -222,12 +263,19 @@ export const RecordEditorPage = ({
 
   const flushDraft = useCallback(
     async (nextDraft = draftRef.current, options: { force?: boolean } = {}) => {
-      if (restoreLocked || draftLoadingRef.current || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+      const decisionBlockOptions = draftDecisionBlockOptions(
+        pendingDecisionBlockRemovalsRef.current,
+        restoredDecisionBlocksRef.current,
+      );
+      const hasDecisionBlockIntent = Boolean(
+        decisionBlockOptions.decisionBlockRemovals?.length || decisionBlockOptions.restoredDecisionBlocks?.length,
+      );
+      if (restoreLocked || draftLoadingRef.current || (!options.force && committingRef.current) || (!hasDraftChanges(nextDraft, record) && !hasDecisionBlockIntent)) {
         return;
       }
 
       const task = draftSaveQueueRef.current.then(async () => {
-        if (draftLoadingRef.current || (!options.force && committingRef.current) || !hasDraftChanges(nextDraft, record)) {
+        if (draftLoadingRef.current || (!options.force && committingRef.current) || (!hasDraftChanges(nextDraft, record) && !hasDecisionBlockIntent)) {
           return;
         }
         await onSaveDraft({
@@ -235,6 +283,7 @@ export const RecordEditorPage = ({
           recordId: record.id,
           baseUpdatedAt: record.updatedAt,
           draft: cloneRecord(nextDraft),
+          ...decisionBlockOptions,
           updatedAt: nowISO(),
         });
       });
@@ -342,6 +391,12 @@ export const RecordEditorPage = ({
       }
       if (!loadStartedDuringCommit && !committingRef.current && storedDraft && storedDraft.updatedAt > loadingRecord.updatedAt) {
         const restored = cloneRecord(storedDraft.draft);
+        pendingDecisionBlockRemovalsRef.current = new Map(
+          (storedDraft.decisionBlockRemovals ?? []).map((removal) => [removal.decisionBlockId, removal]),
+        );
+        restoredDecisionBlocksRef.current = new Map(
+          (storedDraft.restoredDecisionBlocks ?? []).map((block) => [block.decisionBlockId, block.contentHtml]),
+        );
         setDraft(restored);
         draftRef.current = restored;
         draftLoadingRef.current = false;
@@ -351,6 +406,8 @@ export const RecordEditorPage = ({
         return;
       }
       const clean = cloneRecord(loadingRecord);
+      pendingDecisionBlockRemovalsRef.current.clear();
+      restoredDecisionBlocksRef.current.clear();
       setDraft(clean);
       draftRef.current = clean;
       draftLoadingRef.current = false;
@@ -634,7 +691,21 @@ export const RecordEditorPage = ({
       setTagInput("");
       setEditingTagIndex(null);
 
-      await onSave(draftToSave);
+      const introducedDecisionBlocks = extractDecisionBlocks(record.contentHtml).length === 0
+        && extractDecisionBlocks(draftToSave.contentHtml).length > 0;
+      let shouldJoinReview = false;
+      if (introducedDecisionBlocks && reviewState?.status !== "active") {
+        shouldJoinReview = isNewRecord || window.confirm("这条日志新增了复习重点，是否把整条日志加入间隔复习？");
+      }
+
+      await onSave(draftToSave, {
+        decisionBlockRemovals: Array.from(pendingDecisionBlockRemovalsRef.current.values()),
+        restoredDecisionBlocks: Array.from(restoredDecisionBlocksRef.current, ([decisionBlockId, contentHtml]) => ({ decisionBlockId, contentHtml })),
+      });
+      pendingDecisionBlockRemovalsRef.current.clear();
+      restoredDecisionBlocksRef.current.clear();
+      if (shouldJoinReview) await onAddToReview?.(record.id);
+      await refreshDecisionBlockArchives();
       await waitForDraftSaves();
       await onDeleteDraft(record.id);
       setDraftRestored(false);
@@ -663,6 +734,8 @@ export const RecordEditorPage = ({
     await waitForDraftSaves();
     await onDeleteDraft(record.id);
     const clean = cloneRecord(record);
+    pendingDecisionBlockRemovalsRef.current.clear();
+    restoredDecisionBlocksRef.current.clear();
     setDraft(clean);
     draftRef.current = clean;
     setDraftRestored(false);
@@ -973,6 +1046,15 @@ export const RecordEditorPage = ({
             findReplaceOpen={searchOpen}
             onFindReplaceOpen={() => setSearchOpen(true)}
             onFindReplaceClose={() => setSearchOpen(false)}
+            restorableDecisionBlocks={restorableDecisionBlocks}
+            onDecisionBlockRemoved={(removal) => {
+              pendingDecisionBlockRemovalsRef.current.set(removal.decisionBlockId, removal);
+              restoredDecisionBlocksRef.current.delete(removal.decisionBlockId);
+            }}
+            onDecisionBlockRestored={(archive) => {
+              pendingDecisionBlockRemovalsRef.current.delete(archive.decisionBlockId);
+              restoredDecisionBlocksRef.current.set(archive.decisionBlockId, archive.contentHtml);
+            }}
             renderInsertTools={(editor) => {
               editorRef.current = editor;
               return (
@@ -1038,7 +1120,9 @@ export const RecordEditorPage = ({
                 <TemplateInsertMenu
                   compact
                   templates={templates}
-                  onInsert={(template) => editor.chain().focus().insertContent(template.contentHtml).run()}
+                  onInsert={(template) => editor.chain().focus().insertContent(
+                    renewDecisionBlockIdentitiesInHtml(template.contentHtml, nowISO()),
+                  ).run()}
                 />
               </>
               );

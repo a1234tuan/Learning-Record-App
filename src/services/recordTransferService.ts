@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import { nowISO } from "../lib/date";
 import { newId } from "../lib/entity";
+import { extractDecisionBlocks, newDecisionBlockId } from "../features/reviewCoach/decisionBlockContent";
 import { isNativePlatform } from "../lib/platform";
 import { normalizeSubjectName } from "../lib/subjects";
 import { syncRecordRefsFromContent } from "../lib/recordContent";
@@ -139,7 +140,12 @@ const assertTransferPayload = (payload: RecordTransferPayload) => {
   }
 };
 
-const rewriteImportedHtml = (contentHtml: string, assetIds: Map<string, string>, recordIds: Map<string, string>): string => {
+const rewriteImportedHtml = (
+  contentHtml: string,
+  assetIds: Map<string, string>,
+  recordIds: Map<string, string>,
+  decisionBlockIds: Map<string, string>,
+): string => {
   const doc = new DOMParser().parseFromString(contentHtml || "<p></p>", "text/html");
   for (const node of Array.from(doc.querySelectorAll("record-asset"))) {
     const id = node.getAttribute("data-asset-id") ?? "";
@@ -153,6 +159,16 @@ const rewriteImportedHtml = (contentHtml: string, assetIds: Map<string, string>,
     const nextId = recordIds.get(id);
     if (nextId) {
       node.setAttribute("data-record-id", nextId);
+    }
+  }
+  for (const node of Array.from(doc.querySelectorAll("record-decision-block"))) {
+    const id = node.getAttribute("data-decision-block-id") ?? "";
+    const nextId = decisionBlockIds.get(id);
+    if (nextId) {
+      node.setAttribute("data-decision-block-id", nextId);
+      node.setAttribute("data-content-version", "1");
+      node.removeAttribute("data-created-at");
+      node.removeAttribute("data-updated-at");
     }
   }
   return doc.body.innerHTML || "<p></p>";
@@ -329,8 +345,24 @@ export const importRecordTransferPackage = async (
       assetIdMap.set(id, (await store.getAsset(id)) ? newId() : id);
     }
 
+    const decisionBlockIdMaps = new Map<string, Map<string, string>>();
+    for (const source of sourceRecords) {
+      const ids = new Map<string, string>();
+      for (const block of extractDecisionBlocks(source.contentHtml)) {
+        if (block.decisionBlockId && !ids.has(block.decisionBlockId)) {
+          ids.set(block.decisionBlockId, newDecisionBlockId());
+        }
+      }
+      decisionBlockIdMaps.set(source.id, ids);
+    }
+
     const records = sourceRecords.map((source) => {
-      const contentHtml = rewriteImportedHtml(source.contentHtml, assetIdMap, recordIdMap);
+      const contentHtml = rewriteImportedHtml(
+        source.contentHtml,
+        assetIdMap,
+        recordIdMap,
+        decisionBlockIdMaps.get(source.id) ?? new Map(),
+      );
       return syncRecordRefsFromContent({
         ...source,
         id: recordIdMap.get(source.id) ?? source.id,

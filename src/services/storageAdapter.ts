@@ -25,6 +25,7 @@ import type {
   RecordReviewState,
   RecordReviewStats,
   RecordReviewUndoToken,
+  RecordSaveOptions,
   ReviewSchedule,
   StorageAdapter,
   RecordTransferSummary,
@@ -62,6 +63,17 @@ import { normalizeRecordTags, sameRecordTags } from "../lib/recordTags";
 import { ensureSettingsSubjects, normalizeSubjectName } from "../lib/subjects";
 import { normalizeAiConfig } from "../lib/aiProviders";
 import { normalizeTtsConfig } from "../lib/ttsProviders";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT, type ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
+import {
+  DexieReviewCoachRepository,
+  getReviewCoachFormalSnapshot,
+  restoreReviewCoachFormalSnapshot,
+  reviewCoachFormalTables,
+  reviewCoachRestoreTables,
+  purgeReviewCoachFactsForRecord,
+} from "../features/reviewCoach/repository";
+import { validateReviewCoachFormalSnapshot } from "../features/reviewCoach/validation";
+import { extractDecisionBlocks, prepareDecisionBlockContentForSave } from "../features/reviewCoach/decisionBlockContent";
 import {
   DEFAULT_REVIEW_EASE,
   DEFAULT_REVIEW_KIND,
@@ -124,6 +136,10 @@ const normalizeSnapshotPodcasts = (podcasts: KnowledgePodcast[] | undefined): Kn
       error: undefined,
     })),
   }));
+
+const reviewCoachCounts = (snapshot: ReviewCoachFormalSnapshot) => Object.fromEntries(
+  Object.entries(snapshot).map(([key, values]) => [key, values.length]),
+) as Partial<Record<keyof ReviewCoachFormalSnapshot, number>>;
 
 const assertSnapshotIntegrity = (
   blocks: Block[],
@@ -843,23 +859,52 @@ export class DexieStorageAdapter implements StorageAdapter {
     return blocks.sort((a, b) => a.order - b.order);
   }
 
-  async saveBlock(block: Block): Promise<Block> {
+  async saveBlock(block: Block, options: RecordSaveOptions = {}): Promise<Block> {
     // Compare against the post-normalization value (after syncRecordRefsFromContent), not the raw
     // incoming param — otherwise the auto-derived assets/formulas would make an unchanged save look
     // "different" and vice versa.
-    const normalized = block.type === "record" ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] }) : block;
+    let normalized = block.type === "record" ? syncRecordRefsFromContent({ ...block, mistakeRefs: [] }) : block;
     const existingBlock = await db.blocks.get(normalized.id);
+    const decisionBlockStamp = nowISO();
+    const preparedDecisionBlocks = normalized.type === "record"
+      ? prepareDecisionBlockContentForSave(
+          existingBlock?.type === "record" ? existingBlock.contentHtml : "",
+          normalized.contentHtml,
+          decisionBlockStamp,
+          options.decisionBlockRemovals,
+          undefined,
+          new Map((options.restoredDecisionBlocks ?? []).map((block) => [block.decisionBlockId, block.contentHtml])),
+        )
+      : undefined;
+    if (normalized.type === "record" && preparedDecisionBlocks) {
+      normalized = syncRecordRefsFromContent({
+        ...normalized,
+        contentHtml: preparedDecisionBlocks.contentHtml,
+        mistakeRefs: [],
+      });
+    }
     const isUnchangedBlock = existingBlock
       && existingBlock.type === normalized.type
       && deepEqualIgnoring(existingBlock, normalized, ["updatedAt"]);
     const saved = isUnchangedBlock ? existingBlock : touch(normalized);
-    if (!isUnchangedBlock || saved.type === "studySession") await markCloudSyncMutation();
-    await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
-      await db.blocks.put(saved);
-      if (saved.type === "record") {
-        await db.recordDrafts.delete(saved.id);
-      }
-    });
+    const hasDecisionBlockWork = Boolean(
+      saved.type === "record" && preparedDecisionBlocks && (
+        preparedDecisionBlocks.blocks.length > 0 ||
+        preparedDecisionBlocks.removals.length > 0 ||
+        (existingBlock?.type === "record" && extractDecisionBlocks(existingBlock.contentHtml).length > 0)
+      ),
+    );
+    if (hasDecisionBlockWork && saved.type === "record" && preparedDecisionBlocks && db.decisionBlocks) {
+      await new DexieReviewCoachRepository(db).saveRecordWithDecisionBlocks(saved, preparedDecisionBlocks, !isUnchangedBlock);
+    } else {
+      if (!isUnchangedBlock || saved.type === "studySession") await markCloudSyncMutation();
+      await db.transaction("rw", db.blocks, db.recordDrafts, async () => {
+        await db.blocks.put(saved);
+        if (saved.type === "record") {
+          await db.recordDrafts.delete(saved.id);
+        }
+      });
+    }
 
     if (saved.type === "studySession") {
       const existing = await db.studySessions.where("blockId").equals(saved.id).first();
@@ -1355,16 +1400,20 @@ export class DexieStorageAdapter implements StorageAdapter {
     const draft = await db.recordDrafts.get(blockId);
 
     await markCloudSyncMutation();
-    await db.transaction("rw", [db.blocks, db.recordDrafts, db.assets, db.studySessions, db.recordReviews, db.recordReviewLogs], async () => {
+    await db.transaction("rw", [db.blocks, db.recordDrafts, db.assets, db.studySessions, db.recordReviews, db.recordReviewLogs, ...reviewCoachFormalTables(db)], async () => {
       await db.blocks.delete(blockId);
       await db.recordDrafts.delete(blockId);
       await db.studySessions.where("blockId").equals(blockId).delete();
       await db.recordReviews.delete(blockId);
       await db.recordReviewLogs.where("recordId").equals(blockId).delete();
       if (block.type === "record") {
+        await purgeReviewCoachFactsForRecord(db, blockId);
         await this.cleanupOrphanAssetsForRecord(block, draft);
       }
     });
+    if (block.type === "record") {
+      await new DexieReviewCoachRepository(db).rebuildProjections();
+    }
   }
 
   async purgeExpiredDeletedBlocks(retentionDays: number): Promise<number> {
@@ -1657,7 +1706,8 @@ export class DexieStorageAdapter implements StorageAdapter {
   async commitRecordTransfer(sessionId: string, records: RecordBlock[]): Promise<RecordTransferSummary> {
     try {
       await markCloudSyncMutation();
-      return await db.transaction("rw", [db.entries, db.blocks, db.assets, db.settings, db.restoreStagingAssets], async () => {
+      let importedDecisionBlocks = 0;
+      const result = await db.transaction("rw", [db.entries, db.blocks, db.assets, db.settings, db.restoreStagingAssets, db.decisionBlocks], async () => {
         const staged = await db.restoreStagingAssets.where("sessionId").equals(sessionId).toArray();
         const stagedAssets = staged.map((entry) => entry.asset);
         const stagedAssetIds = new Set(stagedAssets.map((asset) => asset.id));
@@ -1721,15 +1771,39 @@ export class DexieStorageAdapter implements StorageAdapter {
               mistakeRefs: [],
               updatedAt: title === record.title ? record.updatedAt : nowISO(),
             });
+          })
+          .map((record) => {
+            const prepared = prepareDecisionBlockContentForSave("", record.contentHtml, nowISO());
+            return {
+              record: syncRecordRefsFromContent({ ...record, contentHtml: prepared.contentHtml, mistakeRefs: [] }),
+              decisionBlocks: prepared.blocks.map((block) => ({
+                id: block.decisionBlockId,
+                recordId: record.id,
+                contentVersion: block.contentVersion,
+                position: block.position,
+                contentUpdatedAt: block.updatedAt,
+                createdAt: block.createdAt,
+                updatedAt: block.updatedAt,
+              })),
+            };
           });
+        const importedRecords = imported.map((item) => item.record);
+        const decisionBlocks = imported.flatMap((item) => item.decisionBlocks);
+        const existingDecisionBlockIds = decisionBlocks.length > 0
+          ? new Set((await db.decisionBlocks.toArray()).map((block) => block.id))
+          : new Set<string>();
+        if (decisionBlocks.some((block) => existingDecisionBlockIds.has(block.id))) {
+          throw new Error("导入复习重点 ID 冲突，已取消导入。");
+        }
+        importedDecisionBlocks = decisionBlocks.length;
 
         const existingDates = new Set(existingEntries.map((entry) => entry.date));
-        const newEntries = Array.from(new Set(imported.map((record) => record.date)))
+        const newEntries = Array.from(new Set(importedRecords.map((record) => record.date)))
           .filter((date) => !existingDates.has(date))
           .map((date) => createDayEntry(date));
         const ensuredSettings = ensureSettingsSubjects(
           { ...(settings ?? DEFAULT_SETTINGS), schemaVersion: 4 },
-          [...activeRecords, ...imported],
+          [...activeRecords, ...importedRecords],
         );
         // Subject normalization must not roll a current database schema back.
         const nextSettings = {
@@ -1737,23 +1811,29 @@ export class DexieStorageAdapter implements StorageAdapter {
           schemaVersion: settings?.schemaVersion ?? 4,
         };
 
-        await Promise.all([
+        const writes: Promise<unknown>[] = [
           db.entries.bulkPut(newEntries),
-          db.blocks.bulkPut(imported),
+          db.blocks.bulkPut(importedRecords),
           db.assets.bulkPut(stagedAssets),
           db.settings.put(nextSettings),
           db.restoreStagingAssets.where("sessionId").equals(sessionId).delete(),
-        ]);
+        ];
+        if (decisionBlocks.length > 0) writes.push(db.decisionBlocks.bulkPut(decisionBlocks));
+        await Promise.all(writes);
 
         return {
-          records: imported.length,
+          records: importedRecords.length,
           assets: stagedAssets.length,
           images: stagedAssets.filter((asset) => asset.kind === "image").length,
           audio: stagedAssets.filter((asset) => asset.kind === "audio").length,
           attachments: stagedAssets.filter((asset) => asset.kind === "attachment").length,
-          subjects: new Set(imported.map((record) => record.subject)).size,
+          subjects: new Set(importedRecords.map((record) => record.subject)).size,
         };
       });
+      if (importedDecisionBlocks > 0) {
+        await new DexieReviewCoachRepository(db).rebuildProjections();
+      }
+      return result;
     } catch (error) {
       await this.discardRecordTransfer(sessionId);
       throw error;
@@ -1763,9 +1843,9 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createSnapshot(): Promise<StorageSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts, ...reviewCoachFormalTables(db)],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, reviewCoach] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1778,8 +1858,9 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
           db.knowledgePodcasts.toArray(),
+          getReviewCoachFormalSnapshot(db),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, reviewCoach };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
@@ -1792,7 +1873,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       payload: {
         manifest: {
           format: "study-journal",
-          version: 5,
+          version: 6,
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
@@ -1807,6 +1888,7 @@ export class DexieStorageAdapter implements StorageAdapter {
             recordReviewLogs: snapshot.recordReviewLogs.length,
             recordReviewDayStats: snapshot.recordReviewDayStats.length,
             templates: cleanedTemplates.length,
+            reviewCoach: reviewCoachCounts(snapshot.reviewCoach),
           },
         },
         entries: snapshot.entries,
@@ -1822,6 +1904,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
+        reviewCoach: snapshot.reviewCoach,
       },
       assets: backupAssets,
       recordDrafts: cleanedDrafts,
@@ -1835,9 +1918,9 @@ export class DexieStorageAdapter implements StorageAdapter {
   async createStreamableSnapshot(): Promise<StreamableBackupSnapshot> {
     const snapshot = await db.transaction(
       "r",
-      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts],
+      [db.entries, db.blocks, db.templates, db.tags, db.studySessions, db.settings, db.assets, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.knowledgePodcasts, ...reviewCoachFormalTables(db)],
       async () => {
-        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts] = await Promise.all([
+        const [entries, blocks, templates, tags, studySessions, settings, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, reviewCoach] = await Promise.all([
           db.entries.toArray(),
           db.blocks.toArray(),
           db.templates.toArray(),
@@ -1850,8 +1933,9 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewLogs.toArray(),
           db.recordReviewDayStats.toArray(),
           db.knowledgePodcasts.toArray(),
+          getReviewCoachFormalSnapshot(db),
         ]);
-        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts };
+        return { entries, blocks, templates, tags, studySessions, settings: settings ?? DEFAULT_SETTINGS, assets, recordDrafts, recordReviews, recordReviewLogs, recordReviewDayStats, podcasts, reviewCoach };
       },
     );
     const cleanedBlocks = normalizeSnapshotRecords(snapshot.blocks);
@@ -1864,7 +1948,7 @@ export class DexieStorageAdapter implements StorageAdapter {
       payload: {
         manifest: {
           format: "study-journal",
-          version: 5,
+          version: 6,
           exportedAt: nowISO(),
           appVersion: "0.1.0",
           counts: {
@@ -1879,6 +1963,7 @@ export class DexieStorageAdapter implements StorageAdapter {
             recordReviewLogs: snapshot.recordReviewLogs.length,
             recordReviewDayStats: snapshot.recordReviewDayStats.length,
             templates: cleanedTemplates.length,
+            reviewCoach: reviewCoachCounts(snapshot.reviewCoach),
           },
         },
         entries: snapshot.entries,
@@ -1894,6 +1979,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         studySessions: snapshot.studySessions,
         settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
+        reviewCoach: snapshot.reviewCoach,
       },
       assets,
       recordDrafts: cleanedDrafts,
@@ -1911,7 +1997,10 @@ export class DexieStorageAdapter implements StorageAdapter {
     const restoredPodcasts = options.preservePodcasts
       ? snapshot.payload.podcasts ?? []
       : normalizeSnapshotPodcasts(snapshot.payload.podcasts);
+    const restoredReviewCoach = snapshot.payload.reviewCoach ?? structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
     assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
+    const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
+    validateReviewCoachFormalSnapshot(restoredReviewCoach, new Set(restoredRecords.map((record) => record.id)));
     await db.transaction(
       "rw",
       [
@@ -1930,6 +2019,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         db.assets,
         db.knowledgePodcasts,
         db.cloudSyncMutation,
+        ...reviewCoachRestoreTables(db),
       ],
       async () => {
         const currentEpoch = await db.cloudSyncMutation.get("local");
@@ -1952,7 +2042,7 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.assets.clear(),
           db.knowledgePodcasts.clear(),
         ]);
-        const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
+        await restoreReviewCoachFormalSnapshot(db, restoredReviewCoach);
         await Promise.all([
           db.entries.bulkPut(snapshot.payload.entries),
           db.blocks.bulkPut(restoredBlocks),
@@ -1972,6 +2062,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     );
     await this.migrateRecordReviewsToMixedSystem();
     await this.rebuildReviewProjectionFromEvents();
+    await new DexieReviewCoachRepository(db).rebuildProjections();
   }
 
   async restoreSnapshot(snapshot: StorageSnapshot): Promise<void> {
@@ -2023,6 +2114,8 @@ export class DexieStorageAdapter implements StorageAdapter {
     const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
     assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
     const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
+    const restoredReviewCoach = snapshot.payload.reviewCoach ?? structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    validateReviewCoachFormalSnapshot(restoredReviewCoach, new Set(restoredRecords.map((record) => record.id)));
     const sessionId = newId();
     const total = snapshot.assets.length;
     try {
@@ -2049,13 +2142,14 @@ export class DexieStorageAdapter implements StorageAdapter {
       await markCloudSyncMutation();
       await db.transaction(
         "rw",
-        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.restoreStagingAssets],
+        [db.entries, db.blocks, db.templates, db.recordDrafts, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.mistakes, db.tags, db.reviews, db.studySessions, db.settings, db.assets, db.knowledgePodcasts, db.restoreStagingAssets, ...reviewCoachRestoreTables(db)],
         async () => {
           await Promise.all([
             db.entries.clear(), db.blocks.clear(), db.templates.clear(), db.recordDrafts.clear(), db.recordReviews.clear(), db.recordReviewLogs.clear(),
             db.recordReviewDayStats.clear(), db.mistakes.clear(), db.tags.clear(), db.reviews.clear(), db.studySessions.clear(),
             db.settings.clear(), db.assets.clear(), db.knowledgePodcasts.clear(),
           ]);
+          await restoreReviewCoachFormalSnapshot(db, restoredReviewCoach);
           await Promise.all([
             db.entries.bulkPut(snapshot.payload.entries),
             db.blocks.bulkPut(restoredBlocks),
@@ -2074,6 +2168,7 @@ export class DexieStorageAdapter implements StorageAdapter {
         },
       );
       await this.migrateRecordReviewsToMixedSystem();
+      await new DexieReviewCoachRepository(db).rebuildProjections();
     } catch (error) {
       await db.restoreStagingAssets.where("sessionId").equals(sessionId).delete();
       throw error;

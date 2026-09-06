@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { CloudSyncEntityType, RecordBlock, StorageSnapshot, Tag } from "../types";
+import { completeCoachTestSnapshot } from "../features/reviewCoach/reviewCoachTestFixtures";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT } from "../features/reviewCoach/domain";
 import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import {
   CLOUD_DOCUMENT_THRESHOLD_BYTES,
@@ -108,6 +110,71 @@ const snapshot: StorageSnapshot = {
 };
 
 describe("cloud sync model", () => {
+  it("round-trips formal review-coach entities without derived projections or AI secrets", async () => {
+    const coach = completeCoachTestSnapshot();
+    coach.aiRoleConfigs = [{
+      id: "ai-role-planner",
+      role: "session-planner",
+      providerId: "provider-1",
+      model: "deep-model",
+      enabled: true,
+      promptVersion: "session-blueprint-v1",
+      policyVersion: "review-coach-policy-v1",
+      schemaVersion: 1,
+      timeoutMs: 60_000,
+      maxRetries: 1,
+      maxConcurrency: 1,
+      createdAt: stamp,
+      updatedAt: stamp,
+    }];
+    const withCoach: StorageSnapshot = {
+      ...snapshot,
+      payload: { ...snapshot.payload, reviewCoach: coach },
+    };
+
+    const exported = await exportCloudSync(withCoach);
+    const restored = materializeCloudSyncSnapshot(exported.entities, exported.reviewEvents, exported.assetBlobs);
+
+    expect(exported.entities.some((entity) => entity.entityType === "decision-block")).toBe(true);
+    expect(exported.entities.some((entity) => entity.entityType === "task-outcome-event")).toBe(true);
+    expect(exported.entities.map((entity) => String(entity.entityType))).not.toContain("decision-block-state");
+    expect(JSON.stringify(exported.entities)).not.toContain("apiKey");
+    expect(restored.payload.reviewCoach).toEqual(coach);
+  });
+
+  it("retains a full review-coach soft-delete tombstone needed by its archive", async () => {
+    const deletedAt = "2026-08-06T00:00:00.000Z";
+    const coach = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    coach.decisionBlocks = [{
+      id: "decision-block-deleted",
+      recordId: record.id,
+      contentVersion: 1,
+      position: 0,
+      contentUpdatedAt: stamp,
+      createdAt: stamp,
+      updatedAt: deletedAt,
+      deletedAt,
+    }];
+    coach.decisionBlockArchives = [{
+      id: "archive-deleted",
+      decisionBlockId: "decision-block-deleted",
+      recordId: record.id,
+      contentVersion: 1,
+      contentHtml: "<p>recoverable</p>",
+      archivedAt: deletedAt,
+      reason: "deleted",
+      idempotencyKey: "archive-delete-operation",
+      createdAt: deletedAt,
+      updatedAt: deletedAt,
+    }];
+    const exported = await exportCloudSync({ ...snapshot, payload: { ...snapshot.payload, reviewCoach: coach } });
+
+    const restored = materializeCloudSyncSnapshot(exported.entities, exported.reviewEvents, exported.assetBlobs);
+
+    expect(restored.payload.reviewCoach?.decisionBlocks[0]).toMatchObject({ id: "decision-block-deleted", deletedAt });
+    expect(restored.payload.reviewCoach?.decisionBlockArchives[0].contentHtml).toBe("<p>recoverable</p>");
+  });
+
   it("keeps asset bytes out of entity payloads and restores them by content hash", async () => {
     const exported = await exportCloudSync(snapshot);
     const asset = exported.entities.find((entity) => entity.entityType === "asset");
