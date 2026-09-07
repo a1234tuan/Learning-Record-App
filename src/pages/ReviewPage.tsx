@@ -1,4 +1,5 @@
 ﻿import {
+  ArrowLeft,
   BarChart3,
   Bot,
   ChevronDown,
@@ -958,6 +959,14 @@ export const ReviewPage = ({
           </section>
         ) : (
           <section className="review-session">
+            <button
+              type="button"
+              className="review-session-exit"
+              onClick={() => onModeChange("manage")}
+            >
+              <ArrowLeft size={18} />
+              返回复习
+            </button>
             <section className="review-session-progress" aria-label="复习进度">
               <div className="review-progress-meta">
                 <span>第 {currentIndex}/{reviewTotal} 条</span>

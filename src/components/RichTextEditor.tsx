@@ -7,7 +7,7 @@ import type { EditorView } from "@tiptap/pm/view";
 import { redoDepth, undoDepth } from "@tiptap/pm/history";
 import { TextSelection, type SelectionBookmark, type Transaction } from "@tiptap/pm/state";
 import { search as searchPlugin } from "prosemirror-search";
-import { Check, ChevronDown, Highlighter, List, ListOrdered, Paperclip, Redo2, RotateCcw, Target, Undo2, X } from "lucide-react";
+import { Check, ChevronDown, Highlighter, List, ListOrdered, MoreHorizontal, Paperclip, Redo2, RotateCcw, Target, Undo2, X } from "lucide-react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -975,6 +975,7 @@ export const RichTextEditor = ({
   onDecisionBlockRestored,
 }: RichTextEditorProps) => {
   const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+  const [mobileToolbarExpanded, setMobileToolbarExpanded] = useState(false);
   const historyAvailabilityRef = useRef(historyAvailability);
   const onPasteImageRef = useRef(onPasteImage);
   const onChangeRef = useRef(onChange);
@@ -1918,142 +1919,160 @@ export const RichTextEditor = ({
   return (
     <div className={readOnly ? "editor-shell read-only" : "editor-shell"}>
       {!readOnly && (
-        <div className="editor-toolbar" aria-label="编辑工具栏">
-          <button
-            type="button"
-            title="撤回（Ctrl+Z）"
-            aria-label="撤回"
-            disabled={!historyAvailability.canUndo}
-            onClick={undo}
-          >
-            <Undo2 size={16} />
-          </button>
-          <button
-            type="button"
-            title="重做（Ctrl+Y）"
-            aria-label="重做"
-            disabled={!historyAvailability.canRedo}
-            onClick={redo}
-          >
-            <Redo2 size={16} />
-          </button>
-          <button type="button" title="加粗" onClick={() => editor.chain().focus().toggleBold().run()}>
-            B
-          </button>
-          <button type="button" title="斜体" onClick={() => editor.chain().focus().toggleItalic().run()}>
-            I
-          </button>
-          <button type="button" title="标题" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
-            H
-          </button>
-          <select
-            className="editor-heading-select"
-            aria-label="标题级别"
-            value={[1, 2, 3, 4, 5, 6].find((level) => editor.isActive("heading", { level })) ?? 0}
-            onChange={(event) => {
-              const level = Number(event.target.value);
-              if (level === 0) {
-                editor.chain().focus().setParagraph().run();
-                return;
-              }
-              editor.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 | 4 | 5 | 6 }).run();
-            }}
-          >
-            <option value={0}>正文</option>
-            {[1, 2, 3, 4, 5, 6].map((level) => <option key={level} value={level}>H{level}</option>)}
-          </select>
-          <button
-            type="button"
-            className={editor.isActive("bulletList") ? "active" : ""}
-            title="无序列表"
-            aria-label="无序列表"
-            onClick={() => editor.chain().focus().toggleBulletList().run()}
-          >
-            <List size={16} />
-          </button>
-          <button
-            type="button"
-            className={editor.isActive("orderedList") ? "active" : ""}
-            title="有序列表"
-            aria-label="有序列表"
-            onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          >
-            <ListOrdered size={16} />
-          </button>
-          <button type="button" className={editor.isActive("blockquote") ? "active" : ""} title="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
-            “”
-          </button>
-          <button type="button" className={editor.isActive("codeBlock") ? "active" : ""} title="代码块" aria-label="代码块" onClick={() => editor.chain().focus().toggleCodeBlock().run()}>
-            &lt;/&gt;
-          </button>
-          <select
-            className="editor-code-language-select"
-            aria-label="代码块语言"
-            value={codeLanguage}
-            onChange={(event) => {
-              const language = normalizeCodeLanguage(event.target.value);
-              const codeBlockLanguage = language ?? "plaintext";
-              if (editor.isActive("codeBlock")) {
-                editor.chain().focus().updateAttributes("codeBlock", { language: codeBlockLanguage }).run();
-                return;
-              }
-              editor.chain().focus().setCodeBlock({ language: codeBlockLanguage }).run();
-            }}
-          >
-            {codeLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-          {currentRecordId && (
+        <div className={`editor-toolbar${mobileToolbarExpanded ? " mobile-tools-expanded" : ""}`} aria-label="编辑工具栏">
+          <div className="editor-toolbar-primary">
             <button
               type="button"
-              title="引用日志"
-              aria-label="引用日志"
-              onClick={() => setReferencePicker({ bookmark: editor.state.selection.getBookmark() })}
+              title="撤回（Ctrl+Z）"
+              aria-label="撤回"
+              disabled={!historyAvailability.canUndo}
+              onClick={undo}
             >
-              <Paperclip size={16} />
+              <Undo2 size={16} />
             </button>
-          )}
-          <HighlightInsertMenu editor={editor} />
-          <button
-            type="button"
-            className={editor.isActive("recordDecisionBlock") ? "active" : ""}
-            title={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
-            aria-label={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
-            disabled={editor.isActive("recordDecisionBlock")}
-            onClick={() => {
-              const chain = editor.chain().focus();
-              if (editor.state.selection.empty) {
-                chain.insertDecisionBlock().run();
-              } else {
-                chain.wrapSelectionInDecisionBlock().run();
-              }
-            }}
-          >
-            <Target size={16} />
-          </button>
-          {restorableDecisionBlocks.length > 0 && (
-            <label className="decision-block-restore-control" title="恢复已删除或已转为普通内容的复习重点">
-              <RotateCcw size={15} />
-              <select
-                aria-label="恢复复习重点"
-                value=""
-                onChange={(event) => {
-                  const archive = restorableDecisionBlocks.find((item) => item.archiveId === event.target.value);
-                  if (archive) {
-                    editor.chain().focus().insertContent(archive.contentHtml).run();
-                    onDecisionBlockRestored?.(archive);
-                  }
-                }}
+            <button
+              type="button"
+              title="重做（Ctrl+Y）"
+              aria-label="重做"
+              disabled={!historyAvailability.canRedo}
+              onClick={redo}
+            >
+              <Redo2 size={16} />
+            </button>
+            <button type="button" title="加粗" aria-label="加粗" onClick={() => editor.chain().focus().toggleBold().run()}>
+              B
+            </button>
+            <select
+              className="editor-heading-select"
+              aria-label="标题级别"
+              value={[1, 2, 3, 4, 5, 6].find((level) => editor.isActive("heading", { level })) ?? 0}
+              onChange={(event) => {
+                const level = Number(event.target.value);
+                if (level === 0) {
+                  editor.chain().focus().setParagraph().run();
+                  return;
+                }
+                editor.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 | 4 | 5 | 6 }).run();
+              }}
+            >
+              <option value={0}>正文</option>
+              {[1, 2, 3, 4, 5, 6].map((level) => <option key={level} value={level}>H{level}</option>)}
+            </select>
+            <button
+              type="button"
+              className={editor.isActive("bulletList") ? "active" : ""}
+              title="无序列表"
+              aria-label="无序列表"
+              onClick={() => editor.chain().focus().toggleBulletList().run()}
+            >
+              <List size={16} />
+            </button>
+            <button
+              type="button"
+              className="editor-mobile-more-trigger"
+              title={mobileToolbarExpanded ? "收起更多编辑工具" : "展开更多编辑工具"}
+              aria-label={mobileToolbarExpanded ? "收起更多编辑工具" : "展开更多编辑工具"}
+              aria-expanded={mobileToolbarExpanded}
+              onClick={() => setMobileToolbarExpanded((expanded) => !expanded)}
+            >
+              <MoreHorizontal size={18} />
+            </button>
+          </div>
+          <div className="editor-toolbar-secondary" aria-label="更多格式工具">
+            <span className="editor-toolbar-group-label">格式</span>
+            <button type="button" title="斜体" aria-label="斜体" onClick={() => editor.chain().focus().toggleItalic().run()}>
+              I
+            </button>
+            <button type="button" title="二级标题" aria-label="二级标题" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
+              H
+            </button>
+            <button
+              type="button"
+              className={editor.isActive("orderedList") ? "active" : ""}
+              title="有序列表"
+              aria-label="有序列表"
+              onClick={() => editor.chain().focus().toggleOrderedList().run()}
+            >
+              <ListOrdered size={16} />
+            </button>
+            <button type="button" className={editor.isActive("blockquote") ? "active" : ""} title="引用" aria-label="引用" onClick={() => editor.chain().focus().toggleBlockquote().run()}>
+              “”
+            </button>
+            <button type="button" className={editor.isActive("codeBlock") ? "active" : ""} title="代码块" aria-label="代码块" onClick={() => editor.chain().focus().toggleCodeBlock().run()}>
+              &lt;/&gt;
+            </button>
+            <select
+              className="editor-code-language-select"
+              aria-label="代码块语言"
+              value={codeLanguage}
+              onChange={(event) => {
+                const language = normalizeCodeLanguage(event.target.value);
+                const codeBlockLanguage = language ?? "plaintext";
+                if (editor.isActive("codeBlock")) {
+                  editor.chain().focus().updateAttributes("codeBlock", { language: codeBlockLanguage }).run();
+                  return;
+                }
+                editor.chain().focus().setCodeBlock({ language: codeBlockLanguage }).run();
+              }}
+            >
+              {codeLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            {currentRecordId && (
+              <button
+                type="button"
+                title="引用日志"
+                aria-label="引用日志"
+                onClick={() => setReferencePicker({ bookmark: editor.state.selection.getBookmark() })}
               >
-                <option value="">恢复</option>
-                {restorableDecisionBlocks.map((archive) => (
-                  <option key={archive.archiveId} value={archive.archiveId}>
-                    {decisionBlockPreview(archive.contentHtml)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {renderInsertTools?.(editor)}
+                <Paperclip size={16} />
+              </button>
+            )}
+            <HighlightInsertMenu editor={editor} />
+            <button
+              type="button"
+              className={editor.isActive("recordDecisionBlock") ? "active" : ""}
+              title={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
+              aria-label={editor.state.selection.empty ? "新建复习重点" : "标记为复习重点"}
+              disabled={editor.isActive("recordDecisionBlock")}
+              onClick={() => {
+                const chain = editor.chain().focus();
+                if (editor.state.selection.empty) {
+                  chain.insertDecisionBlock().run();
+                } else {
+                  chain.wrapSelectionInDecisionBlock().run();
+                }
+              }}
+            >
+              <Target size={16} />
+            </button>
+            {restorableDecisionBlocks.length > 0 && (
+              <label className="decision-block-restore-control" title="恢复已删除或已转为普通内容的复习重点">
+                <RotateCcw size={15} />
+                <select
+                  aria-label="恢复复习重点"
+                  value=""
+                  onChange={(event) => {
+                    const archive = restorableDecisionBlocks.find((item) => item.archiveId === event.target.value);
+                    if (archive) {
+                      editor.chain().focus().insertContent(archive.contentHtml).run();
+                      onDecisionBlockRestored?.(archive);
+                    }
+                  }}
+                >
+                  <option value="">恢复</option>
+                  {restorableDecisionBlocks.map((archive) => (
+                    <option key={archive.archiveId} value={archive.archiveId}>
+                      {decisionBlockPreview(archive.contentHtml)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+          <div className="editor-toolbar-insert" aria-label="插入工具">
+            <span className="editor-toolbar-group-label">插入</span>
+            {renderInsertTools?.(editor)}
+          </div>
         </div>
       )}
       {!readOnly && markdownConversionProgress && (

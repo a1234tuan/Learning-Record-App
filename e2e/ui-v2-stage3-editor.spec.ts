@@ -31,6 +31,19 @@ for (const theme of ["reading", "modern"] as const) {
     await title.fill("BFS 中 visited 标记时机、重复入队与 predecessor 稳定性的完整推导");
     const editor = page.locator(".rich-editor[contenteditable='true']");
     await expect(editor).toBeVisible();
+    const mobileMoreTools = page.getByRole("button", { name: "展开更多编辑工具" });
+    const codeLanguage = page.getByRole("combobox", { name: "代码块语言" });
+    if (testInfo.project.name === "android-narrow") {
+      await expect(mobileMoreTools).toBeVisible();
+      await expect(codeLanguage).toBeHidden();
+      await mobileMoreTools.click();
+      await expect(codeLanguage).toBeVisible();
+      await expect(page.getByTitle("图片")).toBeVisible();
+    } else {
+      await expect(mobileMoreTools).toBeHidden();
+      await expect(codeLanguage).toBeVisible();
+    }
+    await assertNoHorizontalOverflow(page);
     await editor.fill("在 BFS 中，一个节点可能同时与多个已经访问到的父节点相邻。\n\n首次发现时必须先标记 visited，再加入队列，并同时记录 predecessor。\n\n这条不变量保证每个节点最多入队一次，也保证首次发现路径不会被后续父节点覆盖。");
     await expect(page.getByText(/本机草稿/)).toBeVisible();
     await page.locator("html").evaluate((element) => element.style.setProperty("--font-scale", "1.25"));

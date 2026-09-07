@@ -134,6 +134,10 @@ describe("RichTextEditor", () => {
     expect(screen.getByRole("button", { name: "高亮块" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "标题级别" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "代码块语言" })).toBeInTheDocument();
+    const moreTools = screen.getByRole("button", { name: "展开更多编辑工具" });
+    expect(moreTools).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(moreTools);
+    expect(screen.getByRole("button", { name: "收起更多编辑工具" })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("creates a decision block with a stable identity and version one", async () => {

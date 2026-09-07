@@ -42,6 +42,11 @@ for (const theme of ["reading", "modern"] as const) {
     await page.goto("/?preview=stage6");
     await page.getByRole("button", { name: /^复习/ }).first().click();
     await expect(page.getByRole("button", { name: "日志复习", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "返回复习", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "返回复习", exact: true }).click();
+    await expect(page.getByRole("button", { name: "卡片库", exact: true })).toHaveClass(/active/);
+    await page.getByRole("button", { name: "日志复习", exact: true }).click();
+    await expect(page.getByRole("button", { name: "返回复习", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "学习助教", exact: true }).click();
     await expect(page.getByRole("heading", { name: "学习助教" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "复习助教" })).toBeVisible();

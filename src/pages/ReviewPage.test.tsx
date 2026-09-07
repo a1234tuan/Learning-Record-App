@@ -681,6 +681,16 @@ describe("ReviewPage", () => {
     })]));
   });
 
+  it("exits an active review session without discarding its queue", () => {
+    const { handlers } = renderReviewPage({ mode: "queue" });
+
+    fireEvent.click(screen.getByRole("button", { name: "返回复习" }));
+
+    expect(handlers.onModeChange).toHaveBeenCalledWith("manage");
+    expect(handlers.onQueueChange).not.toHaveBeenCalledWith([]);
+    expect(handlers.onCurrentRecordChange).not.toHaveBeenCalledWith(undefined);
+  });
+
   it("keeps decision-block feedback when rating fails", async () => {
     const onRate = vi.fn().mockRejectedValue(new Error("数据库写入失败"));
     renderReviewPage({

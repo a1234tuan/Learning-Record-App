@@ -294,6 +294,8 @@ body {
 .review-page .review-coach-task-list article.current { border-left: 0; background: color-mix(in srgb, var(--color-primary-soft) 42%, transparent); }
 
 .review-session { min-height: calc(100dvh - 190px); }
+.review-session-exit { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; margin: 14px 0 4px; border: 0; padding: 0 8px 0 0; background: transparent; color: var(--color-muted); font-weight: 600; }
+.review-session-exit:hover { color: var(--color-text); }
 .review-session-progress { border: 0; border-bottom: 1px solid var(--color-border); border-radius: 0; background: transparent; box-shadow: none; }
 .review-record-card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .review-record-card .record-view-header h1 { font-family: var(--font-reading); font-weight: 580; }
@@ -592,9 +594,10 @@ body {
   z-index: 12;
   min-width: 0;
   display: flex;
-  flex-wrap: nowrap;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 3px;
-  overflow-x: auto;
+  overflow: visible;
   margin: 0;
   border: 0;
   border-top: 1px solid var(--color-border);
@@ -603,8 +606,22 @@ body {
   padding: 5px 0;
   background: color-mix(in srgb, var(--color-surface) 96%, transparent);
   box-shadow: none;
-  scrollbar-width: thin;
 }
+
+.record-editor-page .editor-toolbar-primary,
+.record-editor-page .editor-toolbar-secondary,
+.record-editor-page .editor-toolbar-insert {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+}
+
+.record-editor-page .editor-toolbar-secondary,
+.record-editor-page .editor-toolbar-insert { padding-left: 4px; border-left: 1px solid var(--color-border); }
+.record-editor-page .editor-toolbar-group-label { display: none; }
+.record-editor-page .editor-mobile-more-trigger { display: none; }
 
 .record-editor-page .editor-toolbar button,
 .record-editor-page .editor-file-button {
@@ -668,7 +685,45 @@ body {
   .record-editor-page.wide-content > .editor-shell,
   .record-editor-page.wide-content > .record-view-page { width: 100%; }
   .record-editor-head > .record-title-input { font-size: 1.55rem; }
-  .record-editor-page .editor-toolbar { top: calc(56px + env(safe-area-inset-top)); margin-inline: -16px; padding-inline: 12px; }
+  .record-editor-page .editor-toolbar {
+    top: calc(56px + env(safe-area-inset-top));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin-inline: -16px;
+    padding: 6px 12px;
+  }
+  .record-editor-page .editor-toolbar-primary { width: 100%; flex-wrap: nowrap; justify-content: space-between; }
+  .record-editor-page .editor-toolbar-primary > button { min-width: 40px; height: 40px; }
+  .record-editor-page .editor-toolbar-primary .editor-heading-select { height: 40px; min-width: 62px; }
+  .record-editor-page .editor-mobile-more-trigger { display: inline-grid; place-items: center; }
+  .record-editor-page .editor-toolbar-secondary,
+  .record-editor-page .editor-toolbar-insert { display: none; }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-secondary,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+    padding: 7px 0 1px;
+  }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert { padding-top: 1px; border-top: 0; }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-group-label {
+    display: block;
+    flex: 0 0 100%;
+    color: var(--color-muted);
+    font-size: .75rem;
+    line-height: 1.4;
+    font-weight: 600;
+  }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded button,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-file-button { min-height: 40px; }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-secondary > button,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > button,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > label,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > .audio-recorder-control,
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > .structure-insert-menu { min-width: 40px; min-height: 40px; }
   .record-editor-page .rich-editor { padding-top: 22px; padding-bottom: 96px; font-size: 1rem; }
   .record-view-header h1 { font-size: 1.75rem; }
 }
