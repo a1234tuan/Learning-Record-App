@@ -4,8 +4,8 @@
 
 - Active v2 branch: `feature/review-effect-coach-v2`.
 - Product boundary: `docs/新的方案.md`.
-- Database version: schema 18. Store definitions live in `src/db/reviewCoachSchema.ts`; schema 18 removes the unique `AdaptiveReviewTask.blueprintId` index so an accepted Blueprint can be reused by its delayed-verification task.
-- Stages 0-7 were completed and verified on 2026-09-07. Stages 8-9 remain out of scope.
+- Database version: schema 19. Store definitions live in `src/db/reviewCoachSchema.ts`; schema 19 finalizes confirmed legacy facts and removes the six old Coach projection/execution tables.
+- Stages 0-8 were completed and verified on 2026-09-07. Stage 9 remains out of scope.
 
 ## Review Coach Boundaries
 
@@ -18,6 +18,7 @@
 - Stage 5 adds the manually confirmed deep-analysis workbench, validated `SessionBlueprint` creation, and deterministic current/waiting/deferred task scheduling.
 - Stage 6 adds the dedicated adaptive review page, Blueprint-constrained turn generation, independent question quality review, answer evaluation, hint/skip/invalid/defer/abandon dispositions, and atomic answer/outcome commits.
 - Stage 7 schedules delayed verification through deterministic local policy, requires fresh retrieval questions, records retained/decayed outcomes independently from record FSRS, rebuilds block/effect projections from formal facts, and applies aging plus a two-verification streak cap to task selection.
+- Stage 8 makes schema 11/16 migration transactional and retryable, retains confirmed legacy quiz/KnowledgePoint facts and record-level comments without automatic block binding, syncs every formal entity and tombstone, archives losing decision-block content conflicts, strips prompts/raw provider responses/secrets at export boundaries, and removes old Coach runtime tables.
 - Stage 6 quick-model calls use strict JSON and explicitly disable thinking. Controlled real-provider acceptance may use `https://api.deepseek.com` with `deepseek-v4-flash`; never persist API keys in source, tests, docs, logs, screenshots, backup, or sync data.
 
 ## Cross-Cutting Checks

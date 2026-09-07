@@ -44,6 +44,7 @@ import {
   hashValue,
   findConflictingChanges,
   materializeCloudSyncSnapshot,
+  withDecisionBlockConflictCopies,
   mergeCloudSyncSmallEntity,
   mergeCloudSyncEntities,
   NON_CONFLICTING_ENTITY_TYPES,
@@ -2595,7 +2596,14 @@ export const resolveCloudSyncConflict = async (
       await downloadRemoteAssets(user.uid, cloudEntities, assetBlobs, options);
       await lease.assert();
       progress(options, "applying", "正在恢复云端数据。");
-      await storage.restoreCloudSyncSnapshotIfUnchanged(materializeCloudSyncSnapshot(cloudEntities, cloudEvents, assetBlobs), initialEpoch);
+      const conflictKeys = new Set(findConflictingChanges(changed.entities, remoteChanges.entities).map((item) => item.key));
+      const cloudSnapshot = withDecisionBlockConflictCopies(
+        materializeCloudSyncSnapshot(cloudEntities, cloudEvents, assetBlobs),
+        localExport.entities,
+        conflictKeys,
+        new Date().toISOString(),
+      );
+      await storage.restoreCloudSyncSnapshotIfUnchanged(cloudSnapshot, initialEpoch);
       await persistLedgers(state, dataset.entities, dataset.reviewEvents, remote.state.headRevision, dataset.completeThroughRevision);
       await lease.assert();
       const storageSummary = await cloudStorageSummaryFor(dataset.entities, remote.state.headRevision, localExport.assetBlobs).catch(() => undefined);

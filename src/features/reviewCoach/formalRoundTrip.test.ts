@@ -7,6 +7,7 @@ import { snapshotToZip, zipToSnapshot } from "../../services/backup";
 import type { RecordBlock, StorageSnapshot } from "../../types";
 import {
   DexieReviewCoachRepository,
+  getReviewCoachFormalSnapshot,
   restoreReviewCoachFormalSnapshot,
   reviewCoachRestoreTables,
 } from "./repository";
@@ -33,6 +34,11 @@ describe("review coach formal data round trip", () => {
       updatedAt: coachTestStamp,
     };
     const formal = completeCoachTestSnapshot();
+    Object.assign(formal.feedbackInterpretations[0], {
+      systemPrompt: "private prompt",
+      rawResponse: "private response",
+      apiKey: "private key",
+    });
     const snapshot: StorageSnapshot = {
       payload: {
         manifest: {
@@ -76,6 +82,10 @@ describe("review coach formal data round trip", () => {
       await database.transaction("rw", reviewCoachRestoreTables(database), async () => {
         await restoreReviewCoachFormalSnapshot(database, restored.payload.reviewCoach!);
       });
+      const ordinaryExport = await getReviewCoachFormalSnapshot(database);
+      expect(JSON.stringify(ordinaryExport)).not.toContain("private prompt");
+      expect(JSON.stringify(ordinaryExport)).not.toContain("private response");
+      expect(JSON.stringify(ordinaryExport)).not.toContain("private key");
       const repository = new DexieReviewCoachRepository(database);
       const first = await repository.rebuildProjections();
       await database.decisionBlockStates.clear();

@@ -420,7 +420,10 @@ export interface CoachMigrationBackup {
   id: "schema-17";
   sourceVersion: 11 | 16;
   createdAt: CoachIsoDateTime;
+  completedAt?: CoachIsoDateTime;
+  status?: "checkpointed" | "completed";
   coreCounts: Record<string, number>;
+  formalCounts?: Record<string, number>;
   legacyLearningEvidence: LegacyLearningEvidence[];
   legacyKnowledgePoints: LegacyKnowledgePoint[];
   legacyRecordKnowledgePointLinks: LegacyRecordKnowledgePointLink[];

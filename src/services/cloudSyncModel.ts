@@ -7,6 +7,7 @@ import type {
   ContentTemplate,
   DayEntry,
   RecordDraft,
+  RecordBlock,
   RecordReviewDayStat,
   RecordReviewLog,
   RecordReviewState,
@@ -37,6 +38,7 @@ import {
 import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import { nowISO } from "../lib/date";
 import { sha256 as javascriptSha256 } from "@noble/hashes/sha256";
+import { extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
 
 export type CloudHashAlgorithm = "sha256" | "fnv1a";
 
@@ -315,8 +317,20 @@ const mapEntities = async <T extends { id: string; deletedAt?: string }>(
   values: T[],
 ): Promise<CloudSyncEntity[]> => Promise.all(values.map((value) => entity(entityType, value)));
 
+const PRIVATE_COACH_SYNC_KEYS = new Set([
+  "apikey", "authorization", "prompt", "providerresponse", "rawresponse", "responsebody", "secret", "systemprompt",
+]);
+
+const stripPrivateCoachSyncFields = <T>(value: T): T => {
+  if (Array.isArray(value)) return value.map(stripPrivateCoachSyncFields) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !PRIVATE_COACH_SYNC_KEYS.has(key.toLowerCase()))
+    .map(([key, item]) => [key, stripPrivateCoachSyncFields(item)])) as T;
+};
+
 export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudSyncExport> => {
-  const coach = snapshot.payload.reviewCoach ?? EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT;
+  const coach = stripPrivateCoachSyncFields(snapshot.payload.reviewCoach ?? EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
   const ordinary = await Promise.all([
     mapEntities("entry", snapshot.payload.entries),
     mapEntities("block", snapshot.payload.blocks),
@@ -464,6 +478,49 @@ export const materializeCloudSyncSnapshot = (
     },
     assets: assetValues,
     recordDrafts,
+  };
+};
+
+export const withDecisionBlockConflictCopies = (
+  snapshot: StorageSnapshot,
+  localEntities: CloudSyncEntity[],
+  conflictingKeys: ReadonlySet<string>,
+  archivedAt: string,
+): StorageSnapshot => {
+  const reviewCoach = snapshot.payload.reviewCoach;
+  if (!reviewCoach) return snapshot;
+  const activeById = new Map(reviewCoach.decisionBlocks.map((item) => [item.id, item]));
+  const knownKeys = new Set(reviewCoach.decisionBlockArchives.map((item) => item.idempotencyKey));
+  const archives = [...reviewCoach.decisionBlockArchives];
+
+  for (const entity of localEntities) {
+    if (entity.entityType !== "block" || entity.deleted || !conflictingKeys.has(entity.key)) continue;
+    const record = entity.payload as unknown as Partial<RecordBlock>;
+    if (record.type !== "record" || typeof record.id !== "string" || typeof record.contentHtml !== "string") continue;
+    for (const node of extractDecisionBlocks(record.contentHtml, archivedAt)) {
+      const active = activeById.get(node.decisionBlockId);
+      if (!active || active.recordId !== record.id || node.contentVersion > active.contentVersion) continue;
+      const idempotencyKey = `content-conflict:${entity.contentHash}:${node.decisionBlockId}:${node.contentVersion}`;
+      if (knownKeys.has(idempotencyKey)) continue;
+      knownKeys.add(idempotencyKey);
+      archives.push({
+        id: idempotencyKey,
+        decisionBlockId: node.decisionBlockId,
+        recordId: record.id,
+        contentVersion: node.contentVersion,
+        contentHtml: node.contentHtml,
+        archivedAt,
+        reason: "content-conflict",
+        idempotencyKey,
+        createdAt: archivedAt,
+        updatedAt: archivedAt,
+      });
+    }
+  }
+  if (archives.length === reviewCoach.decisionBlockArchives.length) return snapshot;
+  return {
+    ...snapshot,
+    payload: { ...snapshot.payload, reviewCoach: { ...reviewCoach, decisionBlockArchives: archives } },
   };
 };
 

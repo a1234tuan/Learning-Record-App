@@ -69,6 +69,16 @@ export const REVIEW_COACH_SCHEMA_18_STORES = {
   adaptiveReviewTasks: "id, blueprintId, decisionBlockId, contentVersion, status, &activeSlotKey, &openTargetKey, &idempotencyKey, updatedAt, deletedAt",
 } as const;
 
+export const REVIEW_COACH_SCHEMA_19_STORES = {
+  ...REVIEW_COACH_SCHEMA_18_STORES,
+  learningCoachSettings: null,
+  learningCoachSnapshots: null,
+  learningCoachTasks: null,
+  learningCoachAiRuns: null,
+  knowledgePointExtractionRuns: null,
+  knowledgePointCoachSnapshots: null,
+} as const;
+
 const tableRows = async <T>(transaction: Transaction, name: string): Promise<T[]> => {
   if (!transaction.db.tables.some((table) => table.name === name)) return [];
   return transaction.table<T, string>(name).toArray();
@@ -102,6 +112,7 @@ export const buildSchema17MigrationBackup = async (transaction: Transaction): Pr
     id: "schema-17",
     sourceVersion: hasLegacyCoachFacts ? 16 : 11,
     createdAt: new Date().toISOString(),
+    status: "checkpointed",
     coreCounts: {
       blocks: blocks.length,
       recordReviews: recordReviews.length,
@@ -120,4 +131,45 @@ export const migrateToReviewCoachSchema17 = async (transaction: Transaction) => 
   await transaction.table<CoachMigrationBackup, string>("coachMigrationBackups").put(backup);
   // Old Coach projections remain read-only. No record-level comment, candidate,
   // or unconfirmed extraction proposal is promoted into a block-level fact.
+};
+
+export const finalizeReviewCoachMigration = async (transaction: Transaction) => {
+  const checkpoint = await transaction.table<CoachMigrationBackup, string>("coachMigrationBackups").get("schema-17")
+    ?? await buildSchema17MigrationBackup(transaction);
+  const [evidence, knowledgePoints, links, relations, blocks] = await Promise.all([
+    tableRows<LegacyLearningEvidence>(transaction, "learningEvidence"),
+    tableRows<LegacyKnowledgePoint>(transaction, "knowledgePoints"),
+    tableRows<LegacyRecordKnowledgePointLink>(transaction, "recordKnowledgePointLinks"),
+    tableRows<LegacyKnowledgeRelation>(transaction, "knowledgeRelations"),
+    tableRows<{ id: string; type?: string }>(transaction, "blocks"),
+  ]);
+  const confirmedEvidence = evidence.filter((item) => item.origin === "user-confirmed-ai" || item.kind.endsWith("-confirmed"));
+  const confirmedKnowledgePoints = knowledgePoints.filter((item) => item.status === "active");
+  const knowledgePointIds = new Set(confirmedKnowledgePoints.map((item) => item.id));
+  const recordIds = new Set(blocks.filter((item) => item.type === "record").map((item) => item.id));
+  const confirmedLinks = links.filter((item) => item.status === "active" && recordIds.has(item.recordId) && knowledgePointIds.has(item.knowledgePointId));
+  const confirmedRelations = relations.filter((item) => (
+    item.status === "confirmed"
+    && knowledgePointIds.has(item.fromKnowledgePointId)
+    && knowledgePointIds.has(item.toKnowledgePointId)
+  ));
+
+  await Promise.all([
+    transaction.table("learningEvidence").clear().then(() => transaction.table("learningEvidence").bulkPut(confirmedEvidence)),
+    transaction.table("knowledgePoints").clear().then(() => transaction.table("knowledgePoints").bulkPut(confirmedKnowledgePoints)),
+    transaction.table("recordKnowledgePointLinks").clear().then(() => transaction.table("recordKnowledgePointLinks").bulkPut(confirmedLinks)),
+    transaction.table("knowledgeRelations").clear().then(() => transaction.table("knowledgeRelations").bulkPut(confirmedRelations)),
+  ]);
+  const completedAt = new Date().toISOString();
+  await transaction.table<CoachMigrationBackup, string>("coachMigrationBackups").put({
+    ...checkpoint,
+    status: "completed",
+    completedAt,
+    formalCounts: {
+      legacyLearningEvidence: confirmedEvidence.length,
+      legacyKnowledgePoints: confirmedKnowledgePoints.length,
+      legacyRecordKnowledgePointLinks: confirmedLinks.length,
+      legacyKnowledgeRelations: confirmedRelations.length,
+    },
+  });
 };

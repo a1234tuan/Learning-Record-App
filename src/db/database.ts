@@ -51,6 +51,8 @@ import {
   LEGACY_SCHEMA_16_STORES,
   REVIEW_COACH_SCHEMA_17_STORES,
   REVIEW_COACH_SCHEMA_18_STORES,
+  REVIEW_COACH_SCHEMA_19_STORES,
+  finalizeReviewCoachMigration,
   migrateToReviewCoachSchema17,
 } from "./reviewCoachSchema";
 
@@ -85,15 +87,9 @@ export class StudyJournalDatabase extends Dexie {
   cloudSyncOperations!: Table<CloudSyncOperationRecord, string>;
   cloudSyncMutation!: Table<CloudSyncMutationRecord, string>;
   autoBackupState!: Table<AutoBackupStateRecord, string>;
-  learningCoachSettings!: Table<Record<string, unknown>, string>;
   learningEvidence!: Table<LegacyLearningEvidence, string>;
-  learningCoachSnapshots!: Table<Record<string, unknown>, string>;
-  learningCoachTasks!: Table<Record<string, unknown>, string>;
-  learningCoachAiRuns!: Table<Record<string, unknown>, string>;
   knowledgePoints!: Table<LegacyKnowledgePoint, string>;
   recordKnowledgePointLinks!: Table<LegacyRecordKnowledgePointLink, string>;
-  knowledgePointExtractionRuns!: Table<Record<string, unknown>, string>;
-  knowledgePointCoachSnapshots!: Table<Record<string, unknown>, string>;
   knowledgeRelations!: Table<LegacyKnowledgeRelation, string>;
   decisionBlocks!: Table<DecisionBlock, string>;
   decisionBlockArchives!: Table<DecisionBlockArchive, string>;
@@ -321,6 +317,9 @@ export class StudyJournalDatabase extends Dexie {
       .stores(REVIEW_COACH_SCHEMA_17_STORES)
       .upgrade(migrateToReviewCoachSchema17);
     this.version(18).stores(REVIEW_COACH_SCHEMA_18_STORES);
+    this.version(19)
+      .stores(REVIEW_COACH_SCHEMA_19_STORES)
+      .upgrade(finalizeReviewCoachMigration);
   }
 }
 

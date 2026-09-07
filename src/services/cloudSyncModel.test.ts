@@ -26,6 +26,7 @@ import {
   stripUpdatedAt,
   syncHashPayload,
   withCloudPayloadDocument,
+  withDecisionBlockConflictCopies,
 } from "./cloudSyncModel";
 
 const stamp = "2026-08-05T00:00:00.000Z";
@@ -127,6 +128,7 @@ describe("cloud sync model", () => {
       createdAt: stamp,
       updatedAt: stamp,
     }];
+    Object.assign(coach.aiRoleConfigs[0], { apiKey: "must-not-sync", systemPrompt: "private prompt", rawResponse: "private response" });
     const withCoach: StorageSnapshot = {
       ...snapshot,
       payload: { ...snapshot.payload, reviewCoach: coach },
@@ -139,7 +141,12 @@ describe("cloud sync model", () => {
     expect(exported.entities.some((entity) => entity.entityType === "task-outcome-event")).toBe(true);
     expect(exported.entities.map((entity) => String(entity.entityType))).not.toContain("decision-block-state");
     expect(JSON.stringify(exported.entities)).not.toContain("apiKey");
-    expect(restored.payload.reviewCoach).toEqual(coach);
+    expect(JSON.stringify(exported.entities)).not.toContain("private prompt");
+    expect(JSON.stringify(exported.entities)).not.toContain("private response");
+    expect(restored.payload.reviewCoach).toEqual({
+      ...coach,
+      aiRoleConfigs: [expect.not.objectContaining({ apiKey: expect.anything(), systemPrompt: expect.anything(), rawResponse: expect.anything() })],
+    });
   });
 
   it("retains a full review-coach soft-delete tombstone needed by its archive", async () => {
@@ -173,6 +180,39 @@ describe("cloud sync model", () => {
 
     expect(restored.payload.reviewCoach?.decisionBlocks[0]).toMatchObject({ id: "decision-block-deleted", deletedAt });
     expect(restored.payload.reviewCoach?.decisionBlockArchives[0].contentHtml).toBe("<p>recoverable</p>");
+  });
+
+  it("keeps the losing local decision-block body as a formal conflict archive", async () => {
+    const localHtml = `<record-decision-block data-decision-block-id="decision-block-1" data-content-version="2" data-created-at="${stamp}" data-updated-at="${stamp}"><p>本机版本</p></record-decision-block>`;
+    const remoteHtml = localHtml.replace("本机版本", "云端版本");
+    const coach = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    coach.decisionBlocks = [{
+      id: "decision-block-1",
+      recordId: record.id,
+      contentVersion: 2,
+      position: 0,
+      contentUpdatedAt: stamp,
+      createdAt: stamp,
+      updatedAt: stamp,
+    }];
+    const local = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [{ ...record, contentHtml: localHtml }], reviewCoach: coach },
+    });
+    const remote = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, blocks: [{ ...record, contentHtml: remoteHtml }], reviewCoach: coach },
+    });
+    const restored = materializeCloudSyncSnapshot(remote.entities, remote.reviewEvents, remote.assetBlobs);
+    const withCopy = withDecisionBlockConflictCopies(restored, local.entities, new Set([`block:${record.id}`]), "2026-09-07T10:00:00.000Z");
+
+    expect(withCopy.payload.blocks[0]).toMatchObject({ contentHtml: remoteHtml });
+    expect(withCopy.payload.reviewCoach?.decisionBlockArchives).toEqual([expect.objectContaining({
+      decisionBlockId: "decision-block-1",
+      contentVersion: 2,
+      contentHtml: localHtml,
+      reason: "content-conflict",
+    })]);
   });
 
   it("keeps asset bytes out of entity payloads and restores them by content hash", async () => {
@@ -447,6 +487,45 @@ describe("cloud sync model", () => {
       payload: { id: "record-a", title: "云端记录" },
     };
     expect(preserveLocalChangesForCloudWins([localDelete], [remoteEntity], new Set())).toEqual([]);
+  });
+
+  it("converges independent offline formal facts and remains idempotent on duplicate replay", async () => {
+    const coachA = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    coachA.legacyKnowledgePoints = [{
+      id: "kp-a", subject: "OS", name: "进程", normalizedKey: "进程", status: "active", createdAt: stamp, updatedAt: stamp,
+    }];
+    const coachB = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    coachB.legacyKnowledgePoints = [{
+      id: "kp-b", subject: "OS", name: "线程", normalizedKey: "线程", status: "active", createdAt: stamp, updatedAt: stamp,
+    }];
+    const deviceA = await exportCloudSync({ ...snapshot, payload: { ...snapshot.payload, reviewCoach: coachA } });
+    const deviceB = await exportCloudSync({ ...snapshot, payload: { ...snapshot.payload, reviewCoach: coachB } });
+    const remote = deviceB.entities.filter((entity) => entity.entityType === "legacy-knowledge-point");
+    const once = mergeCloudSyncEntities(deviceA.entities, remote);
+    const twice = mergeCloudSyncEntities(once, remote);
+    const restored = materializeCloudSyncSnapshot(twice, deviceA.reviewEvents, deviceA.assetBlobs);
+
+    expect(restored.payload.reviewCoach?.legacyKnowledgePoints.map((item) => item.id).sort()).toEqual(["kp-a", "kp-b"]);
+    expect(twice.filter((entity) => entity.entityType === "legacy-knowledge-point")).toHaveLength(2);
+  });
+
+  it("reports an edit versus delete conflict on the same formal fact", async () => {
+    const coach = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+    coach.legacyKnowledgePoints = [{
+      id: "kp-conflict", subject: "OS", name: "进程", normalizedKey: "进程", status: "active", createdAt: stamp, updatedAt: stamp,
+    }];
+    const edited = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, reviewCoach: { ...coach, legacyKnowledgePoints: [{ ...coach.legacyKnowledgePoints[0], name: "进程模型" }] } },
+    });
+    const deleted = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, reviewCoach: { ...coach, legacyKnowledgePoints: [{ ...coach.legacyKnowledgePoints[0], deletedAt: stamp }] } },
+    });
+    const local = edited.entities.filter((entity) => entity.entityType === "legacy-knowledge-point");
+    const remote = deleted.entities.filter((entity) => entity.entityType === "legacy-knowledge-point");
+
+    expect(findConflictingChanges(local, remote)).toEqual([{ key: "legacy-knowledge-point:kp-conflict", entityType: "legacy-knowledge-point" }]);
   });
 
   it("does not preserve a local change for a key changed by the cloud", () => {

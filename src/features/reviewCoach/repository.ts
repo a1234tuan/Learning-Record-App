@@ -195,14 +195,27 @@ const formalTables = (database: StudyJournalDatabase) => [
   ...reviewCoachFormalTables(database),
 ];
 
+const PRIVATE_COACH_EXPORT_KEYS = new Set([
+  "apikey",
+  "authorization",
+  "prompt",
+  "providerresponse",
+  "rawresponse",
+  "responsebody",
+  "secret",
+  "systemprompt",
+]);
+
+const stripPrivateCoachExportFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stripPrivateCoachExportFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !PRIVATE_COACH_EXPORT_KEYS.has(key.toLowerCase()))
+    .map(([key, item]) => [key, stripPrivateCoachExportFields(item)]));
+};
+
 export const reviewCoachRestoreTables = (database: StudyJournalDatabase) => [
   ...reviewCoachFormalTables(database),
-  database.learningCoachSettings,
-  database.learningCoachSnapshots,
-  database.learningCoachTasks,
-  database.learningCoachAiRuns,
-  database.knowledgePointExtractionRuns,
-  database.knowledgePointCoachSnapshots,
 ];
 
 /** Remove coach facts owned by a permanently deleted record.
@@ -318,7 +331,7 @@ export const getReviewCoachFormalSnapshot = async (database: StudyJournalDatabas
     database.recordKnowledgePointLinks.toArray(),
     database.knowledgeRelations.toArray(),
   ]);
-  return {
+  return stripPrivateCoachExportFields({
     decisionBlocks,
     decisionBlockArchives,
     decisionBlockFeedback,
@@ -335,7 +348,7 @@ export const getReviewCoachFormalSnapshot = async (database: StudyJournalDatabas
     legacyKnowledgePoints: knowledgePoints,
     legacyRecordKnowledgePointLinks: recordKnowledgePointLinks.filter((item) => item.status === "active"),
     legacyKnowledgeRelations: knowledgeRelations.filter((item) => item.status === "confirmed"),
-  };
+  }) as ReviewCoachFormalSnapshot;
 };
 
 export const restoreReviewCoachFormalSnapshot = async (
@@ -361,12 +374,6 @@ export const restoreReviewCoachFormalSnapshot = async (
     database.knowledgePoints.clear(),
     database.recordKnowledgePointLinks.clear(),
     database.knowledgeRelations.clear(),
-    database.learningCoachSettings.clear(),
-    database.learningCoachSnapshots.clear(),
-    database.learningCoachTasks.clear(),
-    database.learningCoachAiRuns.clear(),
-    database.knowledgePointExtractionRuns.clear(),
-    database.knowledgePointCoachSnapshots.clear(),
   ]);
   await Promise.all([
     database.decisionBlocks.bulkPut(snapshot.decisionBlocks),
