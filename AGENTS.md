@@ -6,6 +6,8 @@
 - Product boundary: `docs/新的方案.md`.
 - Database version: schema 19. Store definitions live in `src/db/reviewCoachSchema.ts`; schema 19 finalizes confirmed legacy facts and removes the six old Coach projection/execution tables.
 - AI cockpit implementation is complete: Stages 0-8 were completed and verified on 2026-09-07, and Stage 9 automated release acceptance is complete. Physical-device upgrade and controlled real-account Firebase quota sign-off remain release gates; do not describe the release itself as signed off until they pass.
+- Product UI migration is complete through final automated acceptance. `src/styles/visual-v2.css` is the active visual layer; `reading` is the default visual theme and `modern` is the alternative. The visual theme is device-local and independent from the existing light/dark/system setting; do not add it to the database or cloud-sync contract.
+- The UI migration preserves formal create/save/rating semantics and routes Review Coach through `Review -> Learning Coach`. All caught errors rendered by React pages/components must pass through `src/lib/uiError.ts`; `src/lib/uiErrorSurface.test.ts` prevents raw `error.message` regressions.
 
 ## Review Coach Boundaries
 
@@ -48,6 +50,8 @@ git diff --check
 ```
 
 Use deterministic mocks in automated tests. Real AI providers are limited to explicit, controlled acceptance runs and must never replace deterministic CI coverage.
+
+The final UI acceptance baseline is `119` Vitest files / `781` tests, `28` Playwright tests across Desktop and Android-narrow projects, and `3` isolated Firebase Emulator tests. Physical Android keyboard/IME, system back, image gestures, real DeepSeek, and controlled real-account Firebase quota checks remain manual release gates.
 
 For local Stage 3 UI acceptance, run `npm run build`, start `npm run preview -- --host 127.0.0.1 --port 4177`, and open `http://127.0.0.1:4177/?preview=stage3`. This localhost-only query seeds an isolated `BFS Stage3 Preview` record with an overdue review, block feedback, and an analysis-queue item; it is gated out of normal URLs and native shells.
 
