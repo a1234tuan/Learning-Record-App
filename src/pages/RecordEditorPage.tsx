@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, Pi, RotateCcw, Save, Search, Star, Trash2, Volume2, X } from "lucide-react";
+import { ArrowLeft, CalendarCheck, Download, Edit3, FilePlus, ImagePlus, MoreHorizontal, PanelRight, Pi, RotateCcw, Save, Search, Star, Trash2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import type { Editor } from "@tiptap/react";
@@ -191,6 +191,8 @@ export const RecordEditorPage = ({
   const leavingRef = useRef(false);
   const stoppingRecordingRef = useRef<Promise<void> | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [draftSaveStatus, setDraftSaveStatus] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
+  const [wideContent, setWideContent] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const pendingDecisionBlockRemovalsRef = useRef<Map<string, PendingDecisionBlockRemoval>>(new Map());
@@ -279,14 +281,21 @@ export const RecordEditorPage = ({
         if (draftLoadingRef.current || (!options.force && committingRef.current) || (!hasDraftChanges(nextDraft, record) && !hasDecisionBlockIntent)) {
           return;
         }
-        await onSaveDraft({
-          id: record.id,
-          recordId: record.id,
-          baseUpdatedAt: record.updatedAt,
-          draft: cloneRecord(nextDraft),
-          ...decisionBlockOptions,
-          updatedAt: nowISO(),
-        });
+        setDraftSaveStatus("saving");
+        try {
+          await onSaveDraft({
+            id: record.id,
+            recordId: record.id,
+            baseUpdatedAt: record.updatedAt,
+            draft: cloneRecord(nextDraft),
+            ...decisionBlockOptions,
+            updatedAt: nowISO(),
+          });
+          setDraftSaveStatus("saved");
+        } catch (error) {
+          setDraftSaveStatus("error");
+          throw error;
+        }
       });
 
       draftSaveQueueRef.current = task.catch(() => undefined);
@@ -304,6 +313,7 @@ export const RecordEditorPage = ({
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
+      setDraftSaveStatus("pending");
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null;
         void flushDraft(nextDraft).catch(() => undefined);
@@ -783,7 +793,7 @@ export const RecordEditorPage = ({
   const closeMoreActions = () => setMoreActionsOpen(false);
 
   return (
-    <main className={interactionLocked ? "page record-editor-page restore-locked" : "page record-editor-page"} aria-busy={interactionLocked}>
+    <main className={`${interactionLocked ? "page record-editor-page restore-locked" : "page record-editor-page"}${wideContent ? " wide-content" : ""}`} aria-busy={interactionLocked}>
       {draftLoading && <p className="status-message draft-status">正在读取草稿，编辑已暂时锁定。</p>}
       {!draftLoading && restoreLocked && <p className="status-message draft-status">正在恢复备份，编辑已暂时锁定。</p>}
       <section className="record-editor-topbar">
@@ -791,6 +801,9 @@ export const RecordEditorPage = ({
           <ArrowLeft size={18} />
           返回
         </button>
+        <span className={`record-save-indicator ${draftSaveStatus === "error" || saveError ? "error" : ""}`} role="status">
+          {saving ? "正在保存正式内容..." : !editing ? "正式内容已保存" : draftSaveStatus === "saving" || draftSaveStatus === "pending" ? "正在保存本机草稿..." : draftSaveStatus === "error" ? "本机草稿保存失败" : "草稿已存于本机"}
+        </span>
         {editing ? (
           <div className="record-action-row">
             {draftRestored && (
@@ -849,6 +862,10 @@ export const RecordEditorPage = ({
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
+                  <button type="button" onClick={() => { setWideContent((value) => !value); closeMoreActions(); }}>
+                    <PanelRight size={16} />
+                    {wideContent ? "标准正文宽度" : "宽内容模式"}
+                  </button>
                   {!isDesktopPlatform() && (
                     <button type="button" onClick={() => { setSearchOpen(true); closeMoreActions(); }}>
                       <Search size={16} />
@@ -943,6 +960,10 @@ export const RecordEditorPage = ({
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
+                  <button type="button" onClick={() => { setWideContent((value) => !value); closeMoreActions(); }}>
+                    <PanelRight size={16} />
+                    {wideContent ? "标准正文宽度" : "宽内容模式"}
+                  </button>
                   {!isDesktopPlatform() && (
                     <button type="button" onClick={() => { setSearchOpen(true); closeMoreActions(); }}>
                       <Search size={16} />
@@ -990,7 +1011,7 @@ export const RecordEditorPage = ({
           {saveError && <p className="status-message draft-status">{saveError}</p>}
           {exportMessage && <p className="status-message draft-status">{exportMessage}</p>}
           <section className="record-editor-head">
-            <input value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" disabled={interactionLocked} />
+            <textarea className="record-title-input" rows={1} value={draft.title} onChange={(event) => update({ title: event.target.value })} aria-label="记录标题" disabled={interactionLocked} />
             <div className="record-tag-editor">
               <div className="record-tag-input-wrap">
                 {draftTags.map((tag, index) => (

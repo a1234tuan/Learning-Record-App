@@ -345,3 +345,177 @@ body {
 @media (max-width: 620px) {
   .visual-theme-options { grid-template-columns: 1fr; }
 }
+
+/* Stage 3: continuous reading and writing surface. */
+.record-editor-page {
+  width: 100%;
+  max-width: none;
+  padding: 0 20px 100px;
+}
+
+.record-editor-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  margin: 0 -20px 24px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  padding: 8px 20px;
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  box-shadow: none;
+  backdrop-filter: blur(10px);
+}
+
+.record-editor-topbar > .secondary-button:first-child { justify-self: start; border-color: transparent; background: transparent; }
+.record-action-row { justify-self: end; }
+.record-save-indicator { justify-self: center; min-width: 0; color: var(--color-muted); font-size: .75rem; text-align: center; }
+.record-save-indicator.error { color: var(--color-danger); }
+
+.record-editor-page > .draft-status,
+.record-editor-page > .record-editor-head,
+.record-editor-page > .editor-shell,
+.record-editor-page > .record-view-page {
+  width: min(760px, calc(100% - 16px));
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.record-editor-page.wide-content > .record-editor-head,
+.record-editor-page.wide-content > .editor-shell,
+.record-editor-page.wide-content > .record-view-page {
+  width: min(1100px, calc(100% - 16px));
+}
+
+.record-editor-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 11px;
+  margin-bottom: 0 !important;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 0 16px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.record-editor-head > .record-title-input {
+  field-sizing: content;
+  width: 100%;
+  min-height: 48px;
+  max-height: none;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+:root:not([data-visual-theme="modern"]) .record-editor-head > .record-title-input { font-family: var(--font-reading); font-weight: 560; }
+.record-editor-head > .record-title-input:focus { outline: 0; box-shadow: inset 0 -2px var(--color-primary); }
+.record-editor-head .subject-picker { max-height: 82px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; scrollbar-width: thin; }
+
+.record-editor-page > .editor-shell,
+.record-view-page > .editor-shell {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.record-editor-page .editor-toolbar {
+  position: sticky;
+  top: 58px;
+  z-index: 12;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 3px;
+  overflow-x: auto;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+  padding: 5px 0;
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  box-shadow: none;
+  scrollbar-width: thin;
+}
+
+.record-editor-page .editor-toolbar button,
+.record-editor-page .editor-file-button {
+  flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.record-editor-page .editor-toolbar button:hover,
+.record-editor-page .editor-file-button:hover { background: var(--color-surface-muted); }
+
+.record-editor-page .rich-editor {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 24px 0 80px;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-reading);
+  font-size: 1rem;
+  line-height: var(--reading-line-height, 1.8);
+  box-shadow: none;
+}
+
+.record-editor-page .rich-editor h1,
+.record-editor-page .rich-editor h2,
+.record-editor-page .rich-editor h3 { font-family: var(--font-ui); letter-spacing: 0; font-weight: 620; }
+.record-editor-page .rich-editor p { margin-bottom: .95em; }
+.record-editor-page .rich-editor pre,
+.record-editor-page .rich-editor code { font-family: var(--font-code); font-variant-ligatures: none; }
+.record-editor-page .rich-editor pre { max-width: 100%; overflow-x: auto; }
+.record-editor-page .rich-editor table,
+.record-editor-page .record-structure-block,
+.record-editor-page .record-mermaid-diagram { max-width: 100%; }
+
+.record-view-page { display: grid; gap: 0; }
+.record-view-header { gap: 8px; border-bottom: 1px solid var(--color-border); padding: 10px 0 20px; }
+.record-view-header h1 { max-width: 30ch; font-size: clamp(1.65rem, 3.2vw, 2.35rem); line-height: 1.35; letter-spacing: 0; font-weight: 600; }
+.record-view-header > span { border-radius: 999px; padding: 4px 9px; background: var(--color-surface-muted); }
+.record-review-panel { border-right: 0; border-left: 0; border-radius: 0; box-shadow: none; }
+
+.image-preview,
+.image-preview-button img { max-width: 100%; height: auto; }
+.image-lightbox { max-width: 100vw; max-height: 100dvh; }
+.app-shell.immersive-task-active .review-toast { display: none; }
+
+@media (max-width: 920px) {
+  .record-editor-page { padding: 0 16px calc(90px + env(safe-area-inset-bottom)); }
+  .record-editor-topbar { grid-template-columns: auto minmax(0, 1fr) auto; margin-inline: -16px; padding: calc(7px + env(safe-area-inset-top)) 10px 7px; }
+  .record-editor-topbar > .secondary-button:first-child { width: 42px; min-width: 42px; padding: 0; font-size: 0; }
+  .record-editor-topbar > .secondary-button:first-child svg { width: 20px; }
+  .record-save-indicator { max-width: 150px; line-height: 1.3; }
+  .record-action-row .primary-button { min-width: 52px; padding-inline: 11px; }
+  .record-action-row .primary-button svg { display: none; }
+  .record-editor-page > .draft-status,
+  .record-editor-page > .record-editor-head,
+  .record-editor-page > .editor-shell,
+  .record-editor-page > .record-view-page,
+  .record-editor-page.wide-content > .record-editor-head,
+  .record-editor-page.wide-content > .editor-shell,
+  .record-editor-page.wide-content > .record-view-page { width: 100%; }
+  .record-editor-head > .record-title-input { font-size: 1.55rem; }
+  .record-editor-page .editor-toolbar { top: calc(56px + env(safe-area-inset-top)); margin-inline: -16px; padding-inline: 12px; }
+  .record-editor-page .rich-editor { padding-top: 22px; padding-bottom: 96px; font-size: 1rem; }
+  .record-view-header h1 { font-size: 1.75rem; }
+}
