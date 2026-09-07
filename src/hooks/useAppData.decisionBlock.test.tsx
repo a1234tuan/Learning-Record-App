@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     legacyRecordKnowledgePointLinks: [],
     legacyKnowledgeRelations: [],
   }),
+  listFeedbackInterpretations: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../services/storageAdapter", () => ({
@@ -59,6 +60,7 @@ vi.mock("../services/cloudSyncService", () => ({ cleanupCloudRecoverySnapshotsIf
 vi.mock("../features/reviewCoach/repository", () => ({
   reviewCoachRepository: {
     getFormalSnapshot: mocks.getReviewCoachFormalSnapshot,
+    listFeedbackInterpretations: mocks.listFeedbackInterpretations,
   },
 }));
 

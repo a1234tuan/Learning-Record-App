@@ -33,10 +33,10 @@ const transition = <T extends string>(
 
 const interpretationTransitions: Readonly<Record<FeedbackInterpretationStatus, readonly FeedbackInterpretationStatus[]>> = {
   pending: ["running", "superseded"],
-  running: ["succeeded", "insufficient-context", "failed", "superseded"],
+  running: ["pending", "succeeded", "insufficient-context", "failed", "superseded"],
   succeeded: ["superseded"],
-  "insufficient-context": ["pending", "superseded"],
-  failed: ["pending", "superseded"],
+  "insufficient-context": ["pending", "succeeded", "superseded"],
+  failed: ["pending", "succeeded", "superseded"],
   superseded: [],
 };
 
@@ -52,7 +52,7 @@ const queueTransitions: Readonly<Record<AnalysisQueueStatus, readonly AnalysisQu
 const batchTransitions: Readonly<Record<AnalysisBatchStatus, readonly AnalysisBatchStatus[]>> = {
   draft: ["confirmed", "cancelled", "stale"],
   confirmed: ["running", "cancelled", "stale"],
-  running: ["succeeded", "partial", "failed", "cancelled", "stale"],
+  running: ["confirmed", "succeeded", "partial", "failed", "cancelled", "stale"],
   succeeded: ["stale"],
   partial: ["stale"],
   failed: [],

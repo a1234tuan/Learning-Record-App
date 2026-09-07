@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   REVIEW_COACH_AI_CONTRACTS,
   parseFeedbackInterpretationAiResponse,
+  parseSessionBlueprintAiResponse,
 } from "./aiSchemas";
 
 describe("review coach AI contracts", () => {
@@ -34,5 +35,20 @@ describe("review coach AI contracts", () => {
       missingInformation: [],
       confidence: 2,
     })).toThrow();
+    expect(() => parseFeedbackInterpretationAiResponse({
+      status: "ok",
+      actionability: "needs_training",
+      difficultyType: "concept",
+      missingInformation: [],
+      confidence: 0.7,
+    })).toThrow();
+  });
+
+  it("rejects extra fields in a session blueprint", () => {
+    expect(() => parseSessionBlueprintAiResponse({
+      status: "insufficient-context",
+      missingInformation: ["source"],
+      unexpected: true,
+    })).toThrow("unexpected field");
   });
 });

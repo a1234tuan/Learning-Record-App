@@ -43,7 +43,7 @@ import {
 } from "../lib/reviewScheduler";
 import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode, ReviewSessionProgress } from "../lib/tabNavigation";
 import { decisionBlockPreview, extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
-import type { AnalysisQueueItem, DecisionBlockFeedback } from "../features/reviewCoach/domain";
+import type { AnalysisQueueItem, DecisionBlockFeedback, FeedbackInterpretation } from "../features/reviewCoach/domain";
 
 interface ReviewPageProps {
   records: RecordBlock[];
@@ -51,6 +51,7 @@ interface ReviewPageProps {
   reviewStates: RecordReviewState[];
   reviewLogsByRecord?: Record<string, RecordReviewLog[]>;
   decisionBlockFeedback?: readonly DecisionBlockFeedback[];
+  feedbackInterpretations?: readonly FeedbackInterpretation[];
   analysisQueueItems?: readonly AnalysisQueueItem[];
   stats: RecordReviewStats | null;
   mode: ReviewMode;
@@ -71,6 +72,8 @@ interface ReviewPageProps {
   ) => Promise<RecordReviewUndoToken | undefined>;
   onUndo: (token: RecordReviewUndoToken) => Promise<void>;
   onDeleteDecisionBlockFeedback?: (feedbackId: string) => Promise<unknown>;
+  onConfirmFeedbackInterpretation?: (feedbackId: string, patch?: Partial<Pick<FeedbackInterpretation, "actionability" | "difficultyType" | "stuckAt" | "userHypothesis" | "preferredPractice" | "missingInformation" | "confidence">>) => Promise<unknown>;
+  onRetryFeedbackInterpretation?: (feedbackId: string) => Promise<unknown>;
   onTransitionAnalysisQueueItem?: (queueItemId: string, status: "eligible" | "excluded") => Promise<unknown>;
   onUpdateAnalysisQueueItemNote?: (queueItemId: string, analysisNote: string) => Promise<unknown>;
   onLinkLegacyReviewFeedback?: (input: {
@@ -185,6 +188,20 @@ const normalizeReviewSessionProgress = (progress: ReviewSessionProgress | undefi
 const EMPTY_REVIEW_LOGS: RecordReviewLog[] = [];
 const EMPTY_DECISION_BLOCK_FEEDBACK: DecisionBlockFeedback[] = [];
 const EMPTY_ANALYSIS_QUEUE_ITEMS: AnalysisQueueItem[] = [];
+const interpretationActionabilityLabel: Record<NonNullable<FeedbackInterpretation["actionability"]>, string> = {
+  needs_training: "需要训练",
+  reflection_only: "仅作反思",
+  unclear: "尚不明确",
+};
+const interpretationDifficultyLabel: Record<NonNullable<FeedbackInterpretation["difficultyType"]>, string> = {
+  concept: "概念",
+  procedure: "步骤",
+  confusion: "混淆",
+  calculation: "计算",
+  application: "应用",
+  expression: "表达",
+  other: "其他",
+};
 const hasEvaluationText = (log: RecordReviewLog) => Boolean(log.evaluationText?.trim());
 
 const suggestedDailyLimitIds = (reviews: RecordReviewState[], today: string) =>
@@ -238,6 +255,7 @@ export const ReviewPage = ({
   reviewStates,
   reviewLogsByRecord = {},
   decisionBlockFeedback = EMPTY_DECISION_BLOCK_FEEDBACK,
+  feedbackInterpretations = [],
   analysisQueueItems = EMPTY_ANALYSIS_QUEUE_ITEMS,
   stats,
   mode,
@@ -254,6 +272,8 @@ export const ReviewPage = ({
   onRate,
   onUndo,
   onDeleteDecisionBlockFeedback,
+  onConfirmFeedbackInterpretation,
+  onRetryFeedbackInterpretation,
   onTransitionAnalysisQueueItem,
   onUpdateAnalysisQueueItemNote,
   onLinkLegacyReviewFeedback,
@@ -284,6 +304,7 @@ export const ReviewPage = ({
   const [showAllDue, setShowAllDue] = useState(false);
   const [blockFeedbackDrafts, setBlockFeedbackDrafts] = useState<Record<string, DecisionBlockFeedbackDraft>>({});
   const [queueNoteDrafts, setQueueNoteDrafts] = useState<Record<string, string>>({});
+  const [interpretationDrafts, setInterpretationDrafts] = useState<Record<string, { stuckAt: string; preferredPractice: string }>>({});
   const [legacyLinkTargets, setLegacyLinkTargets] = useState<Record<string, string>>({});
   const [legacyIncludeInAnalysis, setLegacyIncludeInAnalysis] = useState<Record<string, boolean>>({});
   const [feedbackActionId, setFeedbackActionId] = useState<string>();
@@ -370,6 +391,10 @@ export const ReviewPage = ({
   const queueByFeedbackId = useMemo(
     () => new Map(analysisQueueItems.map((item) => [item.feedbackId, item])),
     [analysisQueueItems],
+  );
+  const interpretationByFeedbackId = useMemo(
+    () => new Map(feedbackInterpretations.filter((item) => !item.deletedAt).map((item) => [item.feedbackId, item])),
+    [feedbackInterpretations],
   );
   const fallbackProgress: ReviewSessionProgress = {
     total: effectiveQueue.length + ratedRecordIds.size,
@@ -974,6 +999,61 @@ export const ReviewPage = ({
                                         <small>{feedback.source === "legacy-manual-link" ? "旧评价手动关联" : `v${feedback.contentVersion}`}</small>
                                       </div>
                                       <p>{feedback.comment}</p>
+                                      {(() => {
+                                        const interpretation = interpretationByFeedbackId.get(feedback.id);
+                                        if (!interpretation) return null;
+                                        const statusLabel = interpretation.status === "succeeded"
+                                          ? interpretation.aiGenerated ? "AI 已整理，待确认" : "已确认"
+                                          : interpretation.status === "insufficient-context" ? "需要补充背景"
+                                            : interpretation.status === "failed" ? "整理失败，可稍后重试" : "整理中";
+                                        return (
+                                          <div className="decision-block-feedback-interpretation">
+                                            <small>快速模型：{statusLabel}</small>
+                                            {interpretation.actionability && <span>{interpretationActionabilityLabel[interpretation.actionability]}</span>}
+                                            {interpretation.difficultyType && <span>{interpretationDifficultyLabel[interpretation.difficultyType]}</span>}
+                                            {interpretation.stuckAt && <p>卡点：{interpretation.stuckAt}</p>}
+                                            {interpretation.userHypothesis && <p>原因猜测：{interpretation.userHypothesis}</p>}
+                                            {interpretation.preferredPractice && <p>希望训练：{interpretation.preferredPractice}</p>}
+                                            {interpretation.missingInformation.length > 0 && <p>缺少：{interpretation.missingInformation.join("、")}</p>}
+                                            <p className="decision-block-feedback-diagnostic">
+                                              {interpretation.provider} · {interpretation.model} · {interpretation.promptVersion}
+                                              {interpretation.totalTokens !== undefined ? ` · ${interpretation.totalTokens} tokens` : ""}
+                                              {interpretation.attemptCount !== undefined ? ` · ${interpretation.attemptCount} 次尝试` : ""}
+                                              {" · 费用以供应商账单为准"}
+                                            </p>
+                                            {interpretation.aiGenerated && interpretation.status === "succeeded" && onConfirmFeedbackInterpretation && (
+                                              <div className="decision-block-interpretation-confirm">
+                                                <input
+                                                  value={interpretationDrafts[feedback.id]?.stuckAt ?? interpretation.stuckAt ?? ""}
+                                                  onChange={(event) => setInterpretationDrafts((current) => ({ ...current, [feedback.id]: { stuckAt: event.target.value, preferredPractice: current[feedback.id]?.preferredPractice ?? interpretation.preferredPractice ?? "" } }))}
+                                                  placeholder="修正卡点（可选）"
+                                                  aria-label={`评论 ${feedback.id} 的卡点修正`}
+                                                />
+                                                <input
+                                                  value={interpretationDrafts[feedback.id]?.preferredPractice ?? interpretation.preferredPractice ?? ""}
+                                                  onChange={(event) => setInterpretationDrafts((current) => ({ ...current, [feedback.id]: { stuckAt: current[feedback.id]?.stuckAt ?? interpretation.stuckAt ?? "", preferredPractice: event.target.value } }))}
+                                                  placeholder="修正训练方式（可选）"
+                                                  aria-label={`评论 ${feedback.id} 的训练方式修正`}
+                                                />
+                                                <button type="button" onClick={() => {
+                                                  const draft = interpretationDrafts[feedback.id];
+                                                  void runFeedbackAction(`${feedback.id}:interpretation`, () => onConfirmFeedbackInterpretation(feedback.id, {
+                                                    stuckAt: draft?.stuckAt.trim() || null,
+                                                    preferredPractice: draft?.preferredPractice.trim() || null,
+                                                  }));
+                                                }} disabled={Boolean(feedbackActionId)}>
+                                                  保存并确认
+                                                </button>
+                                              </div>
+                                            )}
+                                            {interpretation.status === "failed" && onRetryFeedbackInterpretation && (
+                                              <button type="button" onClick={() => void runFeedbackAction(`${feedback.id}:interpretation-retry`, () => onRetryFeedbackInterpretation(feedback.id))} disabled={Boolean(feedbackActionId)}>
+                                                重试整理
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                      })()}
                                       {queueEditable && (
                                         <div className="decision-block-queue-controls">
                                           <textarea

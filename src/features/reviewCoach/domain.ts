@@ -78,6 +78,11 @@ export interface FeedbackInterpretation extends CoachBaseEntity {
   promptVersion: string;
   policyVersion: string;
   schemaVersion: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  requestId?: string;
+  attemptCount?: number;
   errorCode?: string;
 }
 
@@ -108,6 +113,12 @@ export interface AnalysisSubBatch {
   id: CoachEntityId;
   inputRefs: AnalysisInputRef[];
   status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  estimatedTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  requestId?: string;
+  attemptCount?: number;
   errorCode?: string;
 }
 
@@ -135,6 +146,11 @@ export interface AnalysisBatch extends CoachBaseEntity {
   schemaVersion: number;
   inputFingerprint: string;
   idempotencyKey: string;
+  estimatedTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  allowCrossBlockSupport?: boolean;
   errorCode?: string;
 }
 

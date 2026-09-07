@@ -274,12 +274,21 @@ const isObject = (value: unknown): value is Record<string, unknown> => Boolean(v
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 const isConfidence = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 
+const assertExactKeys = (value: Record<string, unknown>, keys: readonly string[], label: string) => {
+  const allowed = new Set(keys);
+  if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error(`Invalid ${label} response: unexpected field.`);
+};
+
 export const isInsufficientContextAiResult = (value: unknown): value is InsufficientContextAiResult =>
   isObject(value) && value.status === "insufficient-context" && isStringArray(value.missingInformation);
 
 export const parseFeedbackInterpretationAiResponse = (value: unknown): FeedbackInterpretationAiResponse => {
-  if (isInsufficientContextAiResult(value)) return value;
+  if (isInsufficientContextAiResult(value)) {
+    assertExactKeys(value as unknown as Record<string, unknown>, ["status", "missingInformation"], "feedback interpretation");
+    return value;
+  }
   if (!isObject(value) || value.status !== "ok") throw new Error("Invalid feedback interpretation response status.");
+  assertExactKeys(value, ["status", "actionability", "difficultyType", "stuckAt", "userHypothesis", "preferredPractice", "missingInformation", "confidence"], "feedback interpretation");
   if (!["needs_training", "reflection_only", "unclear"].includes(String(value.actionability))) throw new Error("Invalid feedback actionability.");
   if (!["concept", "procedure", "confusion", "calculation", "application", "expression", "other"].includes(String(value.difficultyType))) throw new Error("Invalid feedback difficulty type.");
   if ((value.stuckAt !== null && typeof value.stuckAt !== "string") ||
@@ -312,16 +321,24 @@ const validateEvidence = (value: unknown) => {
     typeof item.excerptHash !== "string" ||
     typeof item.purpose !== "string"
   )) throw new Error("Invalid source evidence.");
+  for (const item of value as Array<Record<string, unknown>>) {
+    assertExactKeys(item, ["decisionBlockId", "recordId", "contentVersion", "excerptHash", "purpose"], "source evidence");
+  }
 };
 
 export const parseSessionBlueprintAiResponse = (value: unknown): SessionBlueprintAiResponse => {
-  if (isInsufficientContextAiResult(value)) return value;
+  if (isInsufficientContextAiResult(value)) {
+    assertExactKeys(value as unknown as Record<string, unknown>, ["status", "missingInformation"], "session blueprint");
+    return value;
+  }
   const body = requireOkObject(value, "session blueprint");
+  assertExactKeys(body, ["status", "summary", "blueprints"], "session blueprint");
   if (typeof body.summary !== "string" || !Array.isArray(body.blueprints) || body.blueprints.length < 1 || body.blueprints.length > 3) {
     throw new Error("Invalid session blueprint response body.");
   }
   for (const candidate of body.blueprints) {
     if (!isObject(candidate)) throw new Error("Invalid session blueprint candidate.");
+    assertExactKeys(candidate, ["mainDecisionBlockId", "contentVersion", "supportingDecisionBlockIds", "feedbackIds", "interpretationIds", "problemHypothesis", "hypothesisConfidence", "objective", "completionCriteria", "initialPracticeType", "initialDifficulty", "expectedKeyPoints", "branches", "allowedStrategies", "forbiddenScope", "evidence", "maxTurns", "maxRetriesPerTurn", "maxEstimatedTokens"], "session blueprint candidate");
     requireString(candidate.mainDecisionBlockId, "mainDecisionBlockId");
     requireString(candidate.problemHypothesis, "problemHypothesis");
     requireString(candidate.objective, "objective");
@@ -345,6 +362,7 @@ export const parseSessionBlueprintAiResponse = (value: unknown): SessionBlueprin
       if (!isObject(branch) || !["correct", "partial", "incorrect", "skipped"].includes(String(branch.when)) || !allowedBranches.has(String(branch.nextStrategy))) {
         throw new Error("Invalid session blueprint branch.");
       }
+      assertExactKeys(branch, ["when", "nextStrategy"], "session blueprint branch");
       cases.add(String(branch.when));
     }
     if (["correct", "partial", "incorrect", "skipped"].some((branch) => !cases.has(branch)) || candidate.allowedStrategies.some((strategy) => !allowedBranches.has(strategy))) {

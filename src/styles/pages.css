@@ -2648,6 +2648,369 @@
   font-size: 0.7rem;
 }
 
+.decision-block-feedback-interpretation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent-color, #4f46e5);
+  background: color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
+  font-size: 0.85rem;
+}
+
+.decision-block-feedback-interpretation p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.decision-block-feedback-diagnostic {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.decision-block-interpretation-confirm {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.decision-block-interpretation-confirm input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.decision-block-feedback-interpretation button {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.72rem;
+}
+
+.decision-block-interpretation-confirm button {
+  justify-self: end;
+}
+
+.review-coach-workbench {
+  display: grid;
+  gap: 16px;
+  margin: clamp(18px, 3vw, 30px) 0;
+  padding: clamp(18px, 3vw, 28px) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.review-coach-workbench > header,
+.review-coach-workbench > header > div,
+.review-coach-analysis-item > span > span:first-child,
+.review-coach-resume,
+.review-coach-latest-batch,
+.review-coach-task-list article,
+.review-coach-task-actions,
+.review-coach-confirmation > div {
+  display: flex;
+  align-items: center;
+}
+
+.review-coach-workbench > header {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.review-coach-workbench > header > div {
+  gap: 10px;
+}
+
+.review-coach-workbench > header h2,
+.review-coach-task-list h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.review-coach-workbench > header .eyebrow {
+  margin: 0 0 2px;
+  font-size: 0.66rem;
+}
+
+.review-coach-workbench > header > strong {
+  color: var(--color-primary-strong);
+  font-size: 0.78rem;
+}
+
+.review-coach-workbench-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
+.review-coach-analysis,
+.review-coach-task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.review-coach-analysis-list {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.review-coach-analysis-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  cursor: pointer;
+}
+
+.review-coach-analysis-item > input {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+}
+
+.review-coach-analysis-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.review-coach-analysis-item > span > span:first-child {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-coach-analysis-item small,
+.review-coach-task-list small,
+.review-coach-resume small,
+.review-coach-latest-batch small {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.review-coach-block-preview,
+.review-coach-feedback-quote {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-coach-feedback-quote {
+  color: var(--color-muted);
+}
+
+.review-coach-analysis-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--color-primary-strong);
+  font-size: 0.7rem;
+}
+
+.review-coach-analysis-meta b {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.review-coach-analysis-meta em,
+.review-coach-error {
+  color: var(--color-danger);
+  font-style: normal;
+}
+
+.review-coach-analysis-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.review-coach-analysis-summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--color-border);
+}
+
+.review-coach-analysis-summary > span:last-child {
+  border-right: 0;
+}
+
+.review-coach-analysis-summary strong {
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+}
+
+.review-coach-analysis-summary small,
+.review-coach-cost-note {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.review-coach-cost-note,
+.review-coach-error,
+.review-coach-message,
+.review-coach-confirmation p,
+.review-coach-task-list p {
+  margin: 0;
+}
+
+.review-coach-analysis > .primary-button {
+  justify-self: start;
+}
+
+.review-coach-confirmation {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.review-coach-confirmation > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+
+.review-coach-confirmation > label input {
+  width: 16px;
+  height: 16px;
+}
+
+.review-coach-confirmation > div,
+.review-coach-task-actions {
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.review-coach-confirmation button,
+.review-coach-resume button,
+.review-coach-task-actions button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.72rem;
+}
+
+.review-coach-confirmation .primary-button {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.review-coach-resume,
+.review-coach-latest-batch {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.review-coach-resume > span {
+  display: grid;
+  gap: 2px;
+}
+
+.review-coach-task-list article {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.review-coach-task-list article.current {
+  border-left: 3px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary-soft) 55%, var(--color-surface));
+}
+
+.review-coach-task-list article > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.review-coach-task-list article > div:first-child > span {
+  width: max-content;
+  color: var(--color-primary-strong);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.review-coach-task-list p {
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+
+.review-coach-message {
+  color: var(--color-primary-strong);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 620px) {
+  .review-coach-workbench > header,
+  .review-coach-task-list article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-coach-analysis-item > span > span:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .review-coach-analysis-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-coach-analysis-summary > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .review-coach-analysis-summary > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .review-coach-task-actions {
+    width: 100%;
+  }
+
+  .review-coach-task-actions button {
+    flex: 1;
+  }
+}
+
 .decision-block-reflection-preview {
   margin: 0;
   color: var(--color-text);

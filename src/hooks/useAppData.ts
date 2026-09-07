@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   AppSettings,
@@ -41,8 +41,14 @@ import { flushAutoBackupNow, markAutoBackupDirty } from "../services/autoBackupS
 import { cancelAllKnowledgePodcastJobs, recoverKnowledgePodcastJobs, subscribeKnowledgePodcastJobs, syncNativeKnowledgePodcastTtsJobs } from "../services/knowledgePodcastJobService";
 import { cleanupCloudRecoverySnapshotsIfDue, getCurrentCloudUser } from "../services/cloudSyncService";
 import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT, type AnalysisQueueStatus, type ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
+import type { FeedbackInterpretation } from "../features/reviewCoach/domain";
 import { ReviewCoachOrchestrator } from "../features/reviewCoach/orchestrator";
 import { reviewCoachRepository } from "../features/reviewCoach/repository";
+import { createFeedbackInterpretationGateway, defaultFeedbackInterpretationMetadata } from "../features/reviewCoach/aiGateway";
+import { processFeedbackInterpretationQueue } from "../features/reviewCoach/feedbackInterpretationWorker";
+import { getCurrentAiProvider } from "../lib/aiProviders";
+import { buildAnalysisPlanningBlocks, maxAnalysisInputTokensForProvider, type AnalysisPlanningBlock } from "../features/reviewCoach/analysisPlanner";
+import { createSessionPlanningGateway, defaultSessionPlanningMetadata } from "../features/reviewCoach/sessionPlanningGateway";
 
 const reviewCoachOrchestrator = new ReviewCoachOrchestrator({
   repository: reviewCoachRepository,
@@ -66,9 +72,13 @@ export const useAppData = () => {
   const [recordReviewStats, setRecordReviewStats] = useState<RecordReviewStats | null>(null);
   const [reviewCoachSnapshot, setReviewCoachSnapshot] = useState<ReviewCoachFormalSnapshot>(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
   const [assetsVersion, setAssetsVersion] = useState(0);
+  const [interpretationRuntimeReady, setInterpretationRuntimeReady] = useState(
+    () => typeof document === "undefined" || (document.visibilityState === "visible" && navigator.onLine),
+  );
+  const interpretationAbortControllersRef = useRef(new Set<AbortController>());
 
   const refresh = useCallback(async () => {
-    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList, currentAutoBackupState, coachSnapshot] = await Promise.all([
+    const [entryList, blockList, templateList, currentSettings, assetList, deletedList, reviewList, dueReviews, reviewLogs, reviewStats, podcastList, currentAutoBackupState, coachSnapshot, allInterpretations] = await Promise.all([
       storage.listEntries(),
       storage.listBlocks(),
       storage.listTemplates(),
@@ -82,6 +92,7 @@ export const useAppData = () => {
       storage.listKnowledgePodcasts?.() ?? Promise.resolve([]),
       storage.getAutoBackupState(),
       reviewCoachRepository.getFormalSnapshot(),
+      reviewCoachRepository.listFeedbackInterpretations(),
     ]);
     setEntries(entryList);
     setBlocks(blockList);
@@ -95,8 +106,72 @@ export const useAppData = () => {
     setRecordReviewLogs(reviewLogs);
     setRecordReviewStats(reviewStats);
     setPodcasts(podcastList);
-    setReviewCoachSnapshot(coachSnapshot);
+    setReviewCoachSnapshot({ ...coachSnapshot, feedbackInterpretations: allInterpretations });
   }, []);
+
+  const runFeedbackInterpretations = useCallback(async (feedbackIds: readonly string[], force = false) => {
+    if (feedbackIds.length === 0 || (typeof document !== "undefined" && (document.visibilityState !== "visible" || !navigator.onLine))) return;
+    const currentSettings = await storage.getSettings();
+    const provider = getCurrentAiProvider(currentSettings.ai);
+    const apiKey = provider ? (await storage.getAiSecret?.(provider.id))?.apiKey : undefined;
+    if (!provider || !apiKey?.trim()) return;
+    const [snapshot, allInterpretations] = await Promise.all([
+      reviewCoachRepository.getFormalSnapshot(),
+      reviewCoachRepository.listFeedbackInterpretations(),
+    ]);
+    const interpretationByFeedbackId = new Map(allInterpretations.map((item) => [item.feedbackId, item]));
+    const recordById = new Map(
+      blocks
+        .filter((block): block is RecordBlock => block.type === "record")
+        .map((record) => [record.id, record]),
+    );
+    const jobs = feedbackIds.flatMap((feedbackId) => {
+      const feedback = snapshot.decisionBlockFeedback.find((item) => item.id === feedbackId && !item.deletedAt);
+      if (!feedback) return [];
+      const existingInterpretation = interpretationByFeedbackId.get(feedback.id);
+      if (existingInterpretation && ["succeeded", "insufficient-context"].includes(existingInterpretation.status)) return [];
+      if (existingInterpretation?.status === "failed" && !force) return [];
+      const record = recordById.get(feedback.recordId);
+      const content = record
+        ? extractDecisionBlocks(record.contentHtml, record.updatedAt).find((item) => item.decisionBlockId === feedback.decisionBlockId)?.innerHtml
+        : undefined;
+      if (!content) return [];
+      return [{
+        feedbackId,
+        decisionBlockContent: content,
+        provider: provider.providerName,
+        model: provider.model,
+        ...defaultFeedbackInterpretationMetadata,
+        maxRetries: 2,
+      }];
+    });
+    if (jobs.length === 0) return;
+    const abortController = new AbortController();
+    interpretationAbortControllersRef.current.add(abortController);
+    const gateway = createFeedbackInterpretationGateway({ provider, apiKey, timeoutMs: 30_000 });
+    const orchestrator = new ReviewCoachOrchestrator({
+      repository: reviewCoachRepository,
+      ids: { next: newId },
+      clock: { now: nowISO },
+      aiGateway: {
+        interpretFeedback: gateway.interpretFeedback,
+        planSession: async () => { throw new Error("Session planning is not part of Stage 4."); },
+        generateTurn: async () => { throw new Error("Turn generation is not part of Stage 4."); },
+        reviewQuestion: async () => { throw new Error("Question review is not part of Stage 4."); },
+        evaluateAnswer: async () => { throw new Error("Answer evaluation is not part of Stage 4."); },
+      },
+    });
+    try {
+      await processFeedbackInterpretationQueue(
+        orchestrator,
+        jobs.map((job) => ({ ...job, signal: abortController.signal })),
+        { maxConcurrency: 1 },
+      );
+    } finally {
+      interpretationAbortControllersRef.current.delete(abortController);
+      await refresh();
+    }
+  }, [blocks, refresh]);
 
   useEffect(() => {
     let mounted = true;
@@ -122,6 +197,33 @@ export const useAppData = () => {
       mounted = false;
     };
   }, [refresh]);
+
+  useEffect(() => {
+    const syncRuntime = () => {
+      const ready = document.visibilityState === "visible" && navigator.onLine;
+      setInterpretationRuntimeReady(ready);
+      if (!ready) interpretationAbortControllersRef.current.forEach((controller) => controller.abort());
+    };
+    document.addEventListener("visibilitychange", syncRuntime);
+    window.addEventListener("online", syncRuntime);
+    window.addEventListener("offline", syncRuntime);
+    return () => {
+      document.removeEventListener("visibilitychange", syncRuntime);
+      window.removeEventListener("online", syncRuntime);
+      window.removeEventListener("offline", syncRuntime);
+      interpretationAbortControllersRef.current.forEach((controller) => controller.abort());
+      interpretationAbortControllersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!initialized) return;
+    const interpretationsByFeedbackId = new Map(reviewCoachSnapshot.feedbackInterpretations.map((item) => [item.feedbackId, item]));
+    const pendingIds = reviewCoachSnapshot.analysisQueueItems
+      .filter((item) => item.status === "eligible" && !["succeeded", "insufficient-context", "failed"].includes(interpretationsByFeedbackId.get(item.feedbackId)?.status ?? ""))
+      .map((item) => item.feedbackId);
+    if (pendingIds.length > 0) void runFeedbackInterpretations(pendingIds).catch(() => undefined);
+  }, [initialized, interpretationRuntimeReady, reviewCoachSnapshot.analysisQueueItems, reviewCoachSnapshot.feedbackInterpretations, runFeedbackInterpretations]);
 
   const todayEntry = useMemo(
     () => entries.find((entry) => entry.date === todayISO()) ?? null,
@@ -283,11 +385,121 @@ export const useAppData = () => {
       await refresh();
       if (result) {
         await markAutoBackupDirty("record-review-rate");
+        const feedbackIds = result.undoToken.decisionBlockFeedbackIds ?? [];
+        if (feedbackIds.length > 0) void runFeedbackInterpretations(feedbackIds).catch(() => undefined);
       }
       return result;
     },
-    [refresh],
+    [refresh, runFeedbackInterpretations],
   );
+
+  const analysisPlanningBlocks = useMemo(() => buildAnalysisPlanningBlocks({
+    snapshot: reviewCoachSnapshot,
+    records: recordBlocks,
+    assets,
+    reviewLogs: recordReviewLogs,
+  }), [assets, recordBlocks, recordReviewLogs, reviewCoachSnapshot]);
+
+  const executeDeepAnalysis = useCallback(async (
+    planningBlocks: AnalysisPlanningBlock[],
+    allowCrossBlockSupport: boolean,
+    operationId: string,
+  ) => {
+    if (planningBlocks.length === 0) throw new Error("没有可分析的复习重点。");
+    if (typeof document !== "undefined" && (document.visibilityState !== "visible" || !navigator.onLine)) {
+      throw new Error("请回到前台并联网后再开始深度分析。");
+    }
+    const currentSettings = await storage.getSettings();
+    const provider = getCurrentAiProvider(currentSettings.ai);
+    const apiKey = provider ? (await storage.getAiSecret?.(provider.id))?.apiKey : undefined;
+    if (!provider || !apiKey?.trim()) throw new Error("请先在设置中配置当前 AI 供应商和 API Key。");
+    const stamp = nowISO();
+    const currentRoleConfig = reviewCoachSnapshot.aiRoleConfigs.find((item) => item.role === "session-planner" && !item.deletedAt);
+    await reviewCoachRepository.saveAiRoleConfig({
+      id: currentRoleConfig?.id ?? "ai-role:session-planner",
+      role: "session-planner",
+      providerId: provider.id,
+      model: provider.model,
+      enabled: true,
+      ...defaultSessionPlanningMetadata,
+      timeoutMs: 90_000,
+      maxRetries: 1,
+      maxConcurrency: 1,
+      createdAt: currentRoleConfig?.createdAt ?? stamp,
+      updatedAt: stamp,
+    });
+    const controller = new AbortController();
+    interpretationAbortControllersRef.current.add(controller);
+    const gateway = createSessionPlanningGateway({ provider, apiKey, timeoutMs: 90_000 });
+    const orchestrator = new ReviewCoachOrchestrator({
+      repository: reviewCoachRepository,
+      ids: { next: newId },
+      clock: { now: nowISO },
+      aiGateway: {
+        interpretFeedback: async () => { throw new Error("Feedback interpretation is not part of Stage 5 analysis."); },
+        planSession: gateway.planSession,
+        generateTurn: async () => { throw new Error("Turn generation is not part of Stage 5."); },
+        reviewQuestion: async () => { throw new Error("Question review is not part of Stage 5."); },
+        evaluateAnswer: async () => { throw new Error("Answer evaluation is not part of Stage 5."); },
+      },
+    });
+    try {
+      const result = await orchestrator.analyzeFeedback({
+        blocks: planningBlocks,
+        maxInputTokens: maxAnalysisInputTokensForProvider(provider),
+        allowCrossBlockSupport,
+        provider: provider.providerName,
+        model: provider.model,
+        ...defaultSessionPlanningMetadata,
+        operationId,
+        maxRetries: 1,
+        signal: controller.signal,
+      });
+      await markAutoBackupDirty("review-coach-deep-analysis");
+      return result;
+    } finally {
+      interpretationAbortControllersRef.current.delete(controller);
+      await refresh();
+    }
+  }, [refresh, reviewCoachSnapshot.aiRoleConfigs]);
+
+  const runDeepAnalysis = useCallback(async (decisionBlockIds: readonly string[], allowCrossBlockSupport: boolean) => {
+    const selected = new Set(decisionBlockIds);
+    return executeDeepAnalysis(analysisPlanningBlocks.filter((item) => selected.has(item.decisionBlockId)), allowCrossBlockSupport, newId());
+  }, [analysisPlanningBlocks, executeDeepAnalysis]);
+
+  const resumeDeepAnalysis = useCallback(async (batchId: string) => {
+    const batch = reviewCoachSnapshot.analysisBatches.find((item) => item.id === batchId && ["confirmed", "running"].includes(item.status));
+    if (!batch) throw new Error("没有可继续的分析批次。");
+    const queueIds = new Set(batch.inputRefs.map((item) => item.queueItemId));
+    const blockIds = new Set(batch.inputRefs.map((item) => item.decisionBlockId));
+    const planningBlocks = buildAnalysisPlanningBlocks({
+      snapshot: reviewCoachSnapshot,
+      records: recordBlocks,
+      assets,
+      reviewLogs: recordReviewLogs,
+      includeQueueItemIds: queueIds,
+    }).filter((item) => blockIds.has(item.decisionBlockId));
+    return executeDeepAnalysis(
+      planningBlocks,
+      Boolean(batch.allowCrossBlockSupport),
+      batch.idempotencyKey.startsWith("analysis:") ? batch.idempotencyKey.slice("analysis:".length) : batch.id,
+    );
+  }, [assets, executeDeepAnalysis, recordBlocks, recordReviewLogs, reviewCoachSnapshot]);
+
+  const switchAdaptiveTask = useCallback(async (taskId: string) => {
+    const updated = await reviewCoachOrchestrator.switchCurrentTask(taskId);
+    await refresh();
+    await markAutoBackupDirty("review-coach-task-switch");
+    return updated;
+  }, [refresh]);
+
+  const deferAdaptiveTask = useCallback(async (taskId: string) => {
+    const updated = await reviewCoachOrchestrator.deferTask(taskId, newId());
+    await refresh();
+    await markAutoBackupDirty("review-coach-task-defer");
+    return updated;
+  }, [refresh]);
 
   const deleteDecisionBlockFeedback = useCallback(async (feedbackId: string) => {
     const deleted = await reviewCoachRepository.deleteFeedback(feedbackId, nowISO());
@@ -295,6 +507,21 @@ export const useAppData = () => {
     await markAutoBackupDirty("decision-block-feedback-delete");
     return deleted;
   }, [refresh]);
+
+  const confirmFeedbackInterpretation = useCallback(async (
+    feedbackId: string,
+    patch?: Partial<Pick<FeedbackInterpretation, "actionability" | "difficultyType" | "stuckAt" | "userHypothesis" | "preferredPractice" | "missingInformation" | "confidence">>,
+  ) => {
+    const updated = await reviewCoachOrchestrator.confirmFeedbackInterpretation(feedbackId, patch);
+    await refresh();
+    await markAutoBackupDirty("feedback-interpretation-confirm");
+    return updated;
+  }, [refresh]);
+
+  const retryFeedbackInterpretation = useCallback(async (feedbackId: string) => {
+    await runFeedbackInterpretations([feedbackId], true);
+    return reviewCoachRepository.getFormalSnapshot();
+  }, [runFeedbackInterpretations]);
 
   const transitionAnalysisQueueItem = useCallback(async (queueItemId: string, status: Extract<AnalysisQueueStatus, "eligible" | "excluded">) => {
     const updated = await reviewCoachRepository.transitionQueueItem(queueItemId, status, nowISO());
@@ -664,10 +891,12 @@ export const useAppData = () => {
     recordReviewLogs,
     recordReviewStats,
     reviewCoachSnapshot,
+    analysisPlanningBlocks,
     subjects,
     activeSubjects,
     todayEntry,
     todayBlocks,
+    recordBlocks,
     assetsVersion,
     refresh,
     ensureEntry,
@@ -687,6 +916,12 @@ export const useAppData = () => {
     rateRecordReview,
     undoRecordReview,
     deleteDecisionBlockFeedback,
+    confirmFeedbackInterpretation,
+    retryFeedbackInterpretation,
+    runDeepAnalysis,
+    resumeDeepAnalysis,
+    switchAdaptiveTask,
+    deferAdaptiveTask,
     transitionAnalysisQueueItem,
     updateAnalysisQueueItemNote,
     linkLegacyReviewFeedback,

@@ -1,7 +1,7 @@
 import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
-import type { Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
+import type { AiProviderProfile, Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { daysUntil, formatChineseDate, todayISO } from "../lib/date";
 import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
@@ -9,6 +9,9 @@ import { CloudSyncButton } from "../components/CloudSyncButton";
 import { fallbackSubjectName } from "../lib/subjects";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { getDailyMotto } from "../lib/dailyMotto";
+import { ReviewCoachWorkbench } from "../features/reviewCoach/ReviewCoachWorkbench";
+import type { AnalysisPlanningBlock } from "../features/reviewCoach/analysisPlanner";
+import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT, type ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
 
 interface TodayPageProps {
   entry: DayEntry | null;
@@ -30,6 +33,14 @@ interface TodayPageProps {
   onAddToReview?: (recordId: string) => void;
   onOpenCloudSyncSettings?: () => void;
   onCloudSyncRestored?: () => Promise<void> | void;
+  reviewCoachPlanningBlocks?: readonly AnalysisPlanningBlock[];
+  reviewCoachSnapshot?: ReviewCoachFormalSnapshot;
+  reviewCoachRecords?: readonly RecordBlock[];
+  reviewCoachProvider?: AiProviderProfile;
+  onRunDeepAnalysis?: (decisionBlockIds: readonly string[], allowCrossBlockSupport: boolean) => Promise<unknown>;
+  onResumeDeepAnalysis?: (batchId: string) => Promise<unknown>;
+  onSwitchAdaptiveTask?: (taskId: string) => Promise<unknown>;
+  onDeferAdaptiveTask?: (taskId: string) => Promise<unknown>;
 }
 
 export const TodayPage = ({
@@ -52,6 +63,14 @@ export const TodayPage = ({
   onAddToReview = () => undefined,
   onOpenCloudSyncSettings = () => undefined,
   onCloudSyncRestored = () => undefined,
+  reviewCoachPlanningBlocks = [],
+  reviewCoachSnapshot = EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT,
+  reviewCoachRecords = [],
+  reviewCoachProvider,
+  onRunDeepAnalysis,
+  onResumeDeepAnalysis,
+  onSwitchAdaptiveTask,
+  onDeferAdaptiveTask,
 }: TodayPageProps) => {
   const [subject, setSubject] = useState<Subject>(() =>
     subjects.find((item) => !item.archivedAt)?.name ??
@@ -129,6 +148,19 @@ export const TodayPage = ({
             开始复习
           </button>
         </section>
+      )}
+
+      {onRunDeepAnalysis && onResumeDeepAnalysis && onSwitchAdaptiveTask && onDeferAdaptiveTask && (
+        <ReviewCoachWorkbench
+          planningBlocks={reviewCoachPlanningBlocks}
+          snapshot={reviewCoachSnapshot}
+          records={reviewCoachRecords}
+          provider={reviewCoachProvider}
+          onAnalyze={onRunDeepAnalysis}
+          onResume={onResumeDeepAnalysis}
+          onSwitchTask={onSwitchAdaptiveTask}
+          onDeferTask={onDeferAdaptiveTask}
+        />
       )}
 
       {entry && (

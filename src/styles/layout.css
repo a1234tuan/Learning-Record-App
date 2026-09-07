@@ -379,6 +379,13 @@
     transform: translateY(calc(100% + 28px));
   }
 
+  .app-shell:has(.decision-block-interpretation-confirm input:focus) .bottom-nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(calc(100% + 28px));
+  }
+
   .app-shell.ai-chat-active .bottom-nav {
     opacity: 0;
     visibility: hidden;

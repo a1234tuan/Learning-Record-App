@@ -17,6 +17,7 @@ import {
   coachTestCompletedDisposition,
   coachTestQueueItem,
   coachTestStamp,
+  coachTestTask,
   completeCoachTestSnapshot,
 } from "./reviewCoachTestFixtures";
 import { ReviewCoachValidationError } from "./validation";
@@ -67,6 +68,34 @@ describe("DexieReviewCoachRepository", () => {
     expect(await database.decisionBlockFeedback.count()).toBe(1);
     expect(await database.analysisQueueItems.count()).toBe(1);
     expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "needs-analysis" });
+  });
+
+  it("finalizes successful analysis inputs as consumed while preserving frozen input", async () => {
+    await repository.saveDecisionBlock(coachTestBlock);
+    await repository.addFeedback(coachTestFeedback, { ...coachTestQueueItem, status: "eligible", batchId: undefined, consumedAt: undefined });
+    const inputRef = { queueItemId: coachTestQueueItem.id, feedbackId: coachTestFeedback.id, decisionBlockId: coachTestBlock.id, recordId: coachTestBlock.recordId, contentVersion: 1 };
+    const draft = await repository.createAnalysisBatch({
+      ...coachTestBatch,
+      status: "draft",
+      inputRefs: [inputRef],
+      subBatches: [{ id: "sub-1", inputRefs: [inputRef], status: "pending", estimatedTokens: 500 }],
+      requestedAt: undefined,
+      completedAt: undefined,
+      finalSummary: undefined,
+    });
+    await repository.transitionAnalysisBatch(draft.id, "confirmed", coachTestStamp);
+    const running = await repository.transitionAnalysisBatch(draft.id, "running", coachTestStamp);
+    const completed = await repository.updateAnalysisBatch({
+      ...running,
+      status: "succeeded",
+      subBatches: [{ ...running.subBatches[0], status: "succeeded", totalTokens: 420 }],
+      totalTokens: 420,
+      updatedAt: coachTestStamp,
+    });
+
+    expect(completed.status).toBe("succeeded");
+    expect(await database.analysisQueueItems.get(coachTestQueueItem.id)).toMatchObject({ status: "consumed", batchId: draft.id });
+    await expect(repository.updateAnalysisBatch({ ...completed, inputFingerprint: "changed" })).rejects.toMatchObject({ code: "changed-analysis-input" });
   });
 
   it("rejects reuse of an idempotency key with different event content", async () => {
@@ -387,6 +416,31 @@ describe("DexieReviewCoachRepository", () => {
       idempotencyKey: "task-current-operation-2",
     })).rejects.toMatchObject({ code: "task-uniqueness" });
     expect(await database.adaptiveReviewTasks.count()).toBe(1);
+  });
+
+  it("switches the global current task atomically", async () => {
+    const secondBlock: DecisionBlock = { ...coachTestBlock, id: "decision-block-2", position: 1 };
+    const secondBlueprint = {
+      ...coachTestBlueprint,
+      id: "blueprint-2",
+      decisionBlockId: secondBlock.id,
+      idempotencyKey: "blueprint-operation-2",
+      evidence: [{ ...coachTestBlueprint.evidence[0], decisionBlockId: secondBlock.id }],
+    };
+    await database.decisionBlocks.bulkPut([coachTestBlock, secondBlock]);
+    await database.decisionBlockFeedback.put(coachTestFeedback);
+    await database.feedbackInterpretations.put(coachTestInterpretation);
+    await database.analysisQueueItems.put(coachTestQueueItem);
+    await database.analysisBatches.put(coachTestBatch);
+    await database.sessionBlueprints.bulkPut([coachTestBlueprint, secondBlueprint]);
+    await repository.createTask({ ...coachTestTask, id: "task-current", status: "current", endedAt: undefined, idempotencyKey: "task-current" });
+    await repository.createTask({ ...coachTestTask, id: "task-waiting", blueprintId: secondBlueprint.id, decisionBlockId: secondBlock.id, status: "waiting", endedAt: undefined, idempotencyKey: "task-waiting" });
+
+    const switched = await repository.switchCurrentTask("task-waiting", "2026-09-07T08:00:00.000Z");
+
+    expect(switched.status).toBe("current");
+    expect(await database.adaptiveReviewTasks.get("task-current")).toMatchObject({ status: "waiting", activeSlotKey: undefined });
+    expect((await database.adaptiveReviewTasks.where("activeSlotKey").equals("global-current").toArray()).map((item) => item.id)).toEqual(["task-waiting"]);
   });
 
   it("commits answer, self-assessment, disposition, and task terminal state atomically", async () => {

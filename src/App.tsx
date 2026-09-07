@@ -53,6 +53,7 @@ import { getFavoriteRecords } from "./lib/journalSelectors";
 import { todayISO } from "./lib/date";
 import { isDesktopPlatform } from "./lib/platform";
 import { isKeyboardViewportVisible, nextKeyboardBaselineHeight, resolveViewportHeight } from "./lib/viewport";
+import { getCurrentAiProvider } from "./lib/aiProviders";
 import { onAppBackgroundAutoBackup } from "./services/autoBackupService";
 import { flushDesktopPendingChanges } from "./services/desktopLifecycleService";
 import {
@@ -1061,6 +1062,14 @@ export const App = () => {
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
             onOpenCloudSyncSettings={() => openMoreSubRoute("backup")}
             onCloudSyncRestored={app.refresh}
+            reviewCoachPlanningBlocks={app.analysisPlanningBlocks}
+            reviewCoachSnapshot={app.reviewCoachSnapshot}
+            reviewCoachRecords={app.recordBlocks}
+            reviewCoachProvider={getCurrentAiProvider(settings.ai)}
+            onRunDeepAnalysis={app.runDeepAnalysis}
+            onResumeDeepAnalysis={app.resumeDeepAnalysis}
+            onSwitchAdaptiveTask={app.switchAdaptiveTask}
+            onDeferAdaptiveTask={app.deferAdaptiveTask}
           />
         );
       case "journal":
@@ -1214,6 +1223,7 @@ export const App = () => {
             reviewStates={app.recordReviews}
             reviewLogsByRecord={reviewLogsByRecord}
             decisionBlockFeedback={app.reviewCoachSnapshot.decisionBlockFeedback}
+            feedbackInterpretations={app.reviewCoachSnapshot.feedbackInterpretations}
             analysisQueueItems={app.reviewCoachSnapshot.analysisQueueItems}
             stats={app.recordReviewStats}
             mode={tabMemory.review.mode}
@@ -1285,6 +1295,8 @@ export const App = () => {
               await app.undoRecordReview(token);
             }}
             onDeleteDecisionBlockFeedback={app.deleteDecisionBlockFeedback}
+            onConfirmFeedbackInterpretation={app.confirmFeedbackInterpretation}
+            onRetryFeedbackInterpretation={app.retryFeedbackInterpretation}
             onTransitionAnalysisQueueItem={app.transitionAnalysisQueueItem}
             onUpdateAnalysisQueueItemNote={app.updateAnalysisQueueItemNote}
             onLinkLegacyReviewFeedback={app.linkLegacyReviewFeedback}
