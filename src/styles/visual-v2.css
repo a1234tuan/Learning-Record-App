@@ -279,6 +279,61 @@ body {
   .journal-subject-strip { margin-inline: -16px; padding-inline: 16px 36px; scrollbar-width: none; }
 }
 
+/* Stage 4: review and learning coach share one stable destination. */
+.review-page { width: min(980px, 100%); }
+.review-page-header { margin-bottom: 18px; }
+.review-header-menu { display: flex; align-items: center; gap: 8px; }
+.review-mode-tabs { display: flex; gap: 22px; overflow-x: auto; border-bottom: 1px solid var(--color-border); scrollbar-width: none; }
+.review-mode-tabs button { flex: 0 0 auto; min-height: 44px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding-inline: 2px; background: transparent; color: var(--color-muted); }
+.review-mode-tabs button.active { border-color: var(--color-primary); background: transparent; color: var(--color-text); font-weight: 620; }
+
+.review-page .review-coach-workbench { margin: 28px 0 0; border-bottom: 0; padding-bottom: 0; }
+.review-page .review-coach-workbench > header { padding-bottom: 14px; border-bottom: 1px solid var(--color-border); }
+.review-page .review-coach-analysis-summary { border-right: 0; border-left: 0; border-radius: 0; }
+.review-page .review-coach-task-list article { border-right: 0; border-left: 0; border-radius: 0; padding-inline: 2px; }
+.review-page .review-coach-task-list article.current { border-left: 0; background: color-mix(in srgb, var(--color-primary-soft) 42%, transparent); }
+
+.review-session { min-height: calc(100dvh - 190px); }
+.review-session-progress { border: 0; border-bottom: 1px solid var(--color-border); border-radius: 0; background: transparent; box-shadow: none; }
+.review-record-card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.review-record-card .record-view-header h1 { font-family: var(--font-reading); font-weight: 580; }
+.review-record-card .rich-editor { font-family: var(--font-reading); line-height: var(--reading-line-height, 1.8); }
+.review-rating-bar { border-right: 0; border-bottom: 0; border-left: 0; border-radius: 0; background: color-mix(in srgb, var(--color-surface) 97%, transparent); box-shadow: none; backdrop-filter: blur(10px); }
+.review-rating-bar button { border-radius: 0; box-shadow: none; }
+
+.adaptive-review-page { width: min(800px, 100%); }
+.adaptive-review-header { border-bottom-color: var(--color-border); }
+.adaptive-review-header h1 { font-family: var(--font-reading); font-weight: 580; }
+.adaptive-review-objective,
+.adaptive-review-start,
+.adaptive-review-turn,
+.adaptive-review-finish,
+.adaptive-review-inline-dialog { border-right: 0; border-left: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.adaptive-review-objective { border-left: 2px solid var(--color-primary); padding-left: 16px; }
+.adaptive-review-turn h2,
+.adaptive-review-finish h2 { font-family: var(--font-reading); font-weight: 580; }
+.adaptive-review-turn textarea,
+.adaptive-review-finish textarea,
+.adaptive-review-inline-dialog textarea { border-color: var(--color-border); background: var(--color-surface); line-height: 1.7; }
+.adaptive-review-result > strong { color: var(--color-primary-strong); }
+.adaptive-review-hints p { border-left-color: var(--color-accent); background: var(--color-accent-soft); }
+
+@media (max-width: 720px) {
+  .review-direct-edit { min-width: 42px; padding-inline: 9px; font-size: 0; }
+  .review-direct-edit svg { width: 18px; }
+  .review-page { padding-top: 18px; }
+  .review-page-header h1 { font-size: 1.45rem; }
+  .review-mode-tabs { margin-inline: -16px; padding-inline: 16px; }
+  .review-session { min-height: calc(100dvh - 130px); }
+  .review-rating-bar { margin-inline: -16px; padding-inline: 7px; }
+  .adaptive-review-page { padding: 14px 16px 110px; }
+  .adaptive-review-objective,
+  .adaptive-review-start,
+  .adaptive-review-turn,
+  .adaptive-review-finish,
+  .adaptive-review-inline-dialog { padding-inline: 2px; }
+}
+
 .visual-theme-fieldset {
   display: grid;
   gap: 10px;

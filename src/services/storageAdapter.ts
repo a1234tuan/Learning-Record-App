@@ -1137,7 +1137,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await markCloudSyncMutation();
     const result = await db.transaction(
       "rw",
-      [db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
+      [db.blocks, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
       async () => {
       const current = await db.recordReviews.get(recordId);
       if (!current || current.status !== "active") {
@@ -1314,7 +1314,7 @@ export class DexieStorageAdapter implements StorageAdapter {
     await markCloudSyncMutation();
     const result = await db.transaction(
       "rw",
-      [db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
+      [db.blocks, db.recordReviews, db.recordReviewLogs, db.recordReviewDayStats, db.cloudSyncMutation, ...reviewCoachFormalTables(db)],
       async () => {
       const [current, currentLog, recordLogs] = await Promise.all([
         db.recordReviews.get(token.recordId),

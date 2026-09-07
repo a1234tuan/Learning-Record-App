@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  AiProviderProfile,
   RecordBlock,
   RecordReviewDecisionBlockFeedbackInput,
   RecordReviewLog,
@@ -45,6 +46,9 @@ import {
 import type { ReviewCardFilter, ReviewCardSort, ReviewDeckScope, ReviewLibraryState, ReviewMode, ReviewSessionProgress } from "../lib/tabNavigation";
 import { decisionBlockPreview, extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
 import type { AnalysisQueueItem, DecisionBlockFeedback, FeedbackInterpretation } from "../features/reviewCoach/domain";
+import type { AnalysisPlanningBlock } from "../features/reviewCoach/analysisPlanner";
+import type { ReviewCoachFormalSnapshot } from "../features/reviewCoach/domain";
+import { ReviewCoachWorkbench } from "../features/reviewCoach/ReviewCoachWorkbench";
 
 interface ReviewPageProps {
   records: RecordBlock[];
@@ -97,6 +101,17 @@ interface ReviewPageProps {
   onAddToReview: (recordId: string) => Promise<void> | void;
   onRemoveReview: (recordId: string) => Promise<void> | void;
   onResetReview: (recordId: string) => Promise<void> | void;
+  reviewCoachPlanningBlocks?: readonly AnalysisPlanningBlock[];
+  reviewCoachSnapshot?: ReviewCoachFormalSnapshot;
+  reviewCoachRecords?: readonly RecordBlock[];
+  reviewCoachProvider?: AiProviderProfile;
+  onRunDeepAnalysis?: (decisionBlockIds: readonly string[], allowCrossBlockSupport: boolean) => Promise<unknown>;
+  onResumeDeepAnalysis?: (batchId: string) => Promise<unknown>;
+  onSwitchAdaptiveTask?: (taskId: string) => Promise<unknown>;
+  onDeferAdaptiveTask?: (taskId: string) => Promise<unknown>;
+  onOpenAdaptiveTask?: (taskId: string) => void;
+  coachOpen?: boolean;
+  onCoachOpenChange?: (open: boolean) => void;
 }
 
 type ReviewCardStatus = Exclude<ReviewCardFilter, "all">;
@@ -290,12 +305,26 @@ export const ReviewPage = ({
   onAddToReview,
   onRemoveReview,
   onResetReview,
+  reviewCoachPlanningBlocks = [],
+  reviewCoachSnapshot,
+  reviewCoachRecords = [],
+  reviewCoachProvider,
+  onRunDeepAnalysis,
+  onResumeDeepAnalysis,
+  onSwitchAdaptiveTask,
+  onDeferAdaptiveTask,
+  onOpenAdaptiveTask,
+  coachOpen: controlledCoachOpen,
+  onCoachOpenChange,
 }: ReviewPageProps) => {
   const touchStartYRef = useRef<number | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const [pullReady, setPullReady] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [openActionRecordId, setOpenActionRecordId] = useState<string>();
+  const [localCoachOpen, setLocalCoachOpen] = useState(false);
+  const coachOpen = controlledCoachOpen ?? localCoachOpen;
+  const setCoachOpen = onCoachOpenChange ?? setLocalCoachOpen;
   const [ratedRecordIds, setRatedRecordIds] = useState<Set<string>>(() => new Set());
   const [ratingRecordId, setRatingRecordId] = useState<string | null>(null);
   const [undoHistory, setUndoHistory] = useState<ReviewUndoEntry[]>([]);
@@ -774,12 +803,17 @@ export const ReviewPage = ({
       onTouchEnd={touchEnd}
     >
       <PageHeader
-        title="间隔复习"
-        subtitle={`今日到期 ${todayCount} 条，已过期 ${overdueCount} 条`}
+        title={coachOpen ? "学习助教" : "间隔复习"}
+        subtitle={coachOpen ? "分析卡点、完成针对性训练，并在稍后验证是否真正掌握。" : `今日到期 ${todayCount} 条，已过期 ${overdueCount} 条`}
         density="compact"
         className="review-page-header"
         actions={(
           <div className="review-header-menu" ref={headerMenuRef}>
+            {!coachOpen && mode === "queue" && currentRecord && (
+              <button type="button" className="secondary-button review-direct-edit" onClick={() => onEditRecord(currentRecord)}>
+                <Edit3 size={16} />编辑
+              </button>
+            )}
             <button
               type="button"
               className="review-header-menu-trigger"
@@ -852,15 +886,32 @@ export const ReviewPage = ({
       {ratingError && <p className="status-message">{ratingError}</p>}
 
       <div className="review-mode-tabs" role="tablist" aria-label="复习视图">
-        <button type="button" className={mode === "queue" ? "active" : ""} onClick={() => onModeChange("queue")}>
-          今日复习
+        <button type="button" className={!coachOpen && mode === "queue" ? "active" : ""} onClick={() => { setCoachOpen(false); onModeChange("queue"); }}>
+          日志复习
         </button>
-        <button type="button" className={mode === "manage" ? "active" : ""} onClick={() => onModeChange("manage")}>
+        <button type="button" className={coachOpen ? "active" : ""} onClick={() => setCoachOpen(true)}>
+          学习助教
+        </button>
+        <button type="button" className={!coachOpen && mode === "manage" ? "active" : ""} onClick={() => { setCoachOpen(false); onModeChange("manage"); }}>
           卡片库
         </button>
       </div>
 
-      {mode === "manage" && (
+      {coachOpen && reviewCoachSnapshot && onRunDeepAnalysis && onResumeDeepAnalysis && onSwitchAdaptiveTask && onDeferAdaptiveTask && (
+        <ReviewCoachWorkbench
+          planningBlocks={reviewCoachPlanningBlocks}
+          snapshot={reviewCoachSnapshot}
+          records={reviewCoachRecords}
+          provider={reviewCoachProvider}
+          onAnalyze={onRunDeepAnalysis}
+          onResume={onResumeDeepAnalysis}
+          onSwitchTask={onSwitchAdaptiveTask}
+          onDeferTask={onDeferAdaptiveTask}
+          onOpenTask={onOpenAdaptiveTask}
+        />
+      )}
+
+      {!coachOpen && mode === "manage" && (
         <section className="review-library-summary" aria-label="当前牌组摘要">
           <button
             type="button"
@@ -889,7 +940,7 @@ export const ReviewPage = ({
         </section>
       )}
 
-      {mode === "queue" ? (
+      {!coachOpen && (mode === "queue" ? (
         !currentRecord ? (
           <section className="empty-state review-empty-state">
             <h2>{hiddenDueCount > 0 ? "今日建议已完成" : "今天暂无待复习"}</h2>
@@ -1427,7 +1478,7 @@ export const ReviewPage = ({
             </div>
           </div>
         </section>
-      )}
+      ))}
     </main>
   );
 };

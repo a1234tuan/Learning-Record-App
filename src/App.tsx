@@ -197,6 +197,7 @@ export const App = () => {
   const [aiReturnTab, setAiReturnTab] = useState<TabKey | null>(null);
   const [backToast, setBackToast] = useState("");
   const [reviewToast, setReviewToast] = useState("");
+  const [reviewCoachOpen, setReviewCoachOpen] = useState(false);
   const [desktopMigrationOpen, setDesktopMigrationOpen] = useState(false);
   const [visualTheme, setVisualTheme] = useState<VisualTheme>(() => readVisualTheme());
   const lastBackPressRef = useRef(0);
@@ -376,10 +377,20 @@ export const App = () => {
 
   const openAdaptiveTask = useCallback((taskId: string) => {
     const current = navigationStateRef.current;
+    setReviewCoachOpen(true);
     commitNavigation({
       ...current,
       activeTab: "today",
       tabMemory: { ...current.tabMemory, today: { ...current.tabMemory.today, recordId: undefined, adaptiveTaskId: taskId } },
+    });
+  }, [commitNavigation]);
+
+  const closeAdaptiveTask = useCallback(() => {
+    const current = navigationStateRef.current;
+    commitNavigation({
+      ...current,
+      activeTab: "review",
+      tabMemory: { ...current.tabMemory, today: { ...current.tabMemory.today, adaptiveTaskId: undefined } },
     });
   }, [commitNavigation]);
 
@@ -1068,7 +1079,7 @@ export const App = () => {
             taskId={tabMemory.today.adaptiveTaskId}
             snapshot={app.reviewCoachSnapshot}
             records={app.recordBlocks}
-            onBack={popCurrentTabDepth}
+            onBack={closeAdaptiveTask}
             onGenerateTurn={app.generateAdaptiveQuizTurn}
             onRequestHint={app.requestAdaptiveQuizHint}
             onSubmitAnswer={app.submitAdaptiveQuizAnswer}
@@ -1106,15 +1117,6 @@ export const App = () => {
             onAddToReview={(recordId) => void app.addRecordToReview(recordId)}
             onOpenCloudSyncSettings={() => openMoreSubRoute("backup")}
             onCloudSyncRestored={app.refresh}
-            reviewCoachPlanningBlocks={app.analysisPlanningBlocks}
-            reviewCoachSnapshot={app.reviewCoachSnapshot}
-            reviewCoachRecords={app.recordBlocks}
-            reviewCoachProvider={getCurrentAiProvider(settings.ai)}
-            onRunDeepAnalysis={app.runDeepAnalysis}
-            onResumeDeepAnalysis={app.resumeDeepAnalysis}
-            onSwitchAdaptiveTask={app.switchAdaptiveTask}
-            onDeferAdaptiveTask={app.deferAdaptiveTask}
-            onOpenAdaptiveTask={openAdaptiveTask}
           />
         );
       case "journal":
@@ -1359,6 +1361,17 @@ export const App = () => {
             onResetReview={async (recordId) => {
               await app.resetRecordReview(recordId);
             }}
+            reviewCoachPlanningBlocks={app.analysisPlanningBlocks}
+            reviewCoachSnapshot={app.reviewCoachSnapshot}
+            reviewCoachRecords={app.recordBlocks}
+            reviewCoachProvider={getCurrentAiProvider(settings.ai)}
+            onRunDeepAnalysis={app.runDeepAnalysis}
+            onResumeDeepAnalysis={app.resumeDeepAnalysis}
+            onSwitchAdaptiveTask={app.switchAdaptiveTask}
+            onDeferAdaptiveTask={app.deferAdaptiveTask}
+            onOpenAdaptiveTask={openAdaptiveTask}
+            coachOpen={reviewCoachOpen}
+            onCoachOpenChange={setReviewCoachOpen}
           />
         );
       case "more":

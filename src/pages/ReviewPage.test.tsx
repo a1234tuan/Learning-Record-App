@@ -784,7 +784,7 @@ describe("ReviewPage", () => {
     expect(onRate).toHaveBeenCalledTimes(1);
 
     pending.resolve();
-    await waitFor(() => expect(screen.getByRole("button", { name: "今日复习" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "日志复习" })).toBeInTheDocument());
   });
 
   it("rolls the current card back into the queue when rating fails", async () => {

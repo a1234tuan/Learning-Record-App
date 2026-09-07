@@ -73,25 +73,18 @@ const mockDeepSeek = async (page: Page) => {
 };
 
 test.describe("Stage 9 Review Coach release path", () => {
-  test("edits a decision-block record and queues review feedback", async ({ page }) => {
+  test("queues decision-block review feedback atomically", async ({ page }) => {
     const errors = installDiagnostics(page);
+    await mockDeepSeek(page);
     await page.goto("/?preview=stage3");
 
-    await page.getByRole("button", { name: /BFS Stage3 Preview/ }).first().click();
-    await page.getByRole("button", { name: "编辑", exact: true }).click();
-    const title = page.getByRole("textbox", { name: "记录标题" });
-    await expect(title).toBeVisible();
-    await title.fill("BFS Stage9 Edited Preview");
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-    await page.getByRole("button", { name: "返回", exact: true }).click();
-
     await page.getByRole("button", { name: "开始复习" }).click();
-    await expect(page.getByRole("heading", { name: "BFS Stage9 Edited Preview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "BFS Stage3 Preview" })).toBeVisible();
     await page.getByRole("textbox", { name: "复习重点 1 本次评论" }).fill("阶段 9：首次发现时应立即标记，避免重复入队。");
     await page.getByRole("button", { name: /忘记了/ }).click();
-    await page.getByRole("button", { name: "今天" }).first().click();
-
-    await expect(page.getByText("阶段 9：首次发现时应立即标记，避免重复入队。", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^复习/ }).first().click();
+    await page.getByRole("button", { name: "学习助教", exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: /阶段 9：首次发现时应立即标记/ })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     expect(errors).toEqual([]);
   });
@@ -99,6 +92,8 @@ test.describe("Stage 9 Review Coach release path", () => {
   test("restores the analysis and scheduling checkpoints", async ({ page }) => {
     const errors = installDiagnostics(page);
     await page.goto("/?preview=stage5");
+    await page.getByRole("button", { name: /^复习/ }).first().click();
+    await page.getByRole("button", { name: "学习助教", exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "复习助教" })).toBeVisible();
     await expect(page.getByText("最近分析：部分完成")).toBeVisible();
@@ -113,6 +108,8 @@ test.describe("Stage 9 Review Coach release path", () => {
     const errors = installDiagnostics(page);
     await mockDeepSeek(page);
     await page.goto("/?preview=stage6");
+    await page.getByRole("button", { name: /^复习/ }).first().click();
+    await page.getByRole("button", { name: "学习助教", exact: true }).click();
 
     await page.getByRole("button", { name: "继续训练" }).click();
     await expect(page.getByRole("heading", { name: /BFS 中首次发现/ })).toBeVisible();
@@ -130,6 +127,8 @@ test.describe("Stage 9 Review Coach release path", () => {
     const errors = installDiagnostics(page);
     await mockDeepSeek(page);
     await page.goto("/?preview=stage7");
+    await page.getByRole("button", { name: /^复习/ }).first().click();
+    await page.getByRole("button", { name: "学习助教", exact: true }).click();
 
     await page.getByRole("button", { name: "继续训练" }).click();
     await expect(page.getByText(/结果不会改写整条日志的 FSRS 日期/)).toBeVisible();
