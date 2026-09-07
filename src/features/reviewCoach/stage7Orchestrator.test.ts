@@ -121,6 +121,41 @@ describe("Stage 7 delayed verification orchestrator", () => {
     expect(transitionTask).toHaveBeenCalledWith(ordinary.id, "current", now);
   });
 
+  it("derives startup verification task identity and queue time from the formal verification", async () => {
+    const refreshAt = async (clockNow: string) => {
+      const snapshot = completeCoachTestSnapshot();
+      snapshot.adaptiveReviewTasks[0] = { ...snapshot.adaptiveReviewTasks[0], status: "completed", endedAt: coachTestStamp };
+      snapshot.delayedVerifications[0] = {
+        ...snapshot.delayedVerifications[0],
+        status: "scheduled",
+        taskId: undefined,
+        verificationEligibleAt: "2026-09-07T06:00:00.000Z",
+        verificationDueAt: "2026-09-07T07:00:00.000Z",
+      };
+      const transitionVerification = vi.fn(async (_id: string, status: ReviewCoachFormalSnapshot["delayedVerifications"][number]["status"], updatedAt: string) => {
+        snapshot.delayedVerifications[0] = { ...snapshot.delayedVerifications[0], status, updatedAt };
+        return snapshot.delayedVerifications[0];
+      });
+      const queueVerification = vi.fn(async (_id: string, task: AdaptiveReviewTask) => ({ verification: snapshot.delayedVerifications[0], task }));
+      const repository = { getFormalSnapshot: vi.fn(async () => snapshot), transitionVerification, queueVerification } as unknown as ReviewCoachRepository;
+      const orchestrator = new ReviewCoachOrchestrator({ repository, ids: createIds(), clock: { now: () => clockNow } });
+
+      await orchestrator.refreshDueVerifications();
+      return queueVerification.mock.calls[0][1];
+    };
+
+    const firstDevice = await refreshAt("2026-09-07T08:00:00.000Z");
+    const secondDevice = await refreshAt("2026-09-07T09:00:00.000Z");
+
+    expect(firstDevice).toMatchObject({
+      id: `verification-task:${coachTestVerification.id}`,
+      idempotencyKey: `verification-task:${coachTestVerification.id}`,
+      queuedAt: "2026-09-07T07:00:00.000Z",
+      createdAt: "2026-09-07T07:00:00.000Z",
+    });
+    expect(secondDevice).toEqual({ ...firstDevice, updatedAt: "2026-09-07T09:00:00.000Z" });
+  });
+
   it("ages a long-waiting consolidation task into an earlier scheduling tier", () => {
     const older = { ...coachTestTask, id: "older", status: "waiting" as const, priorityTier: "consolidation" as const, queuedAt: "2026-08-20T08:00:00.000Z", endedAt: undefined };
     const newer = { ...coachTestTask, id: "newer", status: "waiting" as const, priorityTier: "first-difficulty" as const, queuedAt: "2026-09-07T07:00:00.000Z", endedAt: undefined };

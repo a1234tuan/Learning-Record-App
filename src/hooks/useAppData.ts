@@ -183,17 +183,8 @@ export const useAppData = () => {
         return;
       }
       await recoverKnowledgePodcastJobs();
-      const beforeScheduling = await reviewCoachRepository.getFormalSnapshot();
-      await reviewCoachOrchestrator.selectNextTask();
-      const afterScheduling = await reviewCoachRepository.getFormalSnapshot();
-      const schedulingChanged = JSON.stringify({
-        tasks: beforeScheduling.adaptiveReviewTasks,
-        verifications: beforeScheduling.delayedVerifications,
-      }) !== JSON.stringify({
-        tasks: afterScheduling.adaptiveReviewTasks,
-        verifications: afterScheduling.delayedVerifications,
-      });
-      if (schedulingChanged) await markAutoBackupDirty("review-coach-delayed-verification-refresh");
+      const refreshedVerifications = await reviewCoachOrchestrator.refreshDueVerifications();
+      if (refreshedVerifications > 0) await markAutoBackupDirty("review-coach-delayed-verification-refresh");
       await refresh();
       setInitialized(true);
       await storage.purgeExpiredDeletedBlocks(30);

@@ -5,7 +5,7 @@
 - Active v2 branch: `feature/review-effect-coach-v2`.
 - Product boundary: `docs/新的方案.md`.
 - Database version: schema 19. Store definitions live in `src/db/reviewCoachSchema.ts`; schema 19 finalizes confirmed legacy facts and removes the six old Coach projection/execution tables.
-- Stages 0-8 were completed and verified on 2026-09-07. Stage 9 remains out of scope.
+- AI cockpit implementation is complete: Stages 0-8 were completed and verified on 2026-09-07, and Stage 9 automated release acceptance is complete. Physical-device upgrade and controlled real-account Firebase quota sign-off remain release gates; do not describe the release itself as signed off until they pass.
 
 ## Review Coach Boundaries
 
@@ -19,6 +19,10 @@
 - Stage 6 adds the dedicated adaptive review page, Blueprint-constrained turn generation, independent question quality review, answer evaluation, hint/skip/invalid/defer/abandon dispositions, and atomic answer/outcome commits.
 - Stage 7 schedules delayed verification through deterministic local policy, requires fresh retrieval questions, records retained/decayed outcomes independently from record FSRS, rebuilds block/effect projections from formal facts, and applies aging plus a two-verification streak cap to task selection.
 - Stage 8 makes schema 11/16 migration transactional and retryable, retains confirmed legacy quiz/KnowledgePoint facts and record-level comments without automatic block binding, syncs every formal entity and tombstone, archives losing decision-block content conflicts, strips prompts/raw provider responses/secrets at export boundaries, and removes old Coach runtime tables.
+- Stage 9 adds deterministic Playwright coverage at desktop and Android-narrow viewports plus isolated Firebase Emulator acceptance for namespace rules, bounded incremental writes, no-op replay, interruption recovery, and revision-based clock-skew convergence.
+- The post-Stage-8 cloud audit keeps AI prompts, device-local backup paths, and knowledge-podcast rows/audio outside cloud and portable exports; restore preserves those local values transactionally. Ordinary no-op sync skips the cloud lock, and large read/write plans require explicit confirmation.
+- App initialization may refresh due verifications, but must not select or replace the current task. Startup-created verification tasks use IDs and queue timestamps derived from the verification fact so two devices produce identical sync hashes.
+- Cloud review-event history is append-only until a checkpoint plus event-tombstone protocol is designed. Do not delete remote events merely because local retention compacts old logs.
 - Stage 6 quick-model calls use strict JSON and explicitly disable thinking. Controlled real-provider acceptance may use `https://api.deepseek.com` with `deepseek-v4-flash`; never persist API keys in source, tests, docs, logs, screenshots, backup, or sync data.
 
 ## Cross-Cutting Checks
@@ -28,6 +32,8 @@ When changing decision-block or review-coach behavior, verify all affected paths
 - Dexie migration and repository invariants
 - backup/restore and record-transfer round trips
 - cloud-sync entity mapping and tombstones
+- export privacy at cloud, ZIP, streaming, and native repository boundaries
+- read/write quota estimates and no-op lock avoidance
 - record deletion and mixed-record cleanup
 - Desktop and Android narrow-screen interaction
 
@@ -35,6 +41,8 @@ When changing decision-block or review-coach behavior, verify all affected paths
 
 ```powershell
 npm run test
+npm run test:e2e
+npm run test:firebase
 npm run build
 git diff --check
 ```
@@ -50,3 +58,5 @@ For Stage 5 UI acceptance, use `http://127.0.0.1:4177/?preview=stage5`. It seeds
 For Stage 6 UI acceptance, use `http://127.0.0.1:4177/?preview=stage6`. It seeds a deterministic in-progress task with one displayed, quality-checked turn; hints, answer submission, skip, invalid-question reporting, defer, and abandon controls can be exercised without contacting an AI provider.
 
 For Stage 7 UI acceptance, use `http://127.0.0.1:4177/?preview=stage7`. It seeds one in-progress delayed verification plus retained and decayed history, then rebuilds block and intervention-effect projections without contacting an AI provider.
+
+For a combined Review Coach showcase, use `http://127.0.0.1:4177/?preview=coach`. It renders the dashboard, adaptive training, and delayed verification in a localhost-only preview shell. Its controls use deterministic in-memory behavior and do not mount cloud sync or contact an AI provider.

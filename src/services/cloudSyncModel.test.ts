@@ -149,6 +149,75 @@ describe("cloud sync model", () => {
     });
   });
 
+  it("maps every Stage 1-8 formal coach entity type and no derived projection type", async () => {
+    const formalTypes = [
+      "decision-block",
+      "decision-block-archive",
+      "decision-block-feedback",
+      "feedback-interpretation",
+      "analysis-queue-item",
+      "analysis-batch",
+      "session-blueprint",
+      "adaptive-review-task",
+      "adaptive-quiz-turn",
+      "task-outcome-event",
+      "delayed-verification",
+      "ai-role-config",
+      "legacy-learning-evidence",
+      "legacy-knowledge-point",
+      "legacy-record-kp-link",
+      "legacy-knowledge-relation",
+    ] satisfies CloudSyncEntityType[];
+    const coach = Object.fromEntries([
+      "decisionBlocks", "decisionBlockArchives", "decisionBlockFeedback", "feedbackInterpretations",
+      "analysisQueueItems", "analysisBatches", "sessionBlueprints", "adaptiveReviewTasks",
+      "adaptiveQuizTurns", "taskOutcomeEvents", "delayedVerifications", "aiRoleConfigs",
+      "legacyLearningEvidence", "legacyKnowledgePoints", "legacyRecordKnowledgePointLinks", "legacyKnowledgeRelations",
+    ].map((key, index) => [key, [{ id: `formal-${index}`, createdAt: stamp, updatedAt: stamp }]]));
+
+    const exported = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, reviewCoach: coach as unknown as typeof EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT },
+    });
+    const formalTypeSet = new Set<CloudSyncEntityType>(formalTypes);
+    const exportedTypes = exported.entities
+      .map((entity) => entity.entityType)
+      .filter((type) => formalTypeSet.has(type));
+
+    expect(exportedTypes).toEqual(formalTypes);
+    expect(exported.entities.map((entity) => String(entity.entityType))).not.toContain("decision-block-state");
+    expect(exported.entities.map((entity) => String(entity.entityType))).not.toContain("intervention-effect-summary");
+  });
+
+  it("keeps full prompts and knowledge-podcast audio out of cloud payloads", async () => {
+    const privateSettings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      syncFolderName: "D:/private",
+      ai: {
+        ...structuredClone(DEFAULT_SETTINGS.ai!),
+        presets: [{ ...structuredClone(DEFAULT_SETTINGS.ai!.presets[0]), prompt: "private full prompt" }],
+      },
+    };
+    const exported = await exportCloudSync({
+      ...snapshot,
+      payload: { ...snapshot.payload, settings: privateSettings },
+      assets: [
+        ...snapshot.assets,
+        {
+          ...snapshot.assets[0],
+          id: "podcast-audio",
+          generatedBy: "knowledge-podcast",
+          generatedForPodcastId: "podcast-1",
+        },
+      ],
+    });
+
+    expect(JSON.stringify(exported.entities)).not.toContain("private full prompt");
+    expect(JSON.stringify(exported.entities)).not.toContain("D:/private");
+    expect(exported.entities.some((entity) => entity.key === "asset:podcast-audio")).toBe(false);
+    expect(exported.assetBlobs.size).toBe(1);
+  });
+
   it("retains a full review-coach soft-delete tombstone needed by its archive", async () => {
     const deletedAt = "2026-08-06T00:00:00.000Z";
     const coach = structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
@@ -487,6 +556,17 @@ describe("cloud sync model", () => {
       payload: { id: "record-a", title: "云端记录" },
     };
     expect(preserveLocalChangesForCloudWins([localDelete], [remoteEntity], new Set())).toEqual([]);
+  });
+
+  it("ignores device-local sync folder changes during settings merge", () => {
+    const base = { id: "settings", theme: "system", syncFolderName: "D:/old" };
+    const result = mergeCloudSyncSmallEntity(
+      { entityType: "settings", payload: { ...base, syncFolderName: "D:/desktop" }, deleted: false },
+      { entityType: "settings", payload: { ...base, syncFolderName: "Android/local" }, deleted: false },
+      base,
+    );
+
+    expect(result.conflicts).toEqual([]);
   });
 
   it("converges independent offline formal facts and remains idempotent on duplicate replay", async () => {

@@ -26,7 +26,7 @@
 
 ## v2 开发状态
 
-复习效果驱动的 AI 助教正在 `feature/review-effect-coach-v2` 分支开发，产品与实施边界见 [docs/新的方案.md](docs/新的方案.md)。截至 2026-09-07，阶段 0-8 已完成：schema 19 数据底座、决策块纵向生命周期、记录级复习接入、块级 AI 上下文、块级评论与分析队列、快速评论整理、首页深度分析与任务调度、自适应训练，以及延迟验证与效果学习均已落地。schema 11/16 覆盖升级会在事务内保留日志、FSRS、资源、计时、旧评论和用户确认的旧测验/KnowledgePoint 正式事实；未确认候选和旧 Snapshot/Task 运行表不进入新系统。所有新正式实体、墓碑和决策块正文冲突副本均可备份和同步，Prompt、Provider 原始响应与 API 密钥会在导出边界剥离。下一阶段为阶段 9 的全链路与发布验收。
+复习效果驱动的 AI 驾驶舱已在 `feature/review-effect-coach-v2` 分支完成开发收尾，产品与实施边界见 [docs/新的方案.md](docs/新的方案.md)。截至 2026-09-07，阶段 0-8 功能实现与阶段 9 的确定性浏览器 E2E、Firebase Emulator 验收、Web/Desktop/Android 包构建和 v1 归档构建均已通过。schema 19 覆盖升级会在事务内保留日志、FSRS、资源、计时、旧评论和用户确认的旧测验/KnowledgePoint 正式事实；所有新正式实体、墓碑和决策块正文冲突副本均可备份和同步，Prompt、Provider 原始响应与 API 密钥会在导出边界剥离。功能开发已经完成；正式发布签字前仍需在真实 Desktop/Android 设备完成覆盖升级、前后台和离线恢复，并用受控 Firebase 账号核对实际账单指标。
 
 ## 功能概览
 
@@ -141,7 +141,7 @@ release 构建需要在本机配置签名文件。请不要提交 keystore、`ke
 
 - Web/PWA 数据主要保存在浏览器 IndexedDB 和站点存储中。
 - Android 数据主要保存在 App WebView 存储和本机文件/缓存中。
-- AI API Key 和 OCR Token 只保存在本机，不会进入完整备份。
+- AI API Key、OCR Token、完整 Prompt、Provider 原始响应和知识播客音频只保存在本机，不进入云同步或可移植备份。
 - AI 请求会把必要上下文发送给用户配置的模型供应商。
 - 清除浏览器站点数据、清除 Android 应用数据或卸载 App，可能删除本地库。
 
@@ -189,6 +189,12 @@ npm run dev
 # 运行测试
 npm run test
 
+# 浏览器全链路 E2E（系统 Chrome）
+npm run test:e2e
+
+# 隔离 Firebase Emulator 验收（需要 JDK 21）
+npm run test:firebase
+
 # 构建 Web/PWA
 npm run build
 
@@ -218,8 +224,9 @@ npm run android:build:release
 
 ## 当前限制
 
-- 暂无账号系统和实时云同步。
-- 导入恢复是覆盖式恢复，不做多端冲突合并。
+- Firebase 云同步需要 Google 登录，采用显式触发的逐实体增量协议，并对真实同实体并发修改提供冲突处置，不是实时协同编辑。
+- 首次设备恢复、旧协议迁移或显式冲突恢复仍可能需要全量读取；普通无变化同步会跳过云端锁，超预算读写需要用户确认。
+- 云端复习事件历史目前只增不减；在引入可验证 checkpoint 与事件 tombstone 前不能直接清理。
 - Android 自动备份保留最近 5 个快照，但当前界面不提供选择历史快照回退。
 - AI 看图、长上下文和输出质量取决于模型供应商与 API 兼容性。
 - 单个超大资源文件仍可能受 Android WebView、IndexedDB、Blob 和设备内存限制。

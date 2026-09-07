@@ -12,6 +12,8 @@
     "desktop:build": "npm run desktop:icon && npm run build && electron-builder --win nsis",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:firebase": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-firebase-emulator.ps1",
     "test:watch": "vitest",
     "android:add": "cap add android",
     "android:sync": "npm run build && cap sync android",
@@ -65,6 +67,8 @@
     "ts-fsrs": "^5.4.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/file-saver": "^2.0.7",
@@ -75,6 +79,7 @@
     "electron": "^43.2.0",
     "electron-builder": "26.0.12",
     "fake-indexeddb": "^6.2.5",
+    "firebase-tools": "^15.29.0",
     "jsdom": "^25.0.1",
     "patch-package": "^8.0.0",
     "png-to-ico": "^2.1.0",

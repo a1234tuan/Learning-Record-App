@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { CloudSyncConflict, CloudSyncConflictChoice, CloudSyncReadEstimate } from "./cloudSyncService";
+import type { CloudSyncBudgetChoice, CloudSyncConflict, CloudSyncConflictChoice, CloudSyncReadEstimate, CloudSyncWriteEstimate } from "./cloudSyncService";
 
 export type BusyAction = "sign-in" | "sign-out" | "sync" | "restore" | "resolve" | null;
 
@@ -25,6 +25,8 @@ interface CloudSyncState {
   outcome: SyncOutcome | undefined;
   readBudget: CloudSyncReadEstimate | undefined;
   readBudgetChoice: CloudSyncConflictChoice | undefined;
+  writeBudget: CloudSyncWriteEstimate | undefined;
+  writeBudgetChoice: CloudSyncBudgetChoice | undefined;
 }
 
 /**
@@ -35,7 +37,7 @@ interface CloudSyncState {
  */
 export const CLOUD_SYNC_WATCHDOG_MS = 6 * 60_000;
 
-let state: CloudSyncState = { busy: null, message: "", conflict: undefined, token: 0, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined };
+let state: CloudSyncState = { busy: null, message: "", conflict: undefined, token: 0, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined, writeBudget: undefined, writeBudgetChoice: undefined };
 const listeners = new Set<() => void>();
 let watchdogTimer: number | undefined;
 let backgroundedWhileBusy = false;
@@ -113,7 +115,7 @@ export const cloudSyncStore = {
     if (busy !== null) {
       clearOutcomeTimer();
       backgroundedWhileBusy = typeof document !== "undefined" && document.visibilityState === "hidden";
-      state = { ...state, busy, token: state.token + 1, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined };
+      state = { ...state, busy, token: state.token + 1, outcome: undefined, readBudget: undefined, readBudgetChoice: undefined, writeBudget: undefined, writeBudgetChoice: undefined };
     } else {
       backgroundedWhileBusy = false;
       state = { ...state, busy };
@@ -131,6 +133,8 @@ export const cloudSyncStore = {
   setConflict: (conflict: CloudSyncConflict | undefined) => { state = { ...state, conflict }; notify(); },
   setReadBudget: (estimate: CloudSyncReadEstimate | undefined) => { state = { ...state, readBudget: estimate }; notify(); },
   setReadBudgetChoice: (choice: CloudSyncConflictChoice | undefined) => { state = { ...state, readBudgetChoice: choice }; notify(); },
+  setWriteBudget: (estimate: CloudSyncWriteEstimate | undefined) => { state = { ...state, writeBudget: estimate }; notify(); },
+  setWriteBudgetChoice: (choice: CloudSyncBudgetChoice | undefined) => { state = { ...state, writeBudgetChoice: choice }; notify(); },
   /** Records the final result of a sync/resolve so CloudSyncStatusToast can show it. Success and
    *  no-change auto-dismiss after a few seconds; error and uncertain stay until dismissOutcome(). */
   setOutcome: (status: SyncOutcomeStatus, message: string) => applyOutcome(status, message),

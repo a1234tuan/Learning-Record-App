@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { useState } from "react";
 
 import { getCurrentCloudUser, resolveCloudSyncConflict, synchronizeCloudChanges } from "../services/cloudSyncService";
 import { cloudSyncStore, useCloudSyncStore } from "../services/cloudSyncStore";
@@ -16,11 +17,15 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
  * or the sync panel under 更多 → 云同步).
  */
 export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogProps) => {
-  const { busy, conflict, message, readBudget, readBudgetChoice } = useCloudSyncStore();
+  const { busy, conflict, message, readBudget, readBudgetChoice, writeBudget, writeBudgetChoice } = useCloudSyncStore();
+  const [approvedBudgets, setApprovedBudgets] = useState({ read: false, write: false });
 
   if (!conflict) return null;
 
-  const resolve = async (choice: "local" | "cloud", allowExpensiveRead = false) => {
+  const resolve = async (
+    choice: "local" | "cloud",
+    approvals = { read: false, write: false },
+  ) => {
     const user = getCurrentCloudUser();
     if (!user) return;
     cloudSyncStore.setBusy("resolve");
@@ -30,7 +35,8 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
     cloudSyncStore.setMessage(choice === "local" ? "正在以本机数据更新云端。" : "正在保存本机恢复点并恢复云端数据。");
     try {
       const result = await resolveCloudSyncConflict(user, choice, {
-        allowExpensiveRead,
+        allowExpensiveRead: approvals.read,
+        allowExpensiveWrite: approvals.write,
         onProgress: (event) => {
           if (isCurrentOperation()) cloudSyncStore.setMessage(event.message);
         },
@@ -45,8 +51,16 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
         return;
       }
       if (result.kind === "read-budget") {
+        setApprovedBudgets(approvals);
         cloudSyncStore.setReadBudget(result.estimate);
         cloudSyncStore.setReadBudgetChoice(result.choice);
+        cloudSyncStore.setMessage(result.message);
+        return;
+      }
+      if (result.kind === "write-budget") {
+        setApprovedBudgets(approvals);
+        cloudSyncStore.setWriteBudget(result.estimate);
+        cloudSyncStore.setWriteBudgetChoice(result.choice);
         cloudSyncStore.setMessage(result.message);
         return;
       }
@@ -56,6 +70,7 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
         return;
       }
       cloudSyncStore.setConflict(undefined);
+      setApprovedBudgets({ read: false, write: false });
       if (choice === "cloud") {
         await onRestored();
         cloudSyncStore.setMessage("正在上传本机剩余更改。");
@@ -79,6 +94,11 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
           cloudSyncStore.setConflict({ reason: "concurrent-changes", localChanges: 0, remoteChanges: 0, cloudRevision: 0 });
           cloudSyncStore.setReadBudget(finalResult.estimate);
           cloudSyncStore.setReadBudgetChoice(finalResult.choice);
+          cloudSyncStore.setMessage(finalResult.message);
+        } else if (finalResult.kind === "write-budget") {
+          cloudSyncStore.setConflict({ reason: "concurrent-changes", localChanges: 0, remoteChanges: 0, cloudRevision: 0 });
+          cloudSyncStore.setWriteBudget(finalResult.estimate);
+          cloudSyncStore.setWriteBudgetChoice(finalResult.choice);
           cloudSyncStore.setMessage(finalResult.message);
         } else {
           cloudSyncStore.setConflict(finalResult.conflict);
@@ -105,10 +125,60 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
     }
   };
 
+  const continueWriteBudget = async () => {
+    const user = getCurrentCloudUser();
+    if (!user) return;
+    if (writeBudgetChoice === "sync") {
+      cloudSyncStore.setBusy("sync");
+      const token = cloudSyncStore.currentToken();
+      try {
+        const result = await synchronizeCloudChanges(user, {
+          allowExpensiveWrite: true,
+          onProgress: (event) => {
+            if (cloudSyncStore.isCurrent(token)) cloudSyncStore.setMessage(event.message);
+          },
+        });
+        if (!cloudSyncStore.isCurrent(token)) return;
+        if (result.kind === "synced") {
+          cloudSyncStore.setConflict(undefined);
+          if (result.restored) await onRestored();
+          const noChange = result.uploaded === 0 && result.downloaded === 0;
+          cloudSyncStore.setOutcome(
+            noChange ? "no-change" : "success",
+            noChange ? "同步完成：本机和云端均无新变化。" : `同步完成：上传 ${result.uploaded} 项，下载 ${result.downloaded} 项。`,
+          );
+        } else if (result.kind === "uncertain") {
+          cloudSyncStore.setConflict(undefined);
+          cloudSyncStore.setOutcome("uncertain", result.message);
+        } else if (result.kind === "conflict") {
+          cloudSyncStore.setConflict(result.conflict);
+          cloudSyncStore.setMessage("云端状态已变化，请重新选择同步策略。");
+        } else if (result.kind === "read-budget") {
+          cloudSyncStore.setReadBudget(result.estimate);
+          cloudSyncStore.setReadBudgetChoice(result.choice);
+          cloudSyncStore.setMessage(result.message);
+        } else {
+          cloudSyncStore.setWriteBudget(result.estimate);
+          cloudSyncStore.setWriteBudgetChoice(result.choice);
+          cloudSyncStore.setMessage(result.message);
+        }
+      } catch (error) {
+        cloudSyncStore.setOutcome("error", errorMessage(error));
+      } finally {
+        cloudSyncStore.finishBusy(token);
+      }
+      return;
+    }
+    await resolve(writeBudgetChoice ?? "local", { ...approvedBudgets, write: true });
+  };
+
   const cancel = () => {
     cloudSyncStore.setConflict(undefined);
     cloudSyncStore.setReadBudget(undefined);
     cloudSyncStore.setReadBudgetChoice(undefined);
+    cloudSyncStore.setWriteBudget(undefined);
+    cloudSyncStore.setWriteBudgetChoice(undefined);
+    setApprovedBudgets({ read: false, write: false });
     cloudSyncStore.setOutcome("no-change", "已取消，本机和云端数据均未修改。");
   };
 
@@ -125,7 +195,9 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
           云同步冲突
         </p>
         <h2 id="cloud-sync-conflict-title">
-          {readBudget
+          {writeBudget
+            ? "需要确认高写入量同步"
+            : readBudget
             ? "需要确认高读取量恢复"
             : conflict.reason === "legacy-snapshot"
             ? "检测到旧版完整云端备份"
@@ -134,7 +206,9 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
               : "检测到双端并发编辑"}
         </h2>
         <p>
-          {readBudget
+          {writeBudget
+            ? "为避免意外消耗 Firebase 写入和 Storage 额度，同步已暂停。你可以取消，或确认继续。"
+            : readBudget
             ? "为避免意外消耗 Firebase 读取额度，恢复操作已暂停。你可以取消，或确认继续。"
             : conflict.reason === "local-changed-during-sync"
             ? "本次同步未覆盖本机内容，请重新检查更改后再同步。"
@@ -169,20 +243,36 @@ export const CloudSyncConflictDialog = ({ onRestored }: CloudSyncConflictDialogP
             ) : null}
           </div>
         ) : null}
+        {writeBudget ? (
+          <div className="cloud-sync-read-budget" role="status">
+            <strong>高成本写入确认</strong>
+            <p>
+              预计 Firestore 写入 {writeBudget.estimatedWrites.toLocaleString()} 次：实体 {writeBudget.entityWrites.toLocaleString()}，复习事件 {writeBudget.reviewEventWrites.toLocaleString()}，协议开销约 {writeBudget.overheadWrites}。
+            </p>
+            <p>
+              可能上传 Storage {writeBudget.storageObjectCount.toLocaleString()} 个对象 / {(writeBudget.storageBytes / (1024 * 1024)).toFixed(1)} MiB；实际值可能因内容哈希去重更低。
+            </p>
+          </div>
+        ) : null}
         <div className="cloud-sync-conflict-actions">
-          {!readBudget ? (
+          {!readBudget && !writeBudget ? (
             <>
-              <button type="button" className="primary-button" onClick={() => void resolve("local")} disabled={busy !== null}>
+              <button type="button" className="primary-button" onClick={() => { setApprovedBudgets({ read: false, write: false }); void resolve("local"); }} disabled={busy !== null}>
                 以本机为准
               </button>
-              <button type="button" className="secondary-button" onClick={() => void resolve("cloud")} disabled={busy !== null}>
+              <button type="button" className="secondary-button" onClick={() => { setApprovedBudgets({ read: false, write: false }); void resolve("cloud"); }} disabled={busy !== null}>
                 以云端为准
               </button>
             </>
           ) : null}
           {readBudget ? (
-            <button type="button" className="primary-button" onClick={() => void resolve(readBudgetChoice ?? "cloud", true)} disabled={busy !== null}>
+            <button type="button" className="primary-button" onClick={() => void resolve(readBudgetChoice ?? "cloud", { ...approvedBudgets, read: true })} disabled={busy !== null}>
               {readBudgetChoice === "local" ? "继续高成本以本机为准" : "继续高成本以云端为准"}
+            </button>
+          ) : null}
+          {writeBudget ? (
+            <button type="button" className="primary-button" onClick={() => void continueWriteBudget()} disabled={busy !== null}>
+              继续高成本同步
             </button>
           ) : null}
           <button type="button" className="secondary-button" onClick={cancel} disabled={busy !== null}>

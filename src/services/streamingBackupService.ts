@@ -14,6 +14,7 @@ import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
 import type { RecordBlock } from "../types";
 import { entryToMarkdown } from "../lib/markdown";
+import { sanitizeStreamableSnapshotForExport } from "./exportPrivacy";
 
 const ENTRY_CHUNK_BYTES = 768 * 1024;
 
@@ -48,31 +49,32 @@ export const writeNativeStreamableBackupSnapshot = async (
     throw new Error("原生流式备份只在 Android App 内可用。");
   }
 
+  const portableSnapshot = sanitizeStreamableSnapshotForExport(snapshot);
   options.onProgress?.({ stage: "preparing", message: "正在准备备份数据。" });
   const session = await NativeZipArchive.beginExport({
     destination,
-    fileName: destination === "auto-latest" ? "study-journal-latest.zip" : fileNameForSnapshot(snapshot),
+    fileName: destination === "auto-latest" ? "study-journal-latest.zip" : fileNameForSnapshot(portableSnapshot),
     mimeType: "application/zip",
   });
 
   try {
     const payload = {
-      ...snapshot.payload,
-      blocks: snapshot.payload.blocks.map((block) =>
+      ...portableSnapshot.payload,
+      blocks: portableSnapshot.payload.blocks.map((block) =>
         block.type === "record" ? { ...block, mistakeRefs: [] } : block,
       ),
       mistakes: [],
       reviews: [],
-      recordDrafts: snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? [],
+      recordDrafts: portableSnapshot.payload.recordDrafts ?? portableSnapshot.recordDrafts ?? [],
     };
     await writeTextEntry(session.sessionId, "manifest.json", JSON.stringify(payload.manifest, null, 2));
     await writeTextEntry(
       session.sessionId,
       "data.json",
-      JSON.stringify({ ...payload, assets: snapshot.assets }, null, 2),
+      JSON.stringify({ ...payload, assets: portableSnapshot.assets }, null, 2),
     );
 
-    const markdownAssets = snapshot.assets.map((meta) => metaToAsset(meta, new Blob()));
+    const markdownAssets = portableSnapshot.assets.map((meta) => metaToAsset(meta, new Blob()));
     for (const entry of payload.entries) {
       const blocks = payload.blocks.filter((block) => block.date === entry.date);
       await writeTextEntry(
@@ -82,12 +84,12 @@ export const writeNativeStreamableBackupSnapshot = async (
       );
     }
 
-    for (const [index, meta] of snapshot.assets.entries()) {
+    for (const [index, meta] of portableSnapshot.assets.entries()) {
       options.onProgress?.({
         stage: "asset",
-        message: `正在写入资源 ${index + 1}/${snapshot.assets.length}。`,
+        message: `正在写入资源 ${index + 1}/${portableSnapshot.assets.length}。`,
         current: index + 1,
-        total: snapshot.assets.length,
+        total: portableSnapshot.assets.length,
       });
       const asset = await getAsset(meta.id);
       if (!asset) {

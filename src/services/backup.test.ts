@@ -126,4 +126,43 @@ describe("backup import", () => {
     expect(restored.payload.reviewCoach).not.toHaveProperty("decisionBlockStates");
     expect(restored.payload.reviewCoach).not.toHaveProperty("interventionEffectSummaries");
   });
+
+  it("strips prompts, raw provider data, local paths, and podcast audio at the zip boundary", async () => {
+    const coach = completeCoachTestSnapshot();
+    Object.assign(coach.feedbackInterpretations[0], { systemPrompt: "private system prompt", rawResponse: "private raw response" });
+    const privatePayload: BackupPayload = {
+      ...payload([]),
+      settings: {
+        ...payload([]).settings,
+        syncFolderName: "D:/private-backups",
+        ai: {
+          currentProviderId: "provider",
+          providers: [{ id: "provider", providerName: "test", baseUrl: "https://example.invalid", model: "test", temperature: 0, maxTokens: 100 }],
+          presets: [{ id: "preset", title: "private", prompt: "private full prompt", order: 0, createdAt: stamp, updatedAt: stamp }],
+        },
+      },
+      reviewCoach: coach,
+    };
+    const podcastAsset = {
+      id: "podcast-audio",
+      createdAt: stamp,
+      updatedAt: stamp,
+      fileName: "podcast.mp3",
+      mimeType: "audio/mpeg",
+      size: 5,
+      kind: "audio" as const,
+      generatedBy: "knowledge-podcast" as const,
+      data: new Blob(["audio"]),
+    };
+    const zipBlob = await snapshotToZip({ payload: privatePayload, assets: [podcastAsset] });
+    const zip = await JSZip.loadAsync(zipBlob);
+    const raw = await zip.file("data.json")!.async("string");
+
+    expect(raw).not.toContain("private full prompt");
+    expect(raw).not.toContain("private system prompt");
+    expect(raw).not.toContain("private raw response");
+    expect(raw).not.toContain("D:/private-backups");
+    expect(raw).not.toContain("podcast-audio");
+    expect(zip.file(/podcast\.mp3$/)).toEqual([]);
+  });
 });

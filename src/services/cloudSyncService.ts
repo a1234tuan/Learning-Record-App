@@ -73,6 +73,9 @@ const LOCK_DURATION_MS = 30 * 60 * 1000;
 const LOCK_RENEW_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_STALE_AFTER_MS = LOCK_RENEW_INTERVAL_MS * 2;
 const SNAPSHOT_LIMIT = 3;
+const EXPENSIVE_WRITE_THRESHOLD = 5_000;
+const EXPENSIVE_WRITE_STORAGE_OBJECTS = 500;
+const EXPENSIVE_WRITE_STORAGE_BYTES = 100 * 1024 * 1024;
 const DESKTOP_AUTH_TIMEOUT_MS = 90_000;
 const LEGACY_SNAPSHOT_FILE = "snapshots/current.zip";
 const LEGACY_METADATA_DOCUMENT = "current";
@@ -184,10 +187,23 @@ export interface CloudSyncReadEstimate {
   storageKnown: boolean;
 }
 
+export interface CloudSyncWriteEstimate {
+  estimatedWrites: number;
+  entityWrites: number;
+  reviewEventWrites: number;
+  overheadWrites: number;
+  /** Upper bound before content-addressed Storage existence checks. */
+  storageObjectCount: number;
+  storageBytes: number;
+}
+
+export type CloudSyncBudgetChoice = CloudSyncConflictChoice | "sync";
+
 export type CloudSyncResult =
   | { kind: "synced"; uploaded: number; downloaded: number; revision: number; pending: number; restored?: boolean }
   | { kind: "conflict"; conflict: CloudSyncConflict }
   | { kind: "read-budget"; estimate: CloudSyncReadEstimate; message: string; choice: CloudSyncConflictChoice }
+  | { kind: "write-budget"; estimate: CloudSyncWriteEstimate; message: string; choice: CloudSyncBudgetChoice }
   | { kind: "uncertain"; operationId: string; revision: number; message: string };
 
 export interface CloudSyncOptions {
@@ -195,6 +211,8 @@ export interface CloudSyncOptions {
   signal?: AbortSignal;
   /** Allows a user-confirmed recovery that may read a large portion of Firestore. */
   allowExpensiveRead?: boolean;
+  /** Allows a user-confirmed publish that may consume a large portion of the daily write quota. */
+  allowExpensiveWrite?: boolean;
 }
 
 export interface CloudDownloadOptions {
@@ -597,7 +615,7 @@ const matchesLedger = async (entity: CloudSyncEntity, ledger: CloudSyncLedgerRec
   return false;
 };
 
-const localChanges = async (exported: CloudSyncExport, ledger: CloudSyncLedgerRecord[]) => {
+export const deriveLocalCloudChanges = async (exported: CloudSyncExport, ledger: CloudSyncLedgerRecord[]) => {
   const byKey = new Map(ledger.map((item) => [item.id, item]));
   const entities = (await Promise.all(exported.entities.map(async (item) => (
     await matchesLedger(item, byKey.get(item.key)) ? undefined : item
@@ -832,6 +850,66 @@ const readBudgetMessage = (estimate: CloudSyncReadEstimate) => {
     ? "，可能超过免费额度或产生额外费用"
     : "";
   return `本次${estimate.mode === "full" ? "全量" : "增量"}恢复预计 ${firestore}；${storage}${risk}。`;
+};
+
+export const canSkipCloudSyncLock = (
+  legacySnapshotAvailable: boolean,
+  remoteExists: boolean,
+  remoteHeadRevision: number,
+  lastPulledRevision: number,
+  changed: { entities: unknown[]; events: unknown[] },
+) => !legacySnapshotAvailable
+  && (!remoteExists || remoteHeadRevision <= lastPulledRevision)
+  && changed.entities.length === 0
+  && changed.events.length === 0;
+
+export const cloudSyncWriteEstimateFor = async (
+  exported: CloudSyncExport,
+  changed: { entities: CloudSyncEntity[]; events: CloudReviewEvent[] },
+): Promise<CloudSyncWriteEstimate> => {
+  const storageObjects = new Map<string, number>();
+  for (const entity of changed.entities) {
+    if (entity.deleted) continue;
+    if (entity.entityType === "asset" && typeof entity.payload.contentHash === "string") {
+      const blob = exported.assetBlobs.get(entity.payload.contentHash);
+      if (blob) storageObjects.set(`asset:${entity.payload.contentHash}`, blob.size);
+    }
+    const document = await createCloudPayloadDocument(entity);
+    if (document) storageObjects.set(`document:${document.hash}`, document.byteSize);
+  }
+  const entityWrites = changed.entities.length;
+  const reviewEventWrites = changed.events.length;
+  const overheadWrites = 8;
+  return {
+    estimatedWrites: entityWrites + reviewEventWrites + overheadWrites,
+    entityWrites,
+    reviewEventWrites,
+    overheadWrites,
+    storageObjectCount: storageObjects.size,
+    storageBytes: [...storageObjects.values()].reduce((total, bytes) => total + bytes, 0),
+  };
+};
+
+export const cloudSyncWriteRequiresConfirmation = (estimate: CloudSyncWriteEstimate, allowExpensiveWrite = false) =>
+  !allowExpensiveWrite && (
+    estimate.estimatedWrites >= EXPENSIVE_WRITE_THRESHOLD
+    || estimate.storageObjectCount >= EXPENSIVE_WRITE_STORAGE_OBJECTS
+    || estimate.storageBytes >= EXPENSIVE_WRITE_STORAGE_BYTES
+  );
+
+const writeBudgetMessage = (estimate: CloudSyncWriteEstimate) =>
+  `预计写入 Firestore ${estimate.estimatedWrites.toLocaleString()} 次（实体 ${estimate.entityWrites.toLocaleString()}、复习事件 ${estimate.reviewEventWrites.toLocaleString()}、协议开销约 ${estimate.overheadWrites}），并可能上传 Storage ${estimate.storageObjectCount.toLocaleString()} 个对象 / ${(estimate.storageBytes / (1024 * 1024)).toFixed(1)} MiB。为避免意外消耗免费额度，已暂停同步。`;
+
+const writeBudgetResultFor = async (
+  exported: CloudSyncExport,
+  changed: { entities: CloudSyncEntity[]; events: CloudReviewEvent[] },
+  options: CloudSyncOptions,
+  choice: CloudSyncBudgetChoice,
+) => {
+  const estimate = await cloudSyncWriteEstimateFor(exported, changed);
+  return cloudSyncWriteRequiresConfirmation(estimate, options.allowExpensiveWrite)
+    ? { kind: "write-budget" as const, estimate, message: writeBudgetMessage(estimate), choice }
+    : undefined;
 };
 
 const buildIncrementalRemoteDataset = async (
@@ -1940,7 +2018,9 @@ const makeLocalSnapshot = async (
   return makeRemoteSnapshot(user.uid, label, entities, events, revision, options, beforeBatch);
 };
 
-const replaceCloudWithLocal = async (user: User, state: CloudSyncStateRecord, options: CloudSyncOptions) => {
+const replaceCloudWithLocal = async (user: User, state: CloudSyncStateRecord, options: CloudSyncOptions): Promise<
+  { revision: number; uploaded: number } | { writeBudget: CloudSyncWriteEstimate }
+> => {
   const exported = await exportCloudSync(await storage.createCloudSyncSnapshot());
   const operationId = newId();
   const lock = await acquireLock(user.uid, state.deviceId, operationId);
@@ -1964,13 +2044,28 @@ const replaceCloudWithLocal = async (user: User, state: CloudSyncStateRecord, op
     });
     const remote = await getRemoteState(user.uid);
     const allRemote = await getAllRemote(user.uid, remote.state);
-    await makeRemoteSnapshot(user.uid, "冲突前的云端版本", allRemote.entities, allRemote.reviewEvents, remote.state.headRevision, options, lease.assert);
-    await lease.assert();
     const localKeys = new Set(exported.entities.map((entity) => entity.key));
     const tombstones = allRemote.entities
       .filter((entity) => !localKeys.has(entity.key) && !entity.deleted && entity.entityType !== "review-state" && entity.entityType !== "review-day-stat")
       .map((entity) => ({ ...entity, contentHash: `deleted:${entity.contentHash}`, payload: {}, deleted: true }));
-    const result = await publish(user, state, exported, { entities: [...exported.entities, ...tombstones], events: exported.reviewEvents }, options, lock);
+    const changes = { entities: [...exported.entities, ...tombstones], events: exported.reviewEvents };
+    const writeBudget = await writeBudgetResultFor(exported, changes, options, "local");
+    const snapshotWrites = allRemote.entities.length + allRemote.reviewEvents.length + 2;
+    const totalEstimate = writeBudget?.estimate ?? await cloudSyncWriteEstimateFor(exported, changes);
+    const combinedEstimate = {
+      ...totalEstimate,
+      estimatedWrites: totalEstimate.estimatedWrites + snapshotWrites,
+      overheadWrites: totalEstimate.overheadWrites + snapshotWrites,
+    };
+    if (cloudSyncWriteRequiresConfirmation(combinedEstimate, options.allowExpensiveWrite)) {
+      await releaseLockSafely(user.uid, lock, false);
+      lockReleased = true;
+      await updateOperation(operationId, { status: "failed", phase: "releasing" });
+      return { writeBudget: combinedEstimate };
+    }
+    await makeRemoteSnapshot(user.uid, "冲突前的云端版本", allRemote.entities, allRemote.reviewEvents, remote.state.headRevision, options, lease.assert);
+    await lease.assert();
+    const result = await publish(user, state, exported, changes, options, lock);
     lockReleased = true;
     await updateOperation(operationId, { status: "succeeded", phase: "releasing" });
     return result;
@@ -2089,7 +2184,7 @@ export const getCloudSyncStatus = async (user: User): Promise<CloudSyncStatus> =
   const bootstrapOnly = ledger.length === 0 && isBootstrapOnlyCloudData(exported);
   const changed = remote.exists && remote.state.headRevision > 0 && bootstrapOnly
     ? { entities: [] as CloudSyncEntity[], events: [] as CloudReviewEvent[] }
-    : await localChanges(exported, migratedLedger);
+    : await deriveLocalCloudChanges(exported, migratedLedger);
   const [remoteEntities, remoteEvents] = remote.exists && remote.state.headRevision > local.lastPulledRevision
     ? await Promise.all([
       estimateCount(entitiesRef(user.uid), local.lastPulledRevision, remote.state.headRevision),
@@ -2334,6 +2429,16 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
   const initialExport = await exportCloudSync(initialSnapshot);
   const migratedLedger = await migrateLegacyLedgers(initialExport, ledger);
   const firstEmptyDevice = ledger.length === 0 && isBootstrapOnlyCloudData(initialExport);
+  const initialChanges = await deriveLocalCloudChanges(initialExport, migratedLedger);
+  const remoteAlreadySeen = !initialRemote.exists || initialRemote.state.headRevision <= state.lastPulledRevision;
+  if (canSkipCloudSyncLock(Boolean(legacy), initialRemote.exists, initialRemote.state.headRevision, state.lastPulledRevision, initialChanges)) {
+    progress(options, "done", "本机和云端均无新变化。");
+    return { kind: "synced", uploaded: 0, downloaded: 0, revision: state.lastPulledRevision, pending: 0 };
+  }
+  if (remoteAlreadySeen) {
+    const writeBudget = await writeBudgetResultFor(initialExport, initialChanges, options, "sync");
+    if (writeBudget) return writeBudget;
+  }
   let lock: AcquiredLock | undefined;
   let lockReleased = false;
   let restored = false;
@@ -2397,7 +2502,7 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
       return { kind: "synced", uploaded: 0, downloaded, revision: remote.state.headRevision, pending: 0, restored: true };
     }
     const remoteChanges = remote.exists ? await getRemoteChanges(user.uid, state.lastPulledRevision, remote.state) : { entities: [], reviewEvents: [] };
-    const changed = await localChanges(restored ? await exportCloudSync(await storage.createCloudSyncSnapshot()) : initialExport, migratedLedger);
+    const changed = await deriveLocalCloudChanges(restored ? await exportCloudSync(await storage.createCloudSyncSnapshot()) : initialExport, migratedLedger);
     const mergedRemoteChanges = await mergeRemoteFieldChanges(initialExport, changed, remoteChanges, migratedLedger);
     const normalLocal = (firstEmptyDevice ? [] : changed.entities)
       .filter((entity) => !NON_CONFLICTING_ENTITY_TYPES.has(entity.entityType));
@@ -2434,7 +2539,14 @@ export const synchronizeCloudChanges = async (user: User, options: CloudSyncOpti
     const skipReExport = downloaded === 0 && !restored;
     const afterPullState = skipReExport ? state : await localState(user.uid);
     const afterPullExport = skipReExport ? initialExport : await exportCloudSync(await storage.createCloudSyncSnapshot());
-    const afterPullChanges = skipReExport ? changed : await localChanges(afterPullExport, await ledgerFor());
+    const afterPullChanges = skipReExport ? changed : await deriveLocalCloudChanges(afterPullExport, await ledgerFor());
+    const writeBudget = await writeBudgetResultFor(afterPullExport, afterPullChanges, options, "sync");
+    if (writeBudget) {
+      await releaseLock(user.uid, state.deviceId, lock.operationId, lock.revision, false);
+      await updateOperation(operationId, { status: "failed", phase: "releasing" });
+      lockReleased = true;
+      return writeBudget;
+    }
     const expected = expectedValues(afterPullChanges.entities, afterPullChanges.events);
     await updateOperation(operationId, { expectedEntities: expected.expectedEntities, expectedEvents: expected.expectedEvents, phase: "uploading" });
     const published = await publish(user, afterPullState, afterPullExport, afterPullChanges, options, lock);
@@ -2498,7 +2610,7 @@ export const resolveCloudSyncConflict = async (
         }
       }
     }
-    let result: { revision: number; uploaded: number };
+    let result: { revision: number; uploaded: number } | { writeBudget: CloudSyncWriteEstimate };
     try {
       result = await replaceCloudWithLocal(user, state, options);
     } catch (error) {
@@ -2507,12 +2619,20 @@ export const resolveCloudSyncConflict = async (
       }
       throw error;
     }
+    if ("writeBudget" in result) {
+      return { kind: "write-budget", estimate: result.writeBudget, message: writeBudgetMessage(result.writeBudget), choice };
+    }
     progress(options, "done", "已以本机数据更新云端。");
     return { kind: "synced", uploaded: result.uploaded, downloaded: 0, revision: result.revision, pending: 0 };
   }
   progress(options, "snapshot", "正在导出本机数据准备恢复点。");
   const initialEpoch = await storage.getCloudSyncMutationEpoch();
   const localExport = await exportCloudSync(await storage.createCloudSyncSnapshot());
+  const localRecoveryBudget = await writeBudgetResultFor(localExport, {
+    entities: localExport.entities,
+    events: localExport.reviewEvents,
+  }, options, choice);
+  if (localRecoveryBudget) return localRecoveryBudget;
   const ledger = await ledgerFor();
   let remote = await getRemoteState(user.uid);
   if (remote.exists && remote.state.headRevision > 0) {
@@ -2564,11 +2684,11 @@ export const resolveCloudSyncConflict = async (
         ? await buildIncrementalRemoteDataset(user.uid, state, remote.state, localExport, ledger)
         : await buildFullRemoteDataset(user.uid, state, remote.state);
       const remoteChanges = dataset.changed;
-      const fieldMerged = await mergeRemoteFieldChanges(localExport, await localChanges(localExport, ledger), remoteChanges, ledger);
+      const fieldMerged = await mergeRemoteFieldChanges(localExport, await deriveLocalCloudChanges(localExport, ledger), remoteChanges, ledger);
       const remoteChangedKeys = new Set(remoteChanges.entities.map((entity) => entity.key));
       const remoteChangedEvents = new Set(remoteChanges.reviewEvents.map((event) => event.id));
       const fieldMergedByKey = new Map(fieldMerged.entities.map((entity) => [entity.key, entity]));
-      const changed = await localChanges(localExport, ledger);
+      const changed = await deriveLocalCloudChanges(localExport, ledger);
       const preservedLocal = preserveLocalChangesForCloudWins(changed.entities, dataset.entities, remoteChangedKeys);
       const cloudEntitiesByKey = new Map<string, CloudSyncEntity>(dataset.entities.map((entity) => [entity.key, entity]));
       fieldMergedByKey.forEach((entity, key) => cloudEntitiesByKey.set(key, entity));
@@ -2661,10 +2781,18 @@ export const resolveCloudSyncConflict = async (
     }
     const imported = await exportCloudSync(await storage.createCloudSyncSnapshot());
     await resetLedgers(state);
-    const published = await publish(user, { ...state, lastPulledRevision: 0, lastReviewEventRevision: 0 }, imported, {
+    const importedChanges = {
       entities: imported.entities,
       events: imported.reviewEvents,
-    }, options, lock);
+    };
+    const writeBudget = await writeBudgetResultFor(imported, importedChanges, options, choice);
+    if (writeBudget) {
+      await releaseLockSafely(user.uid, lock, false);
+      lockReleased = true;
+      await updateOperation(operationId, { status: "failed", phase: "releasing" });
+      return writeBudget;
+    }
+    const published = await publish(user, { ...state, lastPulledRevision: 0, lastReviewEventRevision: 0 }, imported, importedChanges, options, lock);
     lockReleased = true;
     progress(options, "done", "已迁移旧版云端备份到增量同步。");
     return { kind: "synced", uploaded: published.uploaded, downloaded: 1, revision: published.revision, pending: 0, restored: true };

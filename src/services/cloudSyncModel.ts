@@ -39,6 +39,7 @@ import { DEFAULT_SETTINGS, DEFAULT_TAGS } from "../db/defaults";
 import { nowISO } from "../lib/date";
 import { sha256 as javascriptSha256 } from "@noble/hashes/sha256";
 import { extractDecisionBlocks } from "../features/reviewCoach/decisionBlockContent";
+import { sanitizeSettingsForExport, stripPrivateExportFields } from "./exportPrivacy";
 
 export type CloudHashAlgorithm = "sha256" | "fnv1a";
 
@@ -90,7 +91,8 @@ export const isBootstrapOnlyCloudData = (exported: CloudSyncExport): boolean => 
   if (exported.entities.some((entity) => !["settings", "tag"].includes(entity.entityType))) return false;
 
   const normalizeSettings = (payload: Record<string, unknown>) => {
-    const { schemaVersion: _schemaVersion, lastBackupAt: _lastBackupAt, syncFolderName: _syncFolderName, ...rest } = payload;
+    const sanitized = sanitizeSettingsForExport(payload as unknown as AppSettings) as unknown as Record<string, unknown>;
+    const { schemaVersion: _schemaVersion, lastBackupAt: _lastBackupAt, syncFolderName: _syncFolderName, ...rest } = sanitized;
     return rest;
   };
   return stableJson(normalizeSettings(settings[0].payload)) === stableJson(normalizeSettings(DEFAULT_SETTINGS as unknown as Record<string, unknown>));
@@ -317,20 +319,8 @@ const mapEntities = async <T extends { id: string; deletedAt?: string }>(
   values: T[],
 ): Promise<CloudSyncEntity[]> => Promise.all(values.map((value) => entity(entityType, value)));
 
-const PRIVATE_COACH_SYNC_KEYS = new Set([
-  "apikey", "authorization", "prompt", "providerresponse", "rawresponse", "responsebody", "secret", "systemprompt",
-]);
-
-const stripPrivateCoachSyncFields = <T>(value: T): T => {
-  if (Array.isArray(value)) return value.map(stripPrivateCoachSyncFields) as T;
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !PRIVATE_COACH_SYNC_KEYS.has(key.toLowerCase()))
-    .map(([key, item]) => [key, stripPrivateCoachSyncFields(item)])) as T;
-};
-
 export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudSyncExport> => {
-  const coach = stripPrivateCoachSyncFields(snapshot.payload.reviewCoach ?? EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
+  const coach = stripPrivateExportFields(snapshot.payload.reviewCoach ?? EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
   const ordinary = await Promise.all([
     mapEntities("entry", snapshot.payload.entries),
     mapEntities("block", snapshot.payload.blocks),
@@ -357,10 +347,10 @@ export const exportCloudSync = async (snapshot: StorageSnapshot): Promise<CloudS
     mapEntities("legacy-record-kp-link", coach.legacyRecordKnowledgePointLinks),
     mapEntities("legacy-knowledge-relation", coach.legacyKnowledgeRelations),
   ]);
-  const settings = await entity("settings", snapshot.payload.settings);
+  const settings = await entity("settings", sanitizeSettingsForExport(snapshot.payload.settings));
   const assetBlobs = new Map<string, Blob>();
   const assets = await Promise.all(
-    snapshot.assets.map(async (asset) => {
+    snapshot.assets.filter((asset) => asset.generatedBy !== "knowledge-podcast").map(async (asset) => {
       const { data, ...meta } = asset;
       const assetHash = await hashBlob(data);
       assetBlobs.set(assetHash, data);
@@ -577,7 +567,7 @@ export const mergeCloudSyncSmallEntity = (
 
   const localDeleted = Boolean(local.deleted);
   const remoteDeleted = Boolean(remote.deleted);
-  const ignored = new Set(local.entityType === "settings" ? ["updatedAt", "lastBackupAt"] : ["updatedAt"]);
+  const ignored = new Set(local.entityType === "settings" ? ["updatedAt", "lastBackupAt", "syncFolderName"] : ["updatedAt"]);
   const allowed = local.entityType === "template" ? new Set(["title", "contentHtml"]) : undefined;
   const keys = new Set([
     ...Object.keys(basePayload),

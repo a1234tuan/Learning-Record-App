@@ -6,6 +6,7 @@ import { EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT } from "../features/reviewCoach/doma
 import { entryToMarkdown } from "../lib/markdown";
 import { migrateBlocksToRecords } from "../lib/recordMigration";
 import { ensureSettingsSubjects } from "../lib/subjects";
+import { sanitizeSettingsForExport, stripPrivateExportFields } from "./exportPrivacy";
 
 const blobToFile = (blob: Blob, fileName: string, mimeType: string): File =>
   new File([blob], fileName, { type: mimeType });
@@ -18,8 +19,11 @@ const serializeAssetMeta = (asset: Asset) => {
 export const snapshotToZip = async (snapshot: StorageSnapshot, options: ExportOptions = {}): Promise<Blob> => {
   const zip = new JSZip();
   options.onProgress?.({ stage: "zipping", message: "正在生成完整备份 zip。" });
+  const portableAssets = snapshot.assets.filter((asset) => asset.generatedBy !== "knowledge-podcast");
   const payload = {
     ...snapshot.payload,
+    settings: sanitizeSettingsForExport(snapshot.payload.settings),
+    reviewCoach: stripPrivateExportFields(snapshot.payload.reviewCoach),
     blocks: snapshot.payload.blocks.map((block) =>
       block.type === "record" ? { ...block, mistakeRefs: [] } : block,
     ),
@@ -30,6 +34,7 @@ export const snapshotToZip = async (snapshot: StorageSnapshot, options: ExportOp
       counts: {
         ...snapshot.payload.manifest.counts,
         mistakes: 0,
+        assets: portableAssets.length,
         reviews: 0,
       },
     },
@@ -42,7 +47,7 @@ export const snapshotToZip = async (snapshot: StorageSnapshot, options: ExportOp
       {
         ...payload,
         recordDrafts: snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? [],
-        assets: snapshot.assets.map(serializeAssetMeta),
+        assets: portableAssets.map(serializeAssetMeta),
       },
       null,
       2,
@@ -52,11 +57,11 @@ export const snapshotToZip = async (snapshot: StorageSnapshot, options: ExportOp
   const entriesFolder = zip.folder("entries");
   for (const entry of payload.entries) {
     const blocks = payload.blocks.filter((block) => block.date === entry.date);
-    entriesFolder?.file(`${entry.date}.md`, entryToMarkdown(entry, blocks, snapshot.assets));
+    entriesFolder?.file(`${entry.date}.md`, entryToMarkdown(entry, blocks, portableAssets));
   }
 
   const assetsFolder = zip.folder("assets");
-  for (const asset of snapshot.assets) {
+  for (const asset of portableAssets) {
     assetsFolder?.file(`${asset.id}-${asset.fileName}`, asset.data);
   }
 

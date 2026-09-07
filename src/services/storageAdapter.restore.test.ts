@@ -396,6 +396,28 @@ describe("DexieStorageAdapter cloud restore", () => {
     expect(await fakeDb.assets.get("podcast-audio")).toEqual(podcastAudioAsset);
   });
 
+  it("reads local-only podcasts inside the restore transaction so a concurrent save is retained", async () => {
+    vi.resetModules();
+    const newerPodcast = { ...podcastWithAudio, title: "同步期间新标题", updatedAt: "2026-09-07T09:00:00.000Z" };
+    const fakeDb = createRestoreDb([podcastWithAudio]);
+    let injected = false;
+    fakeDb.transaction = async (_mode: string, ...args: unknown[]) => {
+      const callback = args.at(-1) as () => Promise<unknown>;
+      if (!injected) {
+        injected = true;
+        await fakeDb.knowledgePodcasts.put(newerPodcast);
+      }
+      return callback();
+    };
+    vi.doMock("../db/database", () => ({ db: fakeDb }));
+    const { DexieStorageAdapter } = await import("./storageAdapter");
+    const adapter = new DexieStorageAdapter();
+
+    await adapter.restoreCloudSyncSnapshot({ payload: { ...restorePayload, podcasts: [] }, assets: [] } as StorageSnapshot);
+
+    expect(await fakeDb.knowledgePodcasts.get("podcast-1")).toMatchObject({ title: "同步期间新标题" });
+  });
+
   it("keeps ordinary backup restore normalization unchanged", async () => {
     vi.resetModules();
     const fakeDb = createRestoreDb();

@@ -18,6 +18,8 @@ vi.mock("./firebase", () => ({
 // chain (db/storage/cloudSyncModel/nativeFirebaseStorage), which would make the test fragile.
 const {
   cloudSyncReadRequiresConfirmation,
+  cloudSyncWriteEstimateFor,
+  cloudSyncWriteRequiresConfirmation,
   cloudStorageDownloadPlanFor,
   cloudStorageSummaryFor,
   isCloudSyncOperationSuperseded,
@@ -262,6 +264,39 @@ describe("cloud sync read budget", () => {
       storageBytes: 0,
       storageKnown: false,
     })).toBe(true);
+  });
+});
+
+describe("cloud sync write budget", () => {
+  it("pauses a publish at the write threshold unless explicitly confirmed", () => {
+    const estimate = {
+      estimatedWrites: 5_000,
+      entityWrites: 4_900,
+      reviewEventWrites: 92,
+      overheadWrites: 8,
+      storageObjectCount: 0,
+      storageBytes: 0,
+    };
+    expect(cloudSyncWriteRequiresConfirmation(estimate)).toBe(true);
+    expect(cloudSyncWriteRequiresConfirmation(estimate, true)).toBe(false);
+    expect(cloudSyncWriteRequiresConfirmation({ ...estimate, estimatedWrites: 4_999 })).toBe(false);
+  });
+
+  it("estimates deduplicated changed asset upload bytes", async () => {
+    const blob = new Blob(["audio"]);
+    const entity = {
+      key: "asset:one",
+      entityType: "asset" as const,
+      entityId: "one",
+      contentHash: "entity-hash",
+      payload: { id: "one", contentHash: "blob-hash" },
+    };
+    const exported: CloudSyncExport = { entities: [entity], reviewEvents: [], assetBlobs: new Map([["blob-hash", blob]]) };
+    const estimate = await cloudSyncWriteEstimateFor(exported, { entities: [entity, { ...entity, key: "asset:two", entityId: "two" }], events: [] });
+
+    expect(estimate.storageObjectCount).toBe(1);
+    expect(estimate.storageBytes).toBe(blob.size);
+    expect(estimate.entityWrites).toBe(2);
   });
 });
 

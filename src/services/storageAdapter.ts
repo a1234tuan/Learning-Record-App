@@ -82,6 +82,7 @@ import {
   tombstoneDecisionBlockFeedbackInTransaction,
 } from "../features/reviewCoach/repository";
 import { validateReviewCoachFormalSnapshot } from "../features/reviewCoach/validation";
+import { preserveLocalSettings, sanitizeSettingsForExport, stripPrivateExportFields } from "./exportPrivacy";
 import { extractDecisionBlocks, prepareDecisionBlockContentForSave } from "../features/reviewCoach/decisionBlockContent";
 import {
   DEFAULT_REVIEW_EASE,
@@ -1963,9 +1964,9 @@ export class DexieStorageAdapter implements StorageAdapter {
         recordReviewLogs: snapshot.recordReviewLogs,
         recordReviewDayStats: snapshot.recordReviewDayStats,
         studySessions: snapshot.studySessions,
-        settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        settings: sanitizeSettingsForExport(ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record"))),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
-        reviewCoach: snapshot.reviewCoach,
+        reviewCoach: stripPrivateExportFields(snapshot.reviewCoach),
       },
       assets: backupAssets,
       recordDrafts: cleanedDrafts,
@@ -2038,9 +2039,9 @@ export class DexieStorageAdapter implements StorageAdapter {
         recordReviewLogs: snapshot.recordReviewLogs,
         recordReviewDayStats: snapshot.recordReviewDayStats,
         studySessions: snapshot.studySessions,
-        settings: ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record")),
+        settings: sanitizeSettingsForExport(ensureSettingsSubjects({ ...snapshot.settings, schemaVersion: 4 }, cleanedBlocks.filter((block): block is RecordBlock => block.type === "record"))),
         podcasts: normalizeSnapshotPodcasts(snapshot.podcasts),
-        reviewCoach: snapshot.reviewCoach,
+        reviewCoach: stripPrivateExportFields(snapshot.reviewCoach),
       },
       assets,
       recordDrafts: cleanedDrafts,
@@ -2050,14 +2051,12 @@ export class DexieStorageAdapter implements StorageAdapter {
   private async restoreSnapshotData(
     snapshot: StorageSnapshot,
     expectedEpoch?: number,
-    options: { preservePodcasts?: boolean } = {},
+    options: { preservePodcasts?: boolean; preserveLocalSettings?: boolean } = {},
   ): Promise<void> {
     const restoredBlocks = normalizeSnapshotRecords(migrateBlocksToRecords(snapshot.payload.blocks));
     const restoredDrafts = normalizeSnapshotRecordDrafts(snapshot.payload.recordDrafts ?? snapshot.recordDrafts ?? []);
     const restoredTemplates = normalizeSnapshotTemplates(snapshot.payload.templates);
-    const restoredPodcasts = options.preservePodcasts
-      ? snapshot.payload.podcasts ?? []
-      : normalizeSnapshotPodcasts(snapshot.payload.podcasts);
+    const restoredPodcasts = normalizeSnapshotPodcasts(snapshot.payload.podcasts);
     const restoredReviewCoach = snapshot.payload.reviewCoach ?? structuredClone(EMPTY_REVIEW_COACH_FORMAL_SNAPSHOT);
     assertSnapshotIntegrity(restoredBlocks, restoredTemplates, snapshot.assets);
     const restoredRecords = restoredBlocks.filter((block): block is RecordBlock => block.type === "record");
@@ -2083,10 +2082,28 @@ export class DexieStorageAdapter implements StorageAdapter {
         ...reviewCoachRestoreTables(db),
       ],
       async () => {
-        const currentEpoch = await db.cloudSyncMutation.get("local");
+        const [currentEpoch, currentPodcasts, currentPodcastAssets, currentSettings] = await Promise.all([
+          db.cloudSyncMutation.get("local"),
+          options.preservePodcasts ? db.knowledgePodcasts.toArray() : Promise.resolve([]),
+          options.preservePodcasts ? db.assets.filter((asset) => asset.generatedBy === "knowledge-podcast").toArray() : Promise.resolve([]),
+          options.preserveLocalSettings ? db.settings.get("settings") : Promise.resolve(undefined),
+        ]);
         if (expectedEpoch !== undefined && (currentEpoch?.epoch ?? 0) !== expectedEpoch) {
           throw new CloudSyncLocalMutationError();
         }
+        const settingsToRestore = ensureSettingsSubjects(
+          {
+            ...(currentSettings
+              ? preserveLocalSettings(snapshot.payload.settings, currentSettings)
+              : snapshot.payload.settings),
+            schemaVersion: 4,
+          },
+          restoredRecords,
+        );
+        const assetsToRestore = options.preservePodcasts
+          ? [...snapshot.assets.filter((asset) => asset.generatedBy !== "knowledge-podcast"), ...currentPodcastAssets]
+          : snapshot.assets;
+        const podcastsToRestore = options.preservePodcasts ? currentPodcasts : restoredPodcasts;
         await Promise.all([
           db.entries.clear(),
           db.blocks.clear(),
@@ -2114,9 +2131,9 @@ export class DexieStorageAdapter implements StorageAdapter {
           db.recordReviewDayStats.bulkPut(snapshot.payload.recordReviewDayStats ?? []),
           db.tags.bulkPut(snapshot.payload.tags),
           db.studySessions.bulkPut(snapshot.payload.studySessions),
-          db.settings.put(ensureSettingsSubjects({ ...snapshot.payload.settings, schemaVersion: 4 }, restoredRecords)),
-          db.assets.bulkPut(snapshot.assets),
-          db.knowledgePodcasts.bulkPut(restoredPodcasts),
+          db.settings.put(settingsToRestore),
+          db.assets.bulkPut(assetsToRestore),
+          db.knowledgePodcasts.bulkPut(podcastsToRestore),
           db.cloudSyncMutation.put({ id: "local", epoch: (currentEpoch?.epoch ?? 0) + 1 }),
         ]);
       },
@@ -2131,38 +2148,11 @@ export class DexieStorageAdapter implements StorageAdapter {
   }
 
   async restoreCloudSyncSnapshot(snapshot: StorageSnapshot): Promise<void> {
-    // Knowledge podcasts and their generated audio assets are local-only (not in cloud sync).
-    // restoreSnapshot clears all tables including knowledgePodcasts and assets, so we must
-    // read them first and inject back after to prevent data loss on every cloud sync restore.
-    const [existingPodcasts, podcastAudioAssets] = await Promise.all([
-      db.knowledgePodcasts.toArray(),
-      db.assets.filter((a) => a.generatedBy === "knowledge-podcast").toArray(),
-    ]);
-    const mergedSnapshot: StorageSnapshot = {
-      ...snapshot,
-      payload: { ...snapshot.payload, podcasts: existingPodcasts },
-      assets: [
-        ...snapshot.assets.filter((a) => a.generatedBy !== "knowledge-podcast"),
-        ...podcastAudioAssets,
-      ],
-    };
-    await this.restoreSnapshotData(mergedSnapshot, undefined, { preservePodcasts: true });
+    await this.restoreSnapshotData(snapshot, undefined, { preservePodcasts: true, preserveLocalSettings: true });
   }
 
   async restoreCloudSyncSnapshotIfUnchanged(snapshot: StorageSnapshot, expectedEpoch: number): Promise<void> {
-    const [existingPodcasts, podcastAudioAssets] = await Promise.all([
-      db.knowledgePodcasts.toArray(),
-      db.assets.filter((a) => a.generatedBy === "knowledge-podcast").toArray(),
-    ]);
-    const mergedSnapshot: StorageSnapshot = {
-      ...snapshot,
-      payload: { ...snapshot.payload, podcasts: existingPodcasts },
-      assets: [
-        ...snapshot.assets.filter((a) => a.generatedBy !== "knowledge-podcast"),
-        ...podcastAudioAssets,
-      ],
-    };
-    await this.restoreSnapshotData(mergedSnapshot, expectedEpoch, { preservePodcasts: true });
+    await this.restoreSnapshotData(snapshot, expectedEpoch, { preservePodcasts: true, preserveLocalSettings: true });
   }
 
   async restoreStreamableSnapshot(

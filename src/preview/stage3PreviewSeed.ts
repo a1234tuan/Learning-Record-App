@@ -382,6 +382,8 @@ export const seedStage5Preview = async (): Promise<void> => {
 /** Seeds one formally displayed, quality-checked turn for Stage 6 UI acceptance. */
 export const seedStage6Preview = async (): Promise<void> => {
   await seedStage5Preview();
+  // Localhost-only preview credential. It enables browser interception without exposing a real key.
+  await storage.saveAiSecret("stage9-preview-placeholder", "default");
   const stamp = nowISO();
   const task = await db.adaptiveReviewTasks.get("stage5-preview-task-1");
   const blueprint = await db.sessionBlueprints.get("stage5-preview-blueprint-1");
@@ -601,4 +603,12 @@ export const isStage7PreviewRequest = (): boolean => {
   const host = window.location.hostname;
   return (host === "127.0.0.1" || host === "localhost")
     && new URLSearchParams(window.location.search).get("preview") === "stage7";
+};
+
+export const isReviewCoachPreviewRequest = (): boolean => {
+  if (typeof window === "undefined") return false;
+  if (isNativePlatform() || isDesktopPlatform()) return false;
+  const host = window.location.hostname;
+  return (host === "127.0.0.1" || host === "localhost")
+    && new URLSearchParams(window.location.search).get("preview") === "coach";
 };

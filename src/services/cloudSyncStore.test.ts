@@ -65,6 +65,16 @@ describe("cloudSyncStore watchdog", () => {
     expect(cloudSyncStore.finishBusy(staleToken)).toBe(false);
     expect(cloudSyncStore.getSnapshot().busy).toBe("restore");
   });
+
+  it("clears read and write budget confirmations when a new operation starts", () => {
+    cloudSyncStore.setReadBudget({ mode: "full", estimatedReads: 40_000, entityReads: 40_000, reviewEventReads: 0, targetedReads: 0, overheadReads: 0, storageObjectCount: 0, storageBytes: 0, storageKnown: true });
+    cloudSyncStore.setWriteBudget({ estimatedWrites: 5_000, entityWrites: 5_000, reviewEventWrites: 0, overheadWrites: 0, storageObjectCount: 0, storageBytes: 0 });
+
+    cloudSyncStore.setBusy("sync");
+
+    expect(cloudSyncStore.getSnapshot().readBudget).toBeUndefined();
+    expect(cloudSyncStore.getSnapshot().writeBudget).toBeUndefined();
+  });
 });
 
 describe("cloudSyncStore outcome toast", () => {

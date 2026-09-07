@@ -53,6 +53,16 @@ export const CloudSyncButton = ({ onSignedOut, onRestored, className = "" }: Clo
         cloudSyncStore.setReadBudget(result.estimate);
         cloudSyncStore.setReadBudgetChoice(result.choice);
         cloudSyncStore.setMessage(result.message);
+      } else if (result.kind === "write-budget") {
+        cloudSyncStore.setConflict({
+          reason: "concurrent-changes",
+          localChanges: 0,
+          remoteChanges: 0,
+          cloudRevision: 0,
+        });
+        cloudSyncStore.setWriteBudget(result.estimate);
+        cloudSyncStore.setWriteBudgetChoice(result.choice);
+        cloudSyncStore.setMessage(result.message);
       } else if (result.kind === "uncertain") {
         cloudSyncStore.setOutcome("uncertain", result.message);
       } else {

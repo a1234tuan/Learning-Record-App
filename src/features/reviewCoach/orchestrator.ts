@@ -880,8 +880,8 @@ export class ReviewCoachOrchestrator {
       const sourceTask = source ? snapshot.adaptiveReviewTasks.find((item) => item.id === source.taskId) : undefined;
       if (!sourceTask) continue;
       await this.dependencies.repository.queueVerification(verification.id, {
-        id: this.dependencies.ids.next(), blueprintId: sourceTask.blueprintId, decisionBlockId: verification.decisionBlockId, recordId: verification.recordId, contentVersion: verification.contentVersion,
-        status: "waiting", priorityTier: "due-verification", queuedAt: now, idempotencyKey: `verification-task:${verification.id}`, createdAt: now, updatedAt: now,
+        id: `verification-task:${verification.id}`, blueprintId: sourceTask.blueprintId, decisionBlockId: verification.decisionBlockId, recordId: verification.recordId, contentVersion: verification.contentVersion,
+        status: "waiting", priorityTier: "due-verification", queuedAt: verification.verificationDueAt, idempotencyKey: `verification-task:${verification.id}`, createdAt: verification.verificationDueAt, updatedAt: now,
       }, now);
       openTargets.add(targetKey);
       queued += 1;

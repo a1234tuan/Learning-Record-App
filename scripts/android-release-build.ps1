@@ -38,6 +38,24 @@ New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 $targetApk = Join-Path $releaseDir "学习日志.apk"
 Copy-Item -Force -Path $sourceApk -Destination $targetApk
 
+$buildToolsRoot = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools"
+$aapt = Get-ChildItem -LiteralPath $buildToolsRoot -Directory |
+  Sort-Object { [version]$_.Name } -Descending |
+  ForEach-Object { Join-Path $_.FullName "aapt.exe" } |
+  Where-Object { Test-Path -LiteralPath $_ } |
+  Select-Object -First 1
+if (-not $aapt) {
+  throw "Android aapt.exe was not found under $buildToolsRoot."
+}
+
+$badgingOutput = & $aapt dump badging $targetApk
+$aaptExitCode = $LASTEXITCODE
+$badging = (($badgingOutput | Where-Object { $_ -match "^package:" } | Select-Object -First 1) -join "")
+if ($aaptExitCode -ne 0 -or $badging -notmatch "versionCode='10'" -or $badging -notmatch "versionName='0.1.9'") {
+  throw "Release APK version check failed. Expected versionCode 10 and versionName 0.1.9; got: $badging"
+}
+Write-Host "Verified APK version: versionCode 10, versionName 0.1.9"
+
 $sha256 = [System.Security.Cryptography.SHA256]::Create()
 try {
   $hashBytes = $sha256.ComputeHash([System.IO.File]::ReadAllBytes($targetApk))

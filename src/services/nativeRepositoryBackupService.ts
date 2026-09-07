@@ -14,6 +14,7 @@ import { ensureSettingsSubjects } from "../lib/subjects";
 import { withRestoreLock } from "./restoreLockService";
 import { base64ToBlob, summarizeSnapshot } from "./backup";
 import { blobToBase64Chunks } from "./nativeFileWriter";
+import { sanitizeStreamableSnapshotForExport } from "./exportPrivacy";
 import {
   appendNativeBackupRepositoryFileWrite,
   beginNativeBackupRepositoryFileWrite,
@@ -278,13 +279,14 @@ export const writeNativeRepositoryBackupSnapshot = async (
     throw new Error("增量文件夹备份只在 Android 或 Windows 桌面应用内可用。");
   }
 
+  const portableSnapshot = sanitizeStreamableSnapshotForExport(snapshot);
   options.onProgress?.({ stage: "preparing", message: "正在准备增量备份仓库。" });
   const repository = await ensureNativeBackupRepository(REPOSITORY_NAME);
   const existingAssets = fileMapByPath(await listNativeBackupRepositoryFiles(REPOSITORY_NAME, "assets"));
   const assetPaths: Record<string, string> = {};
   let bytesWritten = 0;
 
-  for (const [index, meta] of snapshot.assets.entries()) {
+  for (const [index, meta] of portableSnapshot.assets.entries()) {
     const path = assetPath(meta);
     assetPaths[meta.id] = path;
     const existing = existingAssets.get(path);
@@ -293,9 +295,9 @@ export const writeNativeRepositoryBackupSnapshot = async (
     }
     options.onProgress?.({
       stage: "asset",
-      message: `正在写入新增资源 ${index + 1}/${snapshot.assets.length}。`,
+      message: `正在写入新增资源 ${index + 1}/${portableSnapshot.assets.length}。`,
       current: index + 1,
-      total: snapshot.assets.length,
+      total: portableSnapshot.assets.length,
     });
     const asset = await getAsset(meta.id);
     if (!asset) {
@@ -313,10 +315,10 @@ export const writeNativeRepositoryBackupSnapshot = async (
   const snapshotFile: RepositorySnapshotFile = {
     format: REPOSITORY_SNAPSHOT_FORMAT,
     version: 1,
-    exportedAt: snapshot.payload.manifest.exportedAt,
-    payload: snapshot.payload,
-    assets: snapshot.assets,
-    recordDrafts: snapshot.recordDrafts ?? snapshot.payload.recordDrafts ?? [],
+    exportedAt: portableSnapshot.payload.manifest.exportedAt,
+    payload: portableSnapshot.payload,
+    assets: portableSnapshot.assets,
+    recordDrafts: portableSnapshot.recordDrafts ?? portableSnapshot.payload.recordDrafts ?? [],
     assetPaths,
   };
   const snapshotWrite = await writeRepositoryBlob(
@@ -333,9 +335,9 @@ export const writeNativeRepositoryBackupSnapshot = async (
   const currentRef: RepositoryManifestSnapshot = {
     id: snapshotId,
     path: snapshotPath,
-    exportedAt: snapshot.payload.manifest.exportedAt,
-    assetCount: snapshot.assets.length,
-    totalAssetBytes: snapshot.assets.reduce((total, asset) => total + Math.max(0, asset.size), 0),
+    exportedAt: portableSnapshot.payload.manifest.exportedAt,
+    assetCount: portableSnapshot.assets.length,
+    totalAssetBytes: portableSnapshot.assets.reduce((total, asset) => total + Math.max(0, asset.size), 0),
   };
   const keptSnapshots = [currentRef, ...(previousManifest?.snapshots ?? []).filter((item) => item.id !== snapshotId)]
     .sort((a, b) => b.exportedAt.localeCompare(a.exportedAt))
@@ -366,7 +368,7 @@ export const writeNativeRepositoryBackupSnapshot = async (
     size: repositorySize,
     bytesWritten,
     repositorySize,
-    assetCount: snapshot.assets.length,
+    assetCount: portableSnapshot.assets.length,
     snapshotId,
     displayName: REPOSITORY_NAME,
     verifiedAt: Date.now(),
