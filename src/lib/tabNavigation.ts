@@ -79,7 +79,7 @@ export type RecordTabState = {
 };
 
 export type TabMemory = {
-  today: RecordTabState;
+  today: RecordTabState & { adaptiveTaskId?: EntityId };
   journal: RecordTabState & {
     month: Date;
     selectedDate?: string;
@@ -207,7 +207,7 @@ const popRecordReference = <T extends RecordTabState>(state: T): T | undefined =
 export const getTabDepth = (tab: TabKey, memory: TabMemory): number => {
   switch (tab) {
     case "today":
-      return memory.today.recordId ? 1 + referenceDepth(memory.today) : 0;
+      return memory.today.adaptiveTaskId ? 1 : memory.today.recordId ? 1 + referenceDepth(memory.today) : 0;
     case "journal":
       return memory.journal.recordId ? 2 + referenceDepth(memory.journal) : memory.journal.searchOpen || memory.journal.selectedDate ? 1 : 0;
     case "categories":
@@ -267,6 +267,9 @@ export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionI
   if (tab === "review") {
     return `${tab}-${depth}-${recordPart}-${memory.review.mode}`;
   }
+  if (tab === "today") {
+    return `${tab}-${depth}-${recordPart}-${memory.today.adaptiveTaskId ?? "dashboard"}`;
+  }
   if (tab === "more") {
     const pageDepth = memory.more.subRoute === "ai" ? 1 : depth;
     return `${tab}-${pageDepth}-${recordPart}-${memory.more.subRoute ?? "root"}-${memory.more.podcastId ?? "none"}-${memory.more.podcastScreen}-${activeAiSessionId ?? "none"}`;
@@ -277,6 +280,9 @@ export const buildTabPageKey = (tab: TabKey, memory: TabMemory, activeAiSessionI
 export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
   switch (tab) {
     case "today":
+      if (memory.today.adaptiveTaskId) {
+        return { ...memory, today: { ...memory.today, adaptiveTaskId: undefined } };
+      }
       {
         const previous = popRecordReference(memory.today);
         if (previous) {
@@ -285,7 +291,7 @@ export const popTabDepth = (memory: TabMemory, tab: TabKey): TabMemory => {
       }
       return {
         ...memory,
-        today: { ...memory.today, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined },
+        today: { ...memory.today, recordId: undefined, highlightAssetId: undefined, recordEditing: undefined, referenceStack: [], restoreScrollY: undefined, adaptiveTaskId: undefined },
       };
     case "journal":
       if (memory.journal.recordId) {

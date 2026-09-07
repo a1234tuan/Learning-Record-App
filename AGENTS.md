@@ -5,7 +5,7 @@
 - Active v2 branch: `feature/review-effect-coach-v2`.
 - Product boundary: `docs/新的方案.md`.
 - Database version: schema 17. Store definitions live in `src/db/reviewCoachSchema.ts`.
-- Stages 0-5 were completed and verified on 2026-09-07. Stage 6 adaptive quiz execution and stages 7-9 remain out of scope.
+- Stages 0-6 were completed and verified on 2026-09-07. Stage 7 delayed verification and stages 8-9 remain out of scope.
 
 ## Review Coach Boundaries
 
@@ -15,7 +15,9 @@
 - Record-level FSRS remains responsible for whole-record scheduling. Decision-block facts must not silently rewrite FSRS state.
 - Stage 3 added block feedback, immutable history, tombstones, queue enrollment, exclusion/restoration, analysis notes, and manual legacy-comment association.
 - Stage 4 calls only the quick feedback interpreter and preserves original feedback.
-- Stage 5 adds the manually confirmed deep-analysis workbench, validated `SessionBlueprint` creation, and deterministic current/waiting/deferred task scheduling. It must not generate or execute Stage 6 quiz turns.
+- Stage 5 adds the manually confirmed deep-analysis workbench, validated `SessionBlueprint` creation, and deterministic current/waiting/deferred task scheduling.
+- Stage 6 adds the dedicated adaptive review page, Blueprint-constrained turn generation, independent question quality review, answer evaluation, hint/skip/invalid/defer/abandon dispositions, and atomic answer/outcome commits. It must not schedule Stage 7 delayed verification.
+- Stage 6 quick-model calls use strict JSON and explicitly disable thinking. Controlled real-provider acceptance may use `https://api.deepseek.com` with `deepseek-v4-flash`; never persist API keys in source, tests, docs, logs, screenshots, backup, or sync data.
 
 ## Cross-Cutting Checks
 
@@ -35,10 +37,12 @@ npm run build
 git diff --check
 ```
 
-Use deterministic mocks in automated tests. Real AI providers are reserved for the controlled acceptance stage defined in the product plan.
+Use deterministic mocks in automated tests. Real AI providers are limited to explicit, controlled acceptance runs and must never replace deterministic CI coverage.
 
 For local Stage 3 UI acceptance, run `npm run build`, start `npm run preview -- --host 127.0.0.1 --port 4177`, and open `http://127.0.0.1:4177/?preview=stage3`. This localhost-only query seeds an isolated `BFS Stage3 Preview` record with an overdue review, block feedback, and an analysis-queue item; it is gated out of normal URLs and native shells.
 
 For Stage 4 UI acceptance, use `http://127.0.0.1:4177/?preview=stage4`. It adds a deterministic completed quick-model interpretation with diagnostics and confirmation controls without contacting an AI provider.
 
 For Stage 5 UI acceptance, use `http://127.0.0.1:4177/?preview=stage5`. It seeds deterministic eligible blocks, an OCR warning, a partial analysis result, and current/waiting/deferred tasks without contacting an AI provider.
+
+For Stage 6 UI acceptance, use `http://127.0.0.1:4177/?preview=stage6`. It seeds a deterministic in-progress task with one displayed, quality-checked turn; hints, answer submission, skip, invalid-question reporting, defer, and abandon controls can be exercised without contacting an AI provider.

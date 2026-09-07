@@ -41,6 +41,7 @@ interface TodayPageProps {
   onResumeDeepAnalysis?: (batchId: string) => Promise<unknown>;
   onSwitchAdaptiveTask?: (taskId: string) => Promise<unknown>;
   onDeferAdaptiveTask?: (taskId: string) => Promise<unknown>;
+  onOpenAdaptiveTask?: (taskId: string) => void;
 }
 
 export const TodayPage = ({
@@ -71,6 +72,7 @@ export const TodayPage = ({
   onResumeDeepAnalysis,
   onSwitchAdaptiveTask,
   onDeferAdaptiveTask,
+  onOpenAdaptiveTask,
 }: TodayPageProps) => {
   const [subject, setSubject] = useState<Subject>(() =>
     subjects.find((item) => !item.archivedAt)?.name ??
@@ -160,6 +162,7 @@ export const TodayPage = ({
           onResume={onResumeDeepAnalysis}
           onSwitchTask={onSwitchAdaptiveTask}
           onDeferTask={onDeferAdaptiveTask}
+          onOpenTask={onOpenAdaptiveTask}
         />
       )}
 

@@ -185,12 +185,12 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
   }
 
   const defaults = createInitialTabMemory();
-  const today = restoreRecordState(value.today ?? {}, defaults.today);
+  const todayBase = restoreRecordState(value.today ?? {}, defaults.today);
   const journalBase = restoreRecordState(value.journal, defaults.journal);
   const categoriesBase = restoreRecordState(value.categories, defaults.categories);
   const reviewBase = restoreRecordState(value.review, defaults.review);
   const moreBase = restoreRecordState(value.more, defaults.more);
-  if (!today || !journalBase || !categoriesBase || !reviewBase || !moreBase || typeof value.journal.month !== "string") {
+  if (!todayBase || !journalBase || !categoriesBase || !reviewBase || !moreBase || typeof value.journal.month !== "string") {
     return null;
   }
 
@@ -213,7 +213,7 @@ const restoreTabMemory = (value: unknown): TabMemory | null => {
   }
 
   return {
-    today,
+    today: { ...todayBase, adaptiveTaskId: isObject(value.today) ? optionalString(value.today.adaptiveTaskId) : undefined },
     journal: {
       ...journalBase,
       month,

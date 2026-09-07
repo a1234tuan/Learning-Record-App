@@ -247,11 +247,13 @@ export interface AdaptiveQuizTurn extends CoachBaseEntity, VersionedDecisionBloc
   sequence: number;
   status: AdaptiveQuizTurnStatus;
   practiceType: AdaptivePracticeType;
+  answerMode?: "open" | "objective" | "unique";
   question: string;
   displayedAt: CoachIsoDateTime;
   sourceEvidence: BlueprintEvidenceRef[];
   answerCriteria: string[];
   hintsUsed: QuizHintUsage[];
+  availableHints?: string[];
   answerText?: string;
   answeredAt?: CoachIsoDateTime;
   assessment?: ImmediateAnswerAssessment;

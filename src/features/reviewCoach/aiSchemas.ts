@@ -70,6 +70,7 @@ export type QuizTurnAiResponse =
   | {
       status: "ok";
       practiceType: AdaptivePracticeType;
+      answerMode: "open" | "objective" | "unique";
       question: string;
       answerCriteria: string[];
       sourceEvidence: SessionBlueprintAiCandidate["evidence"];
@@ -220,10 +221,11 @@ export const quizTurnJsonSchema: JsonSchema = {
     {
       type: "object",
       additionalProperties: false,
-      required: ["status", "practiceType", "question", "answerCriteria", "sourceEvidence", "hints"],
+      required: ["status", "practiceType", "answerMode", "question", "answerCriteria", "sourceEvidence", "hints"],
       properties: {
         status: { const: "ok" },
         practiceType: { enum: practiceTypes },
+        answerMode: { enum: ["open", "objective", "unique"] },
         question: { type: "string", minLength: 1 },
         answerCriteria: { ...stringArraySchema, minItems: 1 },
         sourceEvidence: { type: "array", minItems: 1, items: versionedEvidenceSchema },
@@ -374,10 +376,14 @@ export const parseSessionBlueprintAiResponse = (value: unknown): SessionBlueprin
 };
 
 export const parseQuizTurnAiResponse = (value: unknown): QuizTurnAiResponse => {
-  if (isInsufficientContextAiResult(value)) return value;
+  if (isInsufficientContextAiResult(value)) {
+    assertExactKeys(value as unknown as Record<string, unknown>, ["status", "missingInformation"], "quiz turn");
+    return value;
+  }
   const body = requireOkObject(value, "quiz turn");
+  assertExactKeys(body, ["status", "practiceType", "answerMode", "question", "answerCriteria", "sourceEvidence", "hints"], "quiz turn");
   requireString(body.question, "question");
-  if (!isPracticeType(body.practiceType) || !isStringArray(body.answerCriteria) || body.answerCriteria.length === 0 || !isStringArray(body.hints)) {
+  if (!isPracticeType(body.practiceType) || !["open", "objective", "unique"].includes(String(body.answerMode)) || !isStringArray(body.answerCriteria) || body.answerCriteria.length === 0 || !isStringArray(body.hints)) {
     throw new Error("Invalid quiz turn response body.");
   }
   validateEvidence(body.sourceEvidence);
@@ -385,8 +391,12 @@ export const parseQuizTurnAiResponse = (value: unknown): QuizTurnAiResponse => {
 };
 
 export const parseQuestionQualityAiResponse = (value: unknown): QuestionQualityAiResponse => {
-  if (isInsufficientContextAiResult(value)) return value;
+  if (isInsufficientContextAiResult(value)) {
+    assertExactKeys(value as unknown as Record<string, unknown>, ["status", "missingInformation"], "question quality");
+    return value;
+  }
   const body = requireOkObject(value, "question quality");
+  assertExactKeys(body, ["status", "verdict", "severeIssues", "rationale"], "question quality");
   const issues = ["unsolvable", "missing-condition", "source-drift", "non-unique-answer", "answer-contradiction"];
   if (!["pass", "fail"].includes(String(body.verdict)) || !isStringArray(body.severeIssues) || body.severeIssues.some((item) => !issues.includes(item)) || typeof body.rationale !== "string") {
     throw new Error("Invalid question quality response body.");
@@ -395,8 +405,12 @@ export const parseQuestionQualityAiResponse = (value: unknown): QuestionQualityA
 };
 
 export const parseAnswerEvaluationAiResponse = (value: unknown): AnswerEvaluationAiResponse => {
-  if (isInsufficientContextAiResult(value)) return value;
+  if (isInsufficientContextAiResult(value)) {
+    assertExactKeys(value as unknown as Record<string, unknown>, ["status", "missingInformation"], "answer evaluation");
+    return value;
+  }
   const body = requireOkObject(value, "answer evaluation");
+  assertExactKeys(body, ["status", "assessment", "matchedCriteria", "missingCriteria", "rationale"], "answer evaluation");
   if (!["correct", "partial", "incorrect", "unreliable"].includes(String(body.assessment)) ||
       !isStringArray(body.matchedCriteria) || !isStringArray(body.missingCriteria) || typeof body.rationale !== "string") {
     throw new Error("Invalid answer evaluation response body.");

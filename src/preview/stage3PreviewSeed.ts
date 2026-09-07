@@ -378,6 +378,41 @@ export const seedStage5Preview = async (): Promise<void> => {
   await db.taskOutcomeEvents.put(deferredOutcome);
 };
 
+/** Seeds one formally displayed, quality-checked turn for Stage 6 UI acceptance. */
+export const seedStage6Preview = async (): Promise<void> => {
+  await seedStage5Preview();
+  const stamp = nowISO();
+  const task = await db.adaptiveReviewTasks.get("stage5-preview-task-1");
+  const blueprint = await db.sessionBlueprints.get("stage5-preview-blueprint-1");
+  if (!task || !blueprint) return;
+  await db.adaptiveReviewTasks.put({ ...task, status: "in-progress", activeSlotKey: "global-current", startedAt: task.startedAt ?? stamp, updatedAt: stamp });
+  await db.adaptiveQuizTurns.put({
+    id: "stage6-preview-turn-1",
+    taskId: task.id,
+    decisionBlockId: task.decisionBlockId,
+    recordId: task.recordId,
+    contentVersion: task.contentVersion,
+    sequence: 1,
+    status: "displayed",
+    practiceType: "variation",
+    answerMode: "unique",
+    question: "在 BFS 中首次发现一个尚未访问的相邻节点时，应当先标记 visited，还是先加入队列？请说明这样做避免了什么问题。",
+    displayedAt: stamp,
+    sourceEvidence: blueprint.evidence,
+    answerCriteria: ["先标记 visited，再加入队列", "避免同一节点被重复加入队列"],
+    hintsUsed: [],
+    availableHints: ["考虑两个父节点同时发现同一个相邻节点。", "标记时机需要阻止第二次入队。"],
+    qualityChecked: true,
+    qualityModel: "quick-model-preview",
+    generationModel: "quick-model-preview",
+    promptVersion: "quiz-turn-v1",
+    policyVersion: "review-coach-policy-v1",
+    idempotencyKey: "quiz-turn:stage6-preview:1",
+    createdAt: stamp,
+    updatedAt: stamp,
+  });
+};
+
 export const isStage3PreviewRequest = (): boolean => {
   if (typeof window === "undefined") return false;
   if (isNativePlatform() || isDesktopPlatform()) return false;
@@ -400,4 +435,12 @@ export const isStage5PreviewRequest = (): boolean => {
   const host = window.location.hostname;
   return (host === "127.0.0.1" || host === "localhost")
     && new URLSearchParams(window.location.search).get("preview") === "stage5";
+};
+
+export const isStage6PreviewRequest = (): boolean => {
+  if (typeof window === "undefined") return false;
+  if (isNativePlatform() || isDesktopPlatform()) return false;
+  const host = window.location.hostname;
+  return (host === "127.0.0.1" || host === "localhost")
+    && new URLSearchParams(window.location.search).get("preview") === "stage6";
 };

@@ -69,6 +69,9 @@ export interface ReviewCoachRepository {
   switchCurrentTask(targetTaskId: string, updatedAt: string): Promise<AdaptiveReviewTask>;
   addQuizTurn(turn: AdaptiveQuizTurn): Promise<AdaptiveQuizTurn>;
   transitionQuizTurn(id: string, status: AdaptiveQuizTurnStatus, updatedAt: string): Promise<AdaptiveQuizTurn>;
+  recordQuizHint(id: string, level: number, requestedAt: string): Promise<AdaptiveQuizTurn>;
+  commitQuizAnswer(turn: AdaptiveQuizTurn, event: TaskOutcomeEvent): Promise<AdaptiveQuizTurn>;
+  invalidateQuizTurn(turnId: string, event: TaskOutcomeEvent, updatedAt: string): Promise<AdaptiveReviewTask>;
   addOutcome(event: TaskOutcomeEvent): Promise<TaskOutcomeEvent>;
   commitTaskOutcome(
     taskId: string,
@@ -989,6 +992,65 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
       transitionAdaptiveQuizTurn(current.status, status);
       const next = { ...current, status, updatedAt };
       await this.database.adaptiveQuizTurns.put(next);
+      await this.bumpMutation();
+      return next;
+    });
+  }
+
+  async recordQuizHint(id: string, level: number, requestedAt: string): Promise<AdaptiveQuizTurn> {
+    return this.database.transaction("rw", [this.database.adaptiveQuizTurns, this.database.cloudSyncMutation], async () => {
+      const current = await this.database.adaptiveQuizTurns.get(id);
+      if (!current || current.status !== "displayed") throw new ReviewCoachValidationError("inactive-quiz-turn", "Hints require an active displayed turn.");
+      if (!Number.isSafeInteger(level) || level < 1 || level > (current.availableHints?.length ?? 0)) throw new ReviewCoachValidationError("invalid-hint", "Hint level is outside the available range.");
+      const existing = current.hintsUsed.find((item) => item.level === level);
+      if (existing) return current;
+      const next = { ...current, hintsUsed: [...current.hintsUsed, { level, requestedAt }], updatedAt: requestedAt };
+      await this.database.adaptiveQuizTurns.put(next);
+      await this.bumpMutation();
+      return next;
+    });
+  }
+
+  async commitQuizAnswer(turn: AdaptiveQuizTurn, event: TaskOutcomeEvent): Promise<AdaptiveQuizTurn> {
+    assertTaskOutcomeShape(event);
+    return this.database.transaction("rw", [this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
+      const current = await this.database.adaptiveQuizTurns.get(turn.id);
+      if (!current) throw new ReviewCoachValidationError("missing-quiz-turn", `Quiz turn ${turn.id} does not exist.`);
+      if (current.status === "answered") {
+        const existing = await ensureIdempotentInsert(this.database.taskOutcomeEvents, event);
+        if (!existing) throw new ReviewCoachValidationError("incomplete-answer-retry", "Answered turn is missing its outcome event.");
+        return current;
+      }
+      transitionAdaptiveQuizTurn(current.status, "answered");
+      if (turn.taskId !== current.taskId || turn.sequence !== current.sequence || !turn.answerText?.trim() || !turn.assessment || event.turnId !== turn.id || event.answerAssessment !== turn.assessment) {
+        throw new ReviewCoachValidationError("invalid-quiz-answer", "Quiz answer does not match its displayed turn and outcome.");
+      }
+      const next = { ...current, status: "answered" as const, answerText: turn.answerText, answeredAt: turn.answeredAt, assessment: turn.assessment, assessmentRationale: turn.assessmentRationale, updatedAt: turn.updatedAt };
+      await this.database.adaptiveQuizTurns.put(next);
+      const existing = await ensureIdempotentInsert(this.database.taskOutcomeEvents, event);
+      if (!existing) await this.database.taskOutcomeEvents.add(event);
+      await this.rebuildProjectionsInTransaction();
+      await this.bumpMutation();
+      return next;
+    });
+  }
+
+  async invalidateQuizTurn(turnId: string, event: TaskOutcomeEvent, updatedAt: string): Promise<AdaptiveReviewTask> {
+    assertTaskOutcomeShape(event);
+    return this.database.transaction("rw", [this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
+      const turn = await this.database.adaptiveQuizTurns.get(turnId);
+      const task = turn ? await this.database.adaptiveReviewTasks.get(turn.taskId) : undefined;
+      if (!turn || !task || event.turnId !== turn.id || event.taskId !== task.id || event.disposition !== "question-invalid") {
+        throw new ReviewCoachValidationError("invalid-question-report", "Question report does not match its turn and task.");
+      }
+      transitionAdaptiveQuizTurn(turn.status, "invalid");
+      transitionAdaptiveReviewTask(task.status, "invalid");
+      await this.database.adaptiveQuizTurns.put({ ...turn, status: "invalid", updatedAt });
+      const existing = await ensureIdempotentInsert(this.database.taskOutcomeEvents, event);
+      if (!existing) await this.database.taskOutcomeEvents.add(event);
+      const next = { ...task, status: "invalid" as const, activeSlotKey: undefined, openTargetKey: undefined, endedAt: updatedAt, terminalReason: event.reason, updatedAt };
+      await this.database.adaptiveReviewTasks.put(next);
+      await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return next;
     });

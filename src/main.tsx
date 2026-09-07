@@ -5,7 +5,7 @@ import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
 import { cleanupNativeServiceWorker } from "./lib/nativeServiceWorker";
 import { isDesktopPlatform, isNativePlatform } from "./lib/platform";
-import { isStage3PreviewRequest, isStage4PreviewRequest, isStage5PreviewRequest, seedStage3Preview, seedStage4Preview, seedStage5Preview } from "./preview/stage3PreviewSeed";
+import { isStage3PreviewRequest, isStage4PreviewRequest, isStage5PreviewRequest, isStage6PreviewRequest, seedStage3Preview, seedStage4Preview, seedStage5Preview, seedStage6Preview } from "./preview/stage3PreviewSeed";
 import "./styles.css";
 import "./styles/theme.css";
 import "./styles/layout.css";
@@ -14,9 +14,10 @@ import "./styles/pages.css";
 import "./styles/motion.css";
 
 const startApplication = async () => {
-  if (isStage3PreviewRequest() || isStage4PreviewRequest() || isStage5PreviewRequest()) {
+  if (isStage3PreviewRequest() || isStage4PreviewRequest() || isStage5PreviewRequest() || isStage6PreviewRequest()) {
     try {
-      if (isStage5PreviewRequest()) await seedStage5Preview();
+      if (isStage6PreviewRequest()) await seedStage6Preview();
+      else if (isStage5PreviewRequest()) await seedStage5Preview();
       else if (isStage4PreviewRequest()) await seedStage4Preview();
       else await seedStage3Preview();
     } catch (error) {

@@ -49,6 +49,9 @@ import { processFeedbackInterpretationQueue } from "../features/reviewCoach/feed
 import { getCurrentAiProvider } from "../lib/aiProviders";
 import { buildAnalysisPlanningBlocks, maxAnalysisInputTokensForProvider, type AnalysisPlanningBlock } from "../features/reviewCoach/analysisPlanner";
 import { createSessionPlanningGateway, defaultSessionPlanningMetadata } from "../features/reviewCoach/sessionPlanningGateway";
+import { createQuizExecutionGateway, defaultQuizExecutionMetadata } from "../features/reviewCoach/quizExecutionGateway";
+import { buildDecisionBlockAiContextPack } from "../services/aiContextService";
+import type { SubjectiveOutcome } from "../features/reviewCoach/domain";
 
 const reviewCoachOrchestrator = new ReviewCoachOrchestrator({
   repository: reviewCoachRepository,
@@ -501,6 +504,103 @@ export const useAppData = () => {
     return updated;
   }, [refresh]);
 
+  const createQuizOrchestrator = useCallback(async () => {
+    const currentSettings = await storage.getSettings();
+    const provider = getCurrentAiProvider(currentSettings.ai);
+    const apiKey = provider ? (await storage.getAiSecret?.(provider.id))?.apiKey : undefined;
+    if (!provider || !apiKey?.trim()) throw new Error("请先在设置中配置当前 AI 供应商和 API Key。");
+    const stamp = nowISO();
+    const roleSpecs = [
+      { role: "turn-generator" as const, promptVersion: defaultQuizExecutionMetadata.quizTurnPromptVersion },
+      { role: "question-quality-reviewer" as const, promptVersion: defaultQuizExecutionMetadata.questionQualityPromptVersion },
+      { role: "answer-evaluator" as const, promptVersion: defaultQuizExecutionMetadata.answerEvaluationPromptVersion },
+    ];
+    for (const spec of roleSpecs) {
+      const existing = reviewCoachSnapshot.aiRoleConfigs.find((item) => item.role === spec.role && !item.deletedAt);
+      await reviewCoachRepository.saveAiRoleConfig({
+        id: existing?.id ?? `ai-role:${spec.role}`, role: spec.role, providerId: provider.id, model: provider.model, enabled: true,
+        promptVersion: spec.promptVersion, policyVersion: defaultQuizExecutionMetadata.policyVersion, schemaVersion: defaultQuizExecutionMetadata.schemaVersion,
+        timeoutMs: 60_000, maxRetries: 1, maxConcurrency: 1, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp,
+      });
+    }
+    const gateway = createQuizExecutionGateway({ provider, apiKey, timeoutMs: 60_000 });
+    return {
+      provider,
+      orchestrator: new ReviewCoachOrchestrator({
+        repository: reviewCoachRepository, ids: { next: newId }, clock: { now: nowISO },
+        aiGateway: {
+          interpretFeedback: async () => { throw new Error("Not part of Stage 6."); },
+          planSession: async () => { throw new Error("Not part of Stage 6."); },
+          ...gateway,
+        },
+      }),
+    };
+  }, [reviewCoachSnapshot.aiRoleConfigs]);
+
+  const generateAdaptiveQuizTurn = useCallback(async (taskId: string) => {
+    const task = reviewCoachSnapshot.adaptiveReviewTasks.find((item) => item.id === taskId);
+    const record = task ? recordBlocks.find((item) => item.id === task.recordId) : undefined;
+    if (!task || !record) throw new Error("当前任务的学习记录不存在。");
+    const context = buildDecisionBlockAiContextPack(record, task.decisionBlockId, assets).markdown;
+    const { provider, orchestrator } = await createQuizOrchestrator();
+    try {
+      return await orchestrator.generateQuizTurn({
+        taskId, decisionBlockContent: context, provider: provider.providerName, model: provider.model,
+        promptVersion: defaultQuizExecutionMetadata.quizTurnPromptVersion,
+        qualityPromptVersion: defaultQuizExecutionMetadata.questionQualityPromptVersion,
+        policyVersion: defaultQuizExecutionMetadata.policyVersion, operationId: newId(),
+      });
+    } finally {
+      await refresh();
+      await markAutoBackupDirty("review-coach-quiz-turn");
+    }
+  }, [assets, createQuizOrchestrator, recordBlocks, refresh, reviewCoachSnapshot.adaptiveReviewTasks]);
+
+  const requestAdaptiveQuizHint = useCallback(async (turnId: string, level: number) => {
+    const result = await reviewCoachOrchestrator.recordQuizHint(turnId, level);
+    await refresh();
+    await markAutoBackupDirty("review-coach-quiz-hint");
+    return result;
+  }, [refresh]);
+
+  const submitAdaptiveQuizAnswer = useCallback(async (turnId: string, answerText: string) => {
+    const { provider, orchestrator } = await createQuizOrchestrator();
+    try {
+      return await orchestrator.submitQuizAnswer({ turnId, answerText, provider: provider.providerName, model: provider.model, promptVersion: defaultQuizExecutionMetadata.answerEvaluationPromptVersion, policyVersion: defaultQuizExecutionMetadata.policyVersion, operationId: newId() });
+    } finally {
+      await refresh();
+      await markAutoBackupDirty("review-coach-quiz-answer");
+    }
+  }, [createQuizOrchestrator, refresh]);
+
+  const skipAdaptiveQuizTurn = useCallback(async (turnId: string) => {
+    const result = await reviewCoachOrchestrator.skipQuizTurn(turnId, newId());
+    await refresh();
+    await markAutoBackupDirty("review-coach-quiz-skip");
+    return result;
+  }, [refresh]);
+
+  const reportAdaptiveQuizInvalid = useCallback(async (turnId: string, reason: string) => {
+    const result = await reviewCoachOrchestrator.reportInvalidQuestion(turnId, reason, newId());
+    await refresh();
+    await markAutoBackupDirty("review-coach-question-invalid");
+    return result;
+  }, [refresh]);
+
+  const finishAdaptiveQuizTask = useCallback(async (taskId: string, outcome: SubjectiveOutcome, reason?: string, confirmedConflict?: boolean) => {
+    const result = await reviewCoachOrchestrator.finishQuizTask({ taskId, outcome, reason, confirmedConflict, operationId: newId() });
+    await refresh();
+    await markAutoBackupDirty("review-coach-quiz-finish");
+    return result;
+  }, [refresh]);
+
+  const abandonAdaptiveQuizTask = useCallback(async (taskId: string, reason: string) => {
+    const result = await reviewCoachOrchestrator.abandonQuizTask(taskId, reason, newId());
+    await refresh();
+    await markAutoBackupDirty("review-coach-quiz-abandon");
+    return result;
+  }, [refresh]);
+
   const deleteDecisionBlockFeedback = useCallback(async (feedbackId: string) => {
     const deleted = await reviewCoachRepository.deleteFeedback(feedbackId, nowISO());
     await refresh();
@@ -922,6 +1022,13 @@ export const useAppData = () => {
     resumeDeepAnalysis,
     switchAdaptiveTask,
     deferAdaptiveTask,
+    generateAdaptiveQuizTurn,
+    requestAdaptiveQuizHint,
+    submitAdaptiveQuizAnswer,
+    skipAdaptiveQuizTurn,
+    reportAdaptiveQuizInvalid,
+    finishAdaptiveQuizTask,
+    abandonAdaptiveQuizTask,
     transitionAnalysisQueueItem,
     updateAnalysisQueueItemNote,
     linkLegacyReviewFeedback,

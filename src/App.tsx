@@ -17,6 +17,7 @@ import {
 
 import { useAppData } from "./hooks/useAppData";
 import { TodayPage } from "./pages/TodayPage";
+import { AdaptiveReviewPage } from "./features/reviewCoach/AdaptiveReviewPage";
 import { JournalPage } from "./pages/JournalPage";
 import { CategoriesPage } from "./pages/CategoriesPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -373,6 +374,15 @@ export const App = () => {
   }, [aiReturnTab, popCurrentTabDepth, switchTab]);
 
   const closeRecordInCurrentTab = popCurrentTabDepth;
+
+  const openAdaptiveTask = useCallback((taskId: string) => {
+    const current = navigationStateRef.current;
+    commitNavigation({
+      ...current,
+      activeTab: "today",
+      tabMemory: { ...current.tabMemory, today: { ...current.tabMemory.today, recordId: undefined, adaptiveTaskId: taskId } },
+    });
+  }, [commitNavigation]);
 
   const setCurrentRecordEditing = useCallback((recordEditing: boolean) => {
     updateNavigationState((current) => ({
@@ -1035,7 +1045,22 @@ export const App = () => {
   const renderCurrentTab = () => {
     switch (activeTab) {
       case "today":
-        return currentRecord ? (
+        return tabMemory.today.adaptiveTaskId ? (
+          <AdaptiveReviewPage
+            taskId={tabMemory.today.adaptiveTaskId}
+            snapshot={app.reviewCoachSnapshot}
+            records={app.recordBlocks}
+            onBack={popCurrentTabDepth}
+            onGenerateTurn={app.generateAdaptiveQuizTurn}
+            onRequestHint={app.requestAdaptiveQuizHint}
+            onSubmitAnswer={app.submitAdaptiveQuizAnswer}
+            onSkipTurn={app.skipAdaptiveQuizTurn}
+            onReportInvalid={app.reportAdaptiveQuizInvalid}
+            onFinish={app.finishAdaptiveQuizTask}
+            onDefer={app.deferAdaptiveTask}
+            onAbandon={app.abandonAdaptiveQuizTask}
+          />
+        ) : currentRecord ? (
           renderRecordPage(currentRecord, tabMemory.today.highlightAssetId)
         ) : (
           <TodayPage
@@ -1070,6 +1095,7 @@ export const App = () => {
             onResumeDeepAnalysis={app.resumeDeepAnalysis}
             onSwitchAdaptiveTask={app.switchAdaptiveTask}
             onDeferAdaptiveTask={app.deferAdaptiveTask}
+            onOpenAdaptiveTask={openAdaptiveTask}
           />
         );
       case "journal":
@@ -1337,6 +1363,7 @@ export const App = () => {
   const showWebNavigationBack = !Capacitor.isNativePlatform()
     && getTabDepth(activeTab, tabMemory) > 0
     && !currentRecord
+    && !(activeTab === "today" && tabMemory.today.adaptiveTaskId)
     && !(activeTab === "journal" && tabMemory.journal.searchOpen)
     && !(activeTab === "journal" && tabMemory.journal.selectedSubject)
     && !(activeTab === "categories" && (tabMemory.categories.activeSubject || tabMemory.categories.managing))

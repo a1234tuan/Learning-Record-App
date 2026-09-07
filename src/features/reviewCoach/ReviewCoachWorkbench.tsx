@@ -14,6 +14,7 @@ interface ReviewCoachWorkbenchProps {
   onResume: (batchId: string) => Promise<unknown>;
   onSwitchTask: (taskId: string) => Promise<unknown>;
   onDeferTask: (taskId: string) => Promise<unknown>;
+  onOpenTask?: (taskId: string) => void;
 }
 
 const formatDateTime = (value?: string) => value
@@ -42,6 +43,7 @@ export const ReviewCoachWorkbench = ({
   onResume,
   onSwitchTask,
   onDeferTask,
+  onOpenTask,
 }: ReviewCoachWorkbenchProps) => {
   const candidateKey = planningBlocks.map((item) => item.decisionBlockId).join("|");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(planningBlocks.map((item) => item.decisionBlockId)));
@@ -226,7 +228,10 @@ export const ReviewCoachWorkbench = ({
                         <button type="button" onClick={() => setDeferTargetId(undefined)}><X size={15} />取消</button>
                         <button type="button" disabled={Boolean(busyAction)} onClick={() => void run(`defer:${task.id}`, () => onDeferTask(task.id), "当前任务已延期一天。") }><Clock3 size={15} />确认延期</button>
                       </>
-                    ) : <button type="button" onClick={() => setDeferTargetId(task.id)}><Clock3 size={15} />稍后再做</button>
+                    ) : <>
+                      {onOpenTask && <button type="button" className="primary-button" onClick={() => onOpenTask(task.id)}><Play size={15} />{task.status === "in-progress" ? "继续训练" : "开始训练"}</button>}
+                      <button type="button" onClick={() => setDeferTargetId(task.id)}><Clock3 size={15} />稍后再做</button>
+                    </>
                   ) : switchTargetId === task.id ? (
                     <>
                       <button type="button" onClick={() => setSwitchTargetId(undefined)}><X size={15} />取消</button>

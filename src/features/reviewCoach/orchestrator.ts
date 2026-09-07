@@ -2,6 +2,7 @@ import type {
   AiCompletionUsage,
 } from "../../types";
 import type {
+  AdaptiveQuizTurn,
   AdaptiveReviewTask,
   AnalysisBatch,
   AnalysisInputRef,
@@ -10,6 +11,8 @@ import type {
   FeedbackInterpretation,
   FeedbackInterpretationStatus,
   SessionBlueprint,
+  SubjectiveOutcome,
+  TaskOutcomeEvent,
   TaskPriorityTier,
 } from "./domain";
 import type {
@@ -107,6 +110,29 @@ export interface AnalyzeFeedbackResult {
   blueprints: SessionBlueprint[];
   tasks: AdaptiveReviewTask[];
   paused: boolean;
+}
+
+export interface GenerateQuizTurnInput {
+  taskId: string;
+  decisionBlockContent: string;
+  provider: string;
+  model: string;
+  promptVersion: string;
+  qualityPromptVersion: string;
+  policyVersion: string;
+  operationId: string;
+  signal?: AbortSignal;
+}
+
+export interface SubmitQuizAnswerInput {
+  turnId: string;
+  answerText: string;
+  provider: string;
+  model: string;
+  promptVersion: string;
+  policyVersion: string;
+  operationId: string;
+  signal?: AbortSignal;
 }
 
 const priorityRank: Record<AdaptiveReviewTask["priorityTier"], number> = {
@@ -605,6 +631,170 @@ export class ReviewCoachOrchestrator {
     }], "deferred", stamp, notBeforeAt);
     await this.selectNextTask();
     return deferred;
+  }
+
+  async generateQuizTurn(input: GenerateQuizTurnInput): Promise<AdaptiveQuizTurn> {
+    if (!this.dependencies.aiGateway) throw new Error("Review coach AI gateway is not configured.");
+    let snapshot = await this.dependencies.repository.getFormalSnapshot();
+    let task = snapshot.adaptiveReviewTasks.find((item) => item.id === input.taskId && !item.deletedAt);
+    if (!task || !["current", "in-progress"].includes(task.status)) throw new Error("当前复习任务不可开始。");
+    const blueprint = snapshot.sessionBlueprints.find((item) => item.id === task!.blueprintId && item.status === "accepted" && !item.deletedAt);
+    if (!blueprint || blueprint.decisionBlockId !== task.decisionBlockId || blueprint.contentVersion !== task.contentVersion) throw new Error("复习蓝图缺失或已经过期。");
+    if (task.status === "current") {
+      task = await this.dependencies.repository.transitionTask(task.id, "in-progress", this.dependencies.clock.now());
+      snapshot = await this.dependencies.repository.getFormalSnapshot();
+    }
+    const turns = snapshot.adaptiveQuizTurns.filter((item) => item.taskId === task!.id && item.status !== "invalid").sort((a, b) => a.sequence - b.sequence);
+    const active = turns.find((item) => item.status === "displayed");
+    if (active) return active;
+    if (turns.length >= blueprint.maxTurns) throw new Error("本次训练已达到蓝图轮次上限，请提交本次结果。");
+    const previous = turns.at(-1);
+    const previousBranch = previous?.answerText === "[skipped]" ? "skipped" : previous?.assessment;
+    const branch = previousBranch ? blueprint.branches.find((item) => item.when === previousBranch) : undefined;
+    const evidenceByKey = new Map(blueprint.evidence.map((item) => [`${item.decisionBlockId}:${item.recordId}:${item.contentVersion}:${item.excerptHash}`, item]));
+    let lastQualityReason = "";
+    for (let generationAttempt = 0; generationAttempt < 2; generationAttempt += 1) {
+      const response = await this.dependencies.aiGateway.generateTurn({
+        task: { id: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion },
+        blueprint,
+        decisionBlockContent: input.decisionBlockContent,
+        previousTurns: turns.map((item) => ({ sequence: item.sequence, practiceType: item.practiceType, question: item.question, assessment: item.assessment, hintsUsed: item.hintsUsed.length })),
+        requestedStrategy: branch?.nextStrategy ?? (turns.length === 0 ? blueprint.initialPracticeType : "continue"),
+        priorQualityFailure: lastQualityReason || undefined,
+      }, input.signal);
+      if (response.status === "insufficient-context") throw new Error(`生成题目所需背景不足：${response.missingInformation.join("、")}`);
+      if (response.sourceEvidence.some((item) => !evidenceByKey.has(`${item.decisionBlockId}:${item.recordId}:${item.contentVersion}:${item.excerptHash}`))) {
+        throw new Error("题目引用了蓝图之外的来源。");
+      }
+      const requiresQualityReview = response.practiceType === "calculation" || response.answerMode !== "open";
+      let qualityChecked = false;
+      if (requiresQualityReview) {
+        const quality = await this.dependencies.aiGateway.reviewQuestion({ blueprint, candidate: response, decisionBlockContent: input.decisionBlockContent }, input.signal);
+        qualityChecked = true;
+        if (quality.status === "insufficient-context" || quality.verdict === "fail") {
+          lastQualityReason = quality.status === "insufficient-context" ? quality.missingInformation.join("、") : quality.rationale;
+          continue;
+        }
+      }
+      const stamp = this.dependencies.clock.now();
+      return this.dependencies.repository.addQuizTurn({
+        id: this.dependencies.ids.next(),
+        taskId: task.id,
+        decisionBlockId: task.decisionBlockId,
+        recordId: task.recordId,
+        contentVersion: task.contentVersion,
+        sequence: turns.length + 1,
+        status: "displayed",
+        practiceType: response.practiceType,
+        answerMode: response.answerMode,
+        question: response.question,
+        displayedAt: stamp,
+        sourceEvidence: response.sourceEvidence,
+        answerCriteria: response.answerCriteria,
+        hintsUsed: [],
+        availableHints: response.hints,
+        qualityChecked,
+        qualityModel: qualityChecked ? input.model : undefined,
+        generationModel: input.model,
+        promptVersion: input.promptVersion,
+        policyVersion: input.policyVersion,
+        idempotencyKey: `quiz-turn:${input.operationId}:${turns.length + 1}`,
+        createdAt: stamp,
+        updatedAt: stamp,
+      });
+    }
+    throw new Error(`题目质检连续失败，已停止生成。${lastQualityReason ? ` ${lastQualityReason}` : ""}`);
+  }
+
+  recordQuizHint(turnId: string, level: number) {
+    return this.dependencies.repository.recordQuizHint(turnId, level, this.dependencies.clock.now());
+  }
+
+  async submitQuizAnswer(input: SubmitQuizAnswerInput): Promise<AdaptiveQuizTurn> {
+    if (!this.dependencies.aiGateway) throw new Error("Review coach AI gateway is not configured.");
+    const answerText = input.answerText.trim();
+    if (!answerText) throw new Error("请先填写回答。");
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const turn = snapshot.adaptiveQuizTurns.find((item) => item.id === input.turnId && item.status === "displayed");
+    const task = turn ? snapshot.adaptiveReviewTasks.find((item) => item.id === turn.taskId && item.status === "in-progress") : undefined;
+    const blueprint = task ? snapshot.sessionBlueprints.find((item) => item.id === task.blueprintId && item.status === "accepted") : undefined;
+    if (!turn || !task || !blueprint) throw new Error("当前题目已经失效或不再进行中。");
+    const evaluation = await this.dependencies.aiGateway.evaluateAnswer({ blueprint, question: turn.question, answerCriteria: turn.answerCriteria, answerText, hintsUsed: turn.hintsUsed }, input.signal);
+    if (evaluation.status === "insufficient-context") throw new Error(`无法可靠判断回答：${evaluation.missingInformation.join("、")}`);
+    const criteria = new Set(turn.answerCriteria);
+    if ([...evaluation.matchedCriteria, ...evaluation.missingCriteria].some((item) => !criteria.has(item))) throw new Error("回答判定引用了题目之外的判据。");
+    const stamp = this.dependencies.clock.now();
+    const answered: AdaptiveQuizTurn = { ...turn, status: "answered", answerText, answeredAt: stamp, assessment: evaluation.assessment, assessmentRationale: evaluation.rationale, updatedAt: stamp };
+    const outcome: TaskOutcomeEvent = {
+      id: this.dependencies.ids.next(), taskId: task.id, turnId: turn.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion,
+      kind: "answer-assessment", answerAssessment: evaluation.assessment, reason: evaluation.rationale, occurredAt: stamp,
+      idempotencyKey: `answer:${input.operationId}`, createdAt: stamp, updatedAt: stamp,
+    };
+    return this.dependencies.repository.commitQuizAnswer(answered, outcome);
+  }
+
+  async skipQuizTurn(turnId: string, operationId: string): Promise<AdaptiveQuizTurn> {
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const turn = snapshot.adaptiveQuizTurns.find((item) => item.id === turnId && item.status === "displayed");
+    const task = turn ? snapshot.adaptiveReviewTasks.find((item) => item.id === turn.taskId && item.status === "in-progress") : undefined;
+    if (!turn || !task) throw new Error("当前题目已经失效或不再进行中。");
+    const stamp = this.dependencies.clock.now();
+    return this.dependencies.repository.commitQuizAnswer({ ...turn, status: "answered", answerText: "[skipped]", answeredAt: stamp, assessment: "unreliable", assessmentRationale: "用户跳过本题，未形成可判断的作答证据。", updatedAt: stamp }, {
+      id: this.dependencies.ids.next(), taskId: task.id, turnId: turn.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion,
+      kind: "answer-assessment", answerAssessment: "unreliable", reason: "skipped", occurredAt: stamp,
+      idempotencyKey: `answer-skipped:${operationId}`, createdAt: stamp, updatedAt: stamp,
+    });
+  }
+
+  async reportInvalidQuestion(turnId: string, reason: string, operationId: string): Promise<AdaptiveReviewTask> {
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const turn = snapshot.adaptiveQuizTurns.find((item) => item.id === turnId && item.status !== "invalid");
+    const task = turn ? snapshot.adaptiveReviewTasks.find((item) => item.id === turn.taskId) : undefined;
+    if (!turn || !task) throw new Error("题目或任务不存在。");
+    const stamp = this.dependencies.clock.now();
+    const result = await this.dependencies.repository.invalidateQuizTurn(turn.id, {
+      id: this.dependencies.ids.next(), taskId: task.id, turnId: turn.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion,
+      kind: "task-disposition", disposition: "question-invalid", reason: reason.trim() || "用户报告题目有问题", occurredAt: stamp,
+      idempotencyKey: `question-invalid:${operationId}`, createdAt: stamp, updatedAt: stamp,
+    }, stamp);
+    await this.selectNextTask();
+    return result;
+  }
+
+  async finishQuizTask(input: { taskId: string; outcome: SubjectiveOutcome; reason?: string; confirmedConflict?: boolean; operationId: string }): Promise<AdaptiveReviewTask> {
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const task = snapshot.adaptiveReviewTasks.find((item) => item.id === input.taskId && item.status === "in-progress");
+    const answers = task ? snapshot.adaptiveQuizTurns.filter((item) => item.taskId === task.id && item.status === "answered" && item.answerText !== "[skipped]").sort((a, b) => a.sequence - b.sequence) : [];
+    if (!task || answers.length === 0) throw new Error("至少完成一轮有效作答后才能提交结果。");
+    const lastAnswer = answers.at(-1)!;
+    if (input.outcome === "mastered" && lastAnswer.assessment === "incorrect" && !input.confirmedConflict) throw new Error("最后一轮回答仍有明显错误；确认后才能保留“已掌握”自评。");
+    if (input.outcome === "not-mastered" && !input.reason?.trim()) throw new Error("请说明仍未掌握的具体原因，以便重新规划。");
+    const stamp = this.dependencies.clock.now();
+    const events: TaskOutcomeEvent[] = [
+      { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "self-assessment", subjectiveOutcome: input.outcome, reason: input.reason?.trim(), confirmedConflict: input.confirmedConflict, occurredAt: stamp, idempotencyKey: `self-assessment:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
+      { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "task-disposition", disposition: "completed", occurredAt: stamp, idempotencyKey: `task-completed:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
+    ];
+    const status = input.outcome === "not-mastered" ? "not-achieved" : "completed";
+    const result = await this.dependencies.repository.commitTaskOutcome(task.id, events, status, stamp);
+    if (input.outcome === "not-mastered") {
+      await this.recordFeedback({ decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, comment: input.reason!, includeInAnalysis: true, source: "manual", operationId: `replan:${input.operationId}` });
+    }
+    await this.selectNextTask();
+    return result;
+  }
+
+  async abandonQuizTask(taskId: string, reason: string, operationId: string): Promise<AdaptiveReviewTask> {
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const task = snapshot.adaptiveReviewTasks.find((item) => item.id === taskId && ["current", "in-progress"].includes(item.status));
+    if (!task) throw new Error("当前任务不存在。");
+    const stamp = this.dependencies.clock.now();
+    const result = await this.dependencies.repository.commitTaskOutcome(task.id, [{
+      id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion,
+      kind: "task-disposition", disposition: "abandoned", reason: reason.trim() || "用户退出任务", occurredAt: stamp,
+      idempotencyKey: `task-abandoned:${operationId}`, createdAt: stamp, updatedAt: stamp,
+    }], "abandoned", stamp);
+    await this.selectNextTask();
+    return result;
   }
 
   async selectNextTask(): Promise<AdaptiveReviewTask | undefined> {

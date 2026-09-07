@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudyJournalDatabase } from "../../db/database";
 import type { RecordBlock } from "../../types";
@@ -466,5 +466,49 @@ describe("DexieReviewCoachRepository", () => {
     expect(completed.status).toBe("completed");
     expect(await database.taskOutcomeEvents.count()).toBe(3);
     expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "improved-pending-verification" });
+  });
+
+  it("commits a displayed quiz answer and its assessment event atomically", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    snapshot.adaptiveReviewTasks[0] = { ...snapshot.adaptiveReviewTasks[0], status: "in-progress", activeSlotKey: "global-current", openTargetKey: `${coachTestBlock.id}:1`, endedAt: undefined };
+    snapshot.adaptiveQuizTurns[0] = { ...snapshot.adaptiveQuizTurns[0], status: "displayed", answerText: undefined, answeredAt: undefined, assessment: undefined, assessmentRationale: undefined, availableHints: ["first hint"], hintsUsed: [] };
+    snapshot.taskOutcomeEvents = [];
+    snapshot.delayedVerifications = [];
+    await database.transaction("rw", reviewCoachRestoreTables(database), () => restoreReviewCoachFormalSnapshot(database, snapshot));
+    await repository.recordQuizHint(snapshot.adaptiveQuizTurns[0].id, 1, "2026-09-04T09:00:00.000Z");
+    const answered = { ...snapshot.adaptiveQuizTurns[0], status: "answered" as const, answerText: "Before enqueue", answeredAt: "2026-09-04T09:01:00.000Z", assessment: "correct" as const, assessmentRationale: "Matches", updatedAt: "2026-09-04T09:01:00.000Z" };
+    const event = { ...coachTestAnswerOutcome, id: "answer-stage6", idempotencyKey: "answer-stage6", occurredAt: answered.answeredAt, updatedAt: answered.updatedAt };
+
+    await repository.commitQuizAnswer(answered, event);
+
+    expect(await database.adaptiveQuizTurns.get(answered.id)).toMatchObject({ status: "answered", answerText: "Before enqueue", hintsUsed: [{ level: 1 }] });
+    expect(await database.taskOutcomeEvents.get(event.id)).toMatchObject({ answerAssessment: "correct", turnId: answered.id });
+  });
+
+  it("rolls back quiz and task invalidation when the outcome event write fails", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    const turn = { ...snapshot.adaptiveQuizTurns[0], status: "displayed" as const, answerText: undefined, answeredAt: undefined, assessment: undefined, assessmentRationale: undefined };
+    const task: AdaptiveReviewTask = { ...snapshot.adaptiveReviewTasks[0], status: "in-progress", activeSlotKey: "global-current", openTargetKey: `${coachTestBlock.id}:1`, endedAt: undefined };
+    snapshot.adaptiveQuizTurns = [turn];
+    snapshot.adaptiveReviewTasks = [task];
+    snapshot.taskOutcomeEvents = [];
+    snapshot.delayedVerifications = [];
+    await database.transaction("rw", reviewCoachRestoreTables(database), () => restoreReviewCoachFormalSnapshot(database, snapshot));
+    const event = {
+      ...coachTestCompletedDisposition,
+      id: "question-invalid-stage6",
+      taskId: task.id,
+      turnId: turn.id,
+      disposition: "question-invalid" as const,
+      reason: "ambiguous question",
+      idempotencyKey: "question-invalid-stage6",
+    };
+    vi.spyOn(database.taskOutcomeEvents, "add").mockRejectedValueOnce(new Error("simulated event write failure"));
+
+    await expect(repository.invalidateQuizTurn(turn.id, event, coachTestStamp)).rejects.toThrow("simulated event write failure");
+
+    expect(await database.adaptiveQuizTurns.get(turn.id)).toMatchObject({ status: "displayed" });
+    expect(await database.adaptiveReviewTasks.get(task.id)).toMatchObject({ status: "in-progress", activeSlotKey: "global-current" });
+    expect(await database.taskOutcomeEvents.count()).toBe(0);
   });
 });

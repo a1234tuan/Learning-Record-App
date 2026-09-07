@@ -4,6 +4,9 @@ import {
   REVIEW_COACH_AI_CONTRACTS,
   parseFeedbackInterpretationAiResponse,
   parseSessionBlueprintAiResponse,
+  parseQuizTurnAiResponse,
+  parseQuestionQualityAiResponse,
+  parseAnswerEvaluationAiResponse,
 } from "./aiSchemas";
 
 describe("review coach AI contracts", () => {
@@ -50,5 +53,13 @@ describe("review coach AI contracts", () => {
       missingInformation: ["source"],
       unexpected: true,
     })).toThrow("unexpected field");
+  });
+
+  it("validates Stage 6 turn, quality, and answer contracts strictly", () => {
+    const evidence = [{ decisionBlockId: "block-1", recordId: "record-1", contentVersion: 1, excerptHash: "hash-1", purpose: "source" }];
+    expect(parseQuizTurnAiResponse({ status: "ok", practiceType: "variation", answerMode: "open", question: "Explain.", answerCriteria: ["criterion"], sourceEvidence: evidence, hints: ["Recall the boundary."] })).toMatchObject({ answerMode: "open" });
+    expect(parseQuestionQualityAiResponse({ status: "ok", verdict: "pass", severeIssues: [], rationale: "source aligned" })).toMatchObject({ verdict: "pass" });
+    expect(parseAnswerEvaluationAiResponse({ status: "ok", assessment: "partial", matchedCriteria: ["criterion"], missingCriteria: [], rationale: "partial" })).toMatchObject({ assessment: "partial" });
+    expect(() => parseQuizTurnAiResponse({ status: "ok", practiceType: "variation", answerMode: "open", question: "Explain.", answerCriteria: ["criterion"], sourceEvidence: evidence, hints: [], extra: true })).toThrow("unexpected field");
   });
 });
