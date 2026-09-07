@@ -335,9 +335,13 @@ export interface InterventionEffectSummary extends CoachBaseEntity {
   sampleFrom: CoachIsoDateTime;
   sampleTo: CoachIsoDateTime;
   sampleCount: number;
+  recentSampleCount: number;
+  recencyWeight: number;
   immediateMasteredCount: number;
   delayedRetainedCount: number;
   delayedDecayedCount: number;
+  retentionRate?: number;
+  decayRate?: number;
   averageTurnsToMastery?: number;
   averageHintsUsed?: number;
   deferredCount: number;

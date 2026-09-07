@@ -15,6 +15,7 @@ import type {
   TaskOutcomeEvent,
   TaskPriorityTier,
 } from "./domain";
+import { calculateDelayedVerificationSchedule, isVerificationDue, isVerificationEligible } from "./verificationPolicy";
 import type {
   AnswerEvaluationAiResponse,
   FeedbackInterpretationAiResponse,
@@ -189,10 +190,17 @@ const priorityForPlanningBlock = (block: AnalysisPlanningBlock): TaskPriorityTie
   return "consolidation";
 };
 
+const effectivePriorityRank = (task: AdaptiveReviewTask, now?: string) => {
+  const base = priorityRank[task.priorityTier];
+  if (!now || task.priorityTier === "due-verification") return base;
+  const waitedWeeks = Math.floor(Math.max(0, Date.parse(now) - Date.parse(task.queuedAt)) / (7 * 86_400_000));
+  return Math.max(0, base - waitedWeeks);
+};
+
 export const rankWaitingTasks = (tasks: AdaptiveReviewTask[], now?: string): AdaptiveReviewTask[] => [...tasks]
   .filter((task) => (task.status === "waiting" || task.status === "deferred") && (!now || !task.notBeforeAt || task.notBeforeAt <= now))
   .sort((left, right) =>
-    priorityRank[left.priorityTier] - priorityRank[right.priorityTier] ||
+    effectivePriorityRank(left, now) - effectivePriorityRank(right, now) ||
     (left.notBeforeAt ?? left.queuedAt).localeCompare(right.notBeforeAt ?? right.queuedAt) ||
     left.queuedAt.localeCompare(right.queuedAt) ||
     left.id.localeCompare(right.id),
@@ -648,6 +656,10 @@ export class ReviewCoachOrchestrator {
     const active = turns.find((item) => item.status === "displayed");
     if (active) return active;
     if (turns.length >= blueprint.maxTurns) throw new Error("本次训练已达到蓝图轮次上限，请提交本次结果。");
+    const verification = snapshot.delayedVerifications.find((item) => item.taskId === task!.id && ["queued", "in-progress"].includes(item.status));
+    const sourceOutcome = verification ? snapshot.taskOutcomeEvents.find((item) => item.id === verification.sourceOutcomeEventId) : undefined;
+    const sourceTurns = sourceOutcome ? snapshot.adaptiveQuizTurns.filter((item) => item.taskId === sourceOutcome.taskId && item.status !== "invalid") : [];
+    const previousTurns = verification ? [...sourceTurns, ...turns] : turns;
     const previous = turns.at(-1);
     const previousBranch = previous?.answerText === "[skipped]" ? "skipped" : previous?.assessment;
     const branch = previousBranch ? blueprint.branches.find((item) => item.when === previousBranch) : undefined;
@@ -658,13 +670,18 @@ export class ReviewCoachOrchestrator {
         task: { id: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion },
         blueprint,
         decisionBlockContent: input.decisionBlockContent,
-        previousTurns: turns.map((item) => ({ sequence: item.sequence, practiceType: item.practiceType, question: item.question, assessment: item.assessment, hintsUsed: item.hintsUsed.length })),
-        requestedStrategy: branch?.nextStrategy ?? (turns.length === 0 ? blueprint.initialPracticeType : "continue"),
+        previousTurns: previousTurns.map((item) => ({ sequence: item.sequence, practiceType: item.practiceType, question: item.question, assessment: item.assessment, hintsUsed: item.hintsUsed.length })),
+        requestedStrategy: verification ? "continue" : branch?.nextStrategy ?? (turns.length === 0 ? blueprint.initialPracticeType : "continue"),
+        verificationMode: verification ? { verificationId: verification.id, requireFreshRetrieval: true } : undefined,
         priorQualityFailure: lastQualityReason || undefined,
       }, input.signal);
       if (response.status === "insufficient-context") throw new Error(`生成题目所需背景不足：${response.missingInformation.join("、")}`);
       if (response.sourceEvidence.some((item) => !evidenceByKey.has(`${item.decisionBlockId}:${item.recordId}:${item.contentVersion}:${item.excerptHash}`))) {
         throw new Error("题目引用了蓝图之外的来源。");
+      }
+      if (verification && previousTurns.some((item) => item.question.trim() === response.question.trim())) {
+        lastQualityReason = "延迟验证题与历史题目重复";
+        continue;
       }
       const requiresQualityReview = response.practiceType === "calculation" || response.answerMode !== "open";
       let qualityChecked = false;
@@ -770,15 +787,47 @@ export class ReviewCoachOrchestrator {
     if (input.outcome === "mastered" && lastAnswer.assessment === "incorrect" && !input.confirmedConflict) throw new Error("最后一轮回答仍有明显错误；确认后才能保留“已掌握”自评。");
     if (input.outcome === "not-mastered" && !input.reason?.trim()) throw new Error("请说明仍未掌握的具体原因，以便重新规划。");
     const stamp = this.dependencies.clock.now();
+    const selfAssessment: TaskOutcomeEvent = { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "self-assessment", subjectiveOutcome: input.outcome, reason: input.reason?.trim(), confirmedConflict: input.confirmedConflict, occurredAt: stamp, idempotencyKey: `self-assessment:${input.operationId}`, createdAt: stamp, updatedAt: stamp };
     const events: TaskOutcomeEvent[] = [
-      { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "self-assessment", subjectiveOutcome: input.outcome, reason: input.reason?.trim(), confirmedConflict: input.confirmedConflict, occurredAt: stamp, idempotencyKey: `self-assessment:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
+      selfAssessment,
       { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "task-disposition", disposition: "completed", occurredAt: stamp, idempotencyKey: `task-completed:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
     ];
     const status = input.outcome === "not-mastered" ? "not-achieved" : "completed";
-    const result = await this.dependencies.repository.commitTaskOutcome(task.id, events, status, stamp);
+    const verificationSchedule = input.outcome === "not-mastered" ? undefined : calculateDelayedVerificationSchedule({
+      completedAt: stamp,
+      subjectiveOutcome: input.outcome,
+      answeredTurns: answers,
+      priorVerifications: snapshot.delayedVerifications.filter((item) => item.decisionBlockId === task.decisionBlockId && item.contentVersion === task.contentVersion),
+    });
+    const verification = verificationSchedule ? {
+      id: this.dependencies.ids.next(), sourceOutcomeEventId: selfAssessment.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion,
+      status: "scheduled" as const, ...verificationSchedule, idempotencyKey: `verification:${selfAssessment.id}`, createdAt: stamp, updatedAt: stamp,
+    } : undefined;
+    const result = await this.dependencies.repository.commitTaskOutcome(task.id, events, status, stamp, undefined, verification);
     if (input.outcome === "not-mastered") {
       await this.recordFeedback({ decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, comment: input.reason!, includeInAnalysis: true, source: "manual", operationId: `replan:${input.operationId}` });
     }
+    await this.selectNextTask();
+    return result;
+  }
+
+  async completeDelayedVerification(input: { taskId: string; outcome: "retained" | "decayed"; confirmedConflict?: boolean; operationId: string }): Promise<AdaptiveReviewTask> {
+    const snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const task = snapshot.adaptiveReviewTasks.find((item) => item.id === input.taskId && item.status === "in-progress");
+    const verification = task ? snapshot.delayedVerifications.find((item) => item.taskId === task.id && item.status === "in-progress") : undefined;
+    const answers = task ? snapshot.adaptiveQuizTurns.filter((item) => item.taskId === task.id && item.status === "answered" && item.answerText !== "[skipped]").sort((a, b) => a.sequence - b.sequence) : [];
+    if (!task || !verification || answers.length === 0) throw new Error("至少完成一轮有效验证后才能提交结果。");
+    const lastAnswer = answers.at(-1)!;
+    if (input.outcome === "retained" && lastAnswer.assessment === "incorrect" && !input.confirmedConflict) {
+      throw new Error("最后一轮验证回答仍有明显错误；确认后才能保留“仍然掌握”。");
+    }
+    const stamp = this.dependencies.clock.now();
+    const subjectiveOutcome = input.outcome === "retained" ? "mastered" as const : "not-mastered" as const;
+    const events: TaskOutcomeEvent[] = [
+      { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "self-assessment", subjectiveOutcome, reason: input.outcome === "decayed" ? "延迟验证出现衰退" : undefined, confirmedConflict: input.confirmedConflict, occurredAt: stamp, idempotencyKey: `verification-self-assessment:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
+      { id: this.dependencies.ids.next(), taskId: task.id, decisionBlockId: task.decisionBlockId, recordId: task.recordId, contentVersion: task.contentVersion, kind: "task-disposition", disposition: "completed", occurredAt: stamp, idempotencyKey: `verification-completed:${input.operationId}`, createdAt: stamp, updatedAt: stamp },
+    ];
+    const result = await this.dependencies.repository.completeVerification(task.id, events, input.outcome, stamp);
     await this.selectNextTask();
     return result;
   }
@@ -798,11 +847,45 @@ export class ReviewCoachOrchestrator {
   }
 
   async selectNextTask(): Promise<AdaptiveReviewTask | undefined> {
+    await this.refreshDueVerifications();
     const snapshot = await this.dependencies.repository.getFormalSnapshot();
     const current = snapshot.adaptiveReviewTasks.find((task) => task.status === "current" || task.status === "in-progress");
     if (current) return current;
-    const next = rankWaitingTasks(snapshot.adaptiveReviewTasks, this.dependencies.clock.now())[0];
+    const ranked = rankWaitingTasks(snapshot.adaptiveReviewTasks, this.dependencies.clock.now());
+    const recentTerminal = snapshot.adaptiveReviewTasks
+      .filter((task) => task.endedAt && ["completed", "not-achieved", "invalid", "abandoned"].includes(task.status))
+      .sort((left, right) => right.endedAt!.localeCompare(left.endedAt!));
+    const consecutiveVerificationTasks = recentTerminal.findIndex((task) => task.priorityTier !== "due-verification");
+    const verificationStreak = consecutiveVerificationTasks === -1 ? recentTerminal.length : consecutiveVerificationTasks;
+    const next = verificationStreak >= 2 ? ranked.find((task) => task.priorityTier !== "due-verification") ?? ranked[0] : ranked[0];
     if (!next) return undefined;
     return this.dependencies.repository.transitionTask(next.id, "current", this.dependencies.clock.now());
+  }
+
+  async refreshDueVerifications(): Promise<number> {
+    const now = this.dependencies.clock.now();
+    let snapshot = await this.dependencies.repository.getFormalSnapshot();
+    for (const verification of snapshot.delayedVerifications.filter((item) => isVerificationEligible(item, now))) {
+      await this.dependencies.repository.transitionVerification(verification.id, "eligible", now);
+    }
+    snapshot = await this.dependencies.repository.getFormalSnapshot();
+    const openTargets = new Set(snapshot.adaptiveReviewTasks
+      .filter((task) => ["waiting", "current", "in-progress", "deferred"].includes(task.status))
+      .map((task) => `${task.decisionBlockId}:${task.contentVersion}`));
+    let queued = 0;
+    for (const verification of snapshot.delayedVerifications.filter((item) => !item.taskId && isVerificationDue(item, now)).sort((a, b) => a.verificationDueAt.localeCompare(b.verificationDueAt))) {
+      const targetKey = `${verification.decisionBlockId}:${verification.contentVersion}`;
+      if (openTargets.has(targetKey)) continue;
+      const source = snapshot.taskOutcomeEvents.find((item) => item.id === verification.sourceOutcomeEventId);
+      const sourceTask = source ? snapshot.adaptiveReviewTasks.find((item) => item.id === source.taskId) : undefined;
+      if (!sourceTask) continue;
+      await this.dependencies.repository.queueVerification(verification.id, {
+        id: this.dependencies.ids.next(), blueprintId: sourceTask.blueprintId, decisionBlockId: verification.decisionBlockId, recordId: verification.recordId, contentVersion: verification.contentVersion,
+        status: "waiting", priorityTier: "due-verification", queuedAt: now, idempotencyKey: `verification-task:${verification.id}`, createdAt: now, updatedAt: now,
+      }, now);
+      openTargets.add(targetKey);
+      queued += 1;
+    }
+    return queued;
   }
 }

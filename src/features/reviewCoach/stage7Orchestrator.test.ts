@@ -1,0 +1,130 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { AdaptiveReviewTask, ReviewCoachFormalSnapshot } from "./domain";
+import { rankWaitingTasks, ReviewCoachOrchestrator } from "./orchestrator";
+import type { ReviewCoachRepository } from "./repository";
+import { coachTestStamp, coachTestTask, coachTestTurn, coachTestVerification, completeCoachTestSnapshot } from "./reviewCoachTestFixtures";
+
+const now = "2026-09-07T08:00:00.000Z";
+
+const createIds = () => {
+  let value = 0;
+  return { next: () => `stage7-id-${++value}` };
+};
+
+describe("Stage 7 delayed verification orchestrator", () => {
+  it.each([
+    ["mastered", "2026-09-08T08:00:00.000Z", "2026-09-10T08:00:00.000Z"],
+    ["needs-consolidation", "2026-09-07T16:00:00.000Z", "2026-09-08T08:00:00.000Z"],
+  ] as const)("schedules %s without prematurely recording retention", async (outcome, eligibleAt, dueAt) => {
+    const snapshot = completeCoachTestSnapshot();
+    snapshot.adaptiveReviewTasks[0] = { ...snapshot.adaptiveReviewTasks[0], status: "in-progress", endedAt: undefined };
+    snapshot.adaptiveQuizTurns[0] = { ...snapshot.adaptiveQuizTurns[0], updatedAt: now, answeredAt: now };
+    snapshot.taskOutcomeEvents = [];
+    snapshot.delayedVerifications = [];
+    const commitTaskOutcome = vi.fn(async (_taskId, events, status, updatedAt, _notBeforeAt, verification) => {
+      snapshot.taskOutcomeEvents.push(...events);
+      snapshot.adaptiveReviewTasks[0] = { ...snapshot.adaptiveReviewTasks[0], status, endedAt: updatedAt };
+      if (verification) snapshot.delayedVerifications.push(verification);
+      return snapshot.adaptiveReviewTasks[0];
+    });
+    const repository = { getFormalSnapshot: vi.fn(async () => snapshot), commitTaskOutcome } as unknown as ReviewCoachRepository;
+    const orchestrator = new ReviewCoachOrchestrator({ repository, ids: createIds(), clock: { now: () => now } });
+
+    await orchestrator.finishQuizTask({ taskId: coachTestTask.id, outcome, operationId: `finish-${outcome}` });
+
+    const verification = commitTaskOutcome.mock.calls[0][5];
+    expect(verification).toMatchObject({
+      status: "scheduled",
+      verificationEligibleAt: eligibleAt,
+      verificationDueAt: dueAt,
+    });
+    expect(verification).not.toHaveProperty("verificationOutcome");
+  });
+
+  it("regenerates an exact historical question for a verification task", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    const verificationTask: AdaptiveReviewTask = {
+      ...coachTestTask,
+      id: "verification-task",
+      status: "current",
+      priorityTier: "due-verification",
+      startedAt: undefined,
+      endedAt: undefined,
+      idempotencyKey: "verification-task",
+    };
+    snapshot.adaptiveReviewTasks.push(verificationTask);
+    snapshot.delayedVerifications[0] = { ...coachTestVerification, taskId: verificationTask.id, status: "queued", lastVerifiedAt: undefined, verificationOutcome: undefined };
+    const transitionTask = vi.fn(async (id: string, status: AdaptiveReviewTask["status"], updatedAt: string) => {
+      const index = snapshot.adaptiveReviewTasks.findIndex((task) => task.id === id);
+      snapshot.adaptiveReviewTasks[index] = { ...snapshot.adaptiveReviewTasks[index], status, updatedAt };
+      snapshot.delayedVerifications[0] = { ...snapshot.delayedVerifications[0], status: "in-progress", updatedAt };
+      return snapshot.adaptiveReviewTasks[index];
+    });
+    const addQuizTurn = vi.fn(async (turn) => turn);
+    const repository = { getFormalSnapshot: vi.fn(async () => snapshot), transitionTask, addQuizTurn } as unknown as ReviewCoachRepository;
+    const response = (question: string) => ({
+      status: "ok" as const,
+      practiceType: "variation" as const,
+      answerMode: "open" as const,
+      question,
+      answerCriteria: ["before enqueue"],
+      sourceEvidence: snapshot.sessionBlueprints[0].evidence,
+      hints: [],
+    });
+    const generateTurn = vi.fn()
+      .mockResolvedValueOnce(response(coachTestTurn.question))
+      .mockResolvedValueOnce(response("Explain why marking before enqueue prevents duplicates."));
+    const orchestrator = new ReviewCoachOrchestrator({
+      repository,
+      ids: createIds(),
+      clock: { now: () => now },
+      aiGateway: { interpretFeedback: vi.fn(), planSession: vi.fn(), generateTurn, reviewQuestion: vi.fn(), evaluateAnswer: vi.fn() },
+    });
+
+    const result = await orchestrator.generateQuizTurn({ taskId: verificationTask.id, decisionBlockContent: "source", provider: "test", model: "fast", promptVersion: "quiz-v1", qualityPromptVersion: "quality-v1", policyVersion: "policy-v1", operationId: "verify" });
+
+    expect(result.question).toBe("Explain why marking before enqueue prevents duplicates.");
+    expect(generateTurn).toHaveBeenCalledTimes(2);
+    expect(generateTurn.mock.calls[1][0]).toMatchObject({ verificationMode: { verificationId: coachTestVerification.id, requireFreshRetrieval: true }, priorQualityFailure: "延迟验证题与历史题目重复" });
+  });
+
+  it("completes a decayed verification as a separate not-mastered fact", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    snapshot.adaptiveReviewTasks[0] = { ...coachTestTask, status: "in-progress", priorityTier: "due-verification", endedAt: undefined };
+    snapshot.delayedVerifications[0] = { ...coachTestVerification, taskId: coachTestTask.id, status: "in-progress", lastVerifiedAt: undefined, verificationOutcome: undefined };
+    const completeVerification = vi.fn(async () => ({ ...snapshot.adaptiveReviewTasks[0], status: "not-achieved" as const }));
+    const repository = { getFormalSnapshot: vi.fn(async () => snapshot), completeVerification } as unknown as ReviewCoachRepository;
+    const orchestrator = new ReviewCoachOrchestrator({ repository, ids: createIds(), clock: { now: () => now } });
+
+    await orchestrator.completeDelayedVerification({ taskId: coachTestTask.id, outcome: "decayed", operationId: "decayed" });
+
+    expect(completeVerification).toHaveBeenCalledWith(coachTestTask.id, [
+      expect.objectContaining({ kind: "self-assessment", subjectiveOutcome: "not-mastered", reason: "延迟验证出现衰退" }),
+      expect.objectContaining({ kind: "task-disposition", disposition: "completed" }),
+    ], "decayed", now);
+  });
+
+  it("does not let repeated due verifications starve an ordinary task", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    const terminal = (id: string, endedAt: string): AdaptiveReviewTask => ({ ...coachTestTask, id, priorityTier: "due-verification", status: "completed", endedAt, idempotencyKey: id });
+    const due = { ...coachTestTask, id: "due-next", status: "waiting" as const, priorityTier: "due-verification" as const, endedAt: undefined, idempotencyKey: "due-next" };
+    const ordinary = { ...coachTestTask, id: "ordinary-next", status: "waiting" as const, priorityTier: "first-difficulty" as const, endedAt: undefined, idempotencyKey: "ordinary-next" };
+    snapshot.adaptiveReviewTasks = [terminal("verification-2", "2026-09-07T07:00:00.000Z"), terminal("verification-1", "2026-09-07T06:00:00.000Z"), due, ordinary];
+    snapshot.delayedVerifications = [];
+    const transitionTask = vi.fn(async (id: string) => snapshot.adaptiveReviewTasks.find((task) => task.id === id)!);
+    const repository = { getFormalSnapshot: vi.fn(async () => snapshot), transitionTask } as unknown as ReviewCoachRepository;
+    const orchestrator = new ReviewCoachOrchestrator({ repository, ids: createIds(), clock: { now: () => now } });
+
+    await orchestrator.selectNextTask();
+
+    expect(transitionTask).toHaveBeenCalledWith(ordinary.id, "current", now);
+  });
+
+  it("ages a long-waiting consolidation task into an earlier scheduling tier", () => {
+    const older = { ...coachTestTask, id: "older", status: "waiting" as const, priorityTier: "consolidation" as const, queuedAt: "2026-08-20T08:00:00.000Z", endedAt: undefined };
+    const newer = { ...coachTestTask, id: "newer", status: "waiting" as const, priorityTier: "first-difficulty" as const, queuedAt: "2026-09-07T07:00:00.000Z", endedAt: undefined };
+
+    expect(rankWaitingTasks([newer, older], now).map((task) => task.id)).toEqual(["older", "newer"]);
+  });
+});

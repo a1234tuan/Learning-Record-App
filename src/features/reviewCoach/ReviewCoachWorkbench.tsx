@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AiProviderProfile, RecordBlock } from "../../types";
 import type { AdaptiveReviewTask, AnalysisBatch, ReviewCoachFormalSnapshot } from "./domain";
 import { maxAnalysisInputTokensForProvider, planAnalysisBatches, type AnalysisPlanningBlock } from "./analysisPlanner";
+import { replayInterventionEffectSummaries } from "./replay";
 
 interface ReviewCoachWorkbenchProps {
   planningBlocks: readonly AnalysisPlanningBlock[];
@@ -76,7 +77,17 @@ export const ReviewCoachWorkbench = ({
       return leftCurrent - rightCurrent || left.queuedAt.localeCompare(right.queuedAt);
     });
   const blueprintById = new Map(snapshot.sessionBlueprints.map((item) => [item.id, item]));
+  const verificationByTaskId = new Map(snapshot.delayedVerifications.filter((item) => item.taskId).map((item) => [item.taskId!, item]));
   const recordById = new Map(records.map((item) => [item.id, item]));
+  const interventionEffectSummaries = useMemo(() => replayInterventionEffectSummaries({
+    interpretations: snapshot.feedbackInterpretations,
+    blueprints: snapshot.sessionBlueprints,
+    tasks: snapshot.adaptiveReviewTasks,
+    turns: snapshot.adaptiveQuizTurns,
+    outcomes: snapshot.taskOutcomeEvents,
+    verifications: snapshot.delayedVerifications,
+    replayedAt: new Date().toISOString(),
+  }), [snapshot]);
   const hasContent = planningBlocks.length > 0 || pausedBatches.length > 0 || activeTasks.length > 0 || Boolean(latestBatch);
   if (!hasContent) return null;
 
@@ -213,10 +224,11 @@ export const ReviewCoachWorkbench = ({
             const blueprint = blueprintById.get(task.blueprintId);
             const record = recordById.get(task.recordId);
             const isCurrent = task.status === "current" || task.status === "in-progress";
+            const verification = verificationByTaskId.get(task.id);
             return (
               <article className={isCurrent ? "current" : ""} key={task.id}>
                 <div>
-                  <span>{taskStatusLabel[task.status]}</span>
+                  <span>{verification ? `延迟验证 · ${taskStatusLabel[task.status]}` : taskStatusLabel[task.status]}</span>
                   <strong>{record?.title ?? "已删除的日志"}</strong>
                   <p>{blueprint?.objective ?? "复习目标待恢复"}</p>
                   <small>v{task.contentVersion} · 已等待 {Math.max(0, Math.floor((Date.now() - Date.parse(task.queuedAt)) / 86_400_000))} 天</small>
@@ -242,6 +254,27 @@ export const ReviewCoachWorkbench = ({
               </article>
             );
           })}
+        </div>
+      )}
+
+      {snapshot.delayedVerifications.some((item) => ["scheduled", "eligible", "missed"].includes(item.status)) && (
+        <div className="review-coach-verification-list">
+          <h3>延迟验证</h3>
+          {snapshot.delayedVerifications.filter((item) => ["scheduled", "eligible", "missed"].includes(item.status)).sort((a, b) => a.verificationDueAt.localeCompare(b.verificationDueAt)).slice(0, 3).map((item) => (
+            <div key={item.id}><strong>{recordById.get(item.recordId)?.title ?? "已删除的日志"}</strong><small>{item.status === "scheduled" ? "等待验证" : "已到验证窗口"} · {formatDateTime(item.verificationDueAt)}</small></div>
+          ))}
+        </div>
+      )}
+
+      {interventionEffectSummaries.length > 0 && (
+        <div className="review-coach-effect-list">
+          <h3>训练效果</h3>
+          {interventionEffectSummaries.slice(0, 3).map((effect) => (
+            <div key={effect.id}>
+              <span><strong>{effect.problemType} · {effect.practiceType}</strong><small>{effect.sampleCount} 次样本 · 近 30 天 {effect.recentSampleCount} 次</small></span>
+              <b>{effect.evidenceStatus === "insufficient" ? "证据不足" : `保持率 ${Math.round((effect.retentionRate ?? 0) * 100)}%`}</b>
+            </div>
+          ))}
         </div>
       )}
 

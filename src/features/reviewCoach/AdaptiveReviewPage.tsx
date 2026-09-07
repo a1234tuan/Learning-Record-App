@@ -15,6 +15,7 @@ interface AdaptiveReviewPageProps {
   onSkipTurn: (turnId: string) => Promise<unknown>;
   onReportInvalid: (turnId: string, reason: string) => Promise<unknown>;
   onFinish: (taskId: string, outcome: SubjectiveOutcome, reason?: string, confirmedConflict?: boolean) => Promise<unknown>;
+  onFinishVerification: (taskId: string, outcome: "retained" | "decayed", confirmedConflict?: boolean) => Promise<unknown>;
   onDefer: (taskId: string) => Promise<unknown>;
   onAbandon: (taskId: string, reason: string) => Promise<unknown>;
 }
@@ -27,12 +28,13 @@ const extractSourceText = (record: RecordBlock | undefined, decisionBlockId: str
   return document.querySelector(`record-decision-block[data-decision-block-id="${CSS.escape(decisionBlockId)}"]`)?.textContent?.replace(/\s+/g, " ").trim() || "来源片段不可用";
 };
 
-export const AdaptiveReviewPage = ({ taskId, snapshot, records, onBack, onGenerateTurn, onRequestHint, onSubmitAnswer, onSkipTurn, onReportInvalid, onFinish, onDefer, onAbandon }: AdaptiveReviewPageProps) => {
+export const AdaptiveReviewPage = ({ taskId, snapshot, records, onBack, onGenerateTurn, onRequestHint, onSubmitAnswer, onSkipTurn, onReportInvalid, onFinish, onFinishVerification, onDefer, onAbandon }: AdaptiveReviewPageProps) => {
   const task = snapshot.adaptiveReviewTasks.find((item) => item.id === taskId);
   const blueprint = task ? snapshot.sessionBlueprints.find((item) => item.id === task.blueprintId) : undefined;
   const turns = useMemo(() => snapshot.adaptiveQuizTurns.filter((item) => item.taskId === taskId && item.status !== "invalid").sort((a, b) => a.sequence - b.sequence), [snapshot.adaptiveQuizTurns, taskId]);
   const currentTurn = turns.find((item) => item.status === "displayed") ?? turns.at(-1);
   const record = task ? records.find((item) => item.id === task.recordId) : undefined;
+  const delayedVerification = task ? snapshot.delayedVerifications.find((item) => item.taskId === task.id) : undefined;
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState<string>();
   const [message, setMessage] = useState<string>();
@@ -77,17 +79,27 @@ export const AdaptiveReviewPage = ({ taskId, snapshot, records, onBack, onGenera
     void run(`finish:${outcome}`, () => onFinish(task.id, outcome, outcome === "not-mastered" ? notMasteredReason : undefined, outcome === "mastered" ? confirmMastered : undefined), "本次训练结果已保存。").then((ok) => { if (ok) onBack(); });
   };
 
+  const finishVerification = (outcome: "retained" | "decayed") => {
+    if (outcome === "retained" && lastIncorrect && !confirmMastered) {
+      setConfirmMastered(true);
+      setMessage("最后一轮验证回答仍有错误。再次点击“确认仍然掌握”以保留你的判断。");
+      return;
+    }
+    void run(`verify:${outcome}`, () => onFinishVerification(task.id, outcome, outcome === "retained" ? confirmMastered : undefined), "延迟验证结果已保存。").then((ok) => { if (ok) onBack(); });
+  };
+
   return (
     <main className="page adaptive-review-page">
       <header className="adaptive-review-header">
         <button type="button" className="icon-button" onClick={onBack} title="返回" aria-label="返回"><ArrowLeft size={19} /></button>
-        <div><p className="eyebrow">Adaptive Review</p><h1>{record.title}</h1><small>{record.subject} · 目标版本 v{task.contentVersion}</small></div>
+        <div><p className="eyebrow">{delayedVerification ? "Delayed Verification" : "Adaptive Review"}</p><h1>{record.title}</h1><small>{record.subject} · 目标版本 v{task.contentVersion}</small></div>
         <span>{turns.length}/{blueprint.maxTurns}</span>
       </header>
 
       <section className="adaptive-review-objective">
-        <small>本次目标</small><strong>{blueprint.objective}</strong>
+        <small>{delayedVerification ? "延迟验证目标" : "本次目标"}</small><strong>{blueprint.objective}</strong>
         <p>{blueprint.completionCriteria.join("；")}</p>
+        {delayedVerification && <p className="adaptive-review-verification-note">使用新题检查间隔后的独立提取；结果不会改写整条日志的 FSRS 日期。</p>}
       </section>
 
       {!currentTurn && (
@@ -139,14 +151,21 @@ export const AdaptiveReviewPage = ({ taskId, snapshot, records, onBack, onGenera
 
       {finishing && answered && (
         <section className="adaptive-review-finish">
-          <h2>你现在的真实状态</h2>
-          <p>即时回答和主观判断会分别保存。</p>
-          <div className="adaptive-review-outcomes">
-            <button type="button" disabled={Boolean(busy)} onClick={() => finish("mastered")}><Check size={17} />{lastIncorrect && confirmMastered ? "确认已掌握" : "已掌握"}</button>
-            <button type="button" disabled={Boolean(busy)} onClick={() => finish("needs-consolidation")}><RotateCcw size={17} />仍需巩固</button>
-            <button type="button" disabled={Boolean(busy) || !notMasteredReason.trim()} onClick={() => finish("not-mastered")}><AlertTriangle size={17} />未掌握</button>
-          </div>
-          <textarea rows={3} value={notMasteredReason} onChange={(event) => setNotMasteredReason(event.target.value)} placeholder="如果仍未掌握，请写下具体卡点，用于重新规划" aria-label="未掌握原因" />
+          <h2>{delayedVerification ? "间隔后还能独立完成吗" : "你现在的真实状态"}</h2>
+          <p>{delayedVerification ? "验证结果与即时训练结果分开保存。" : "即时回答和主观判断会分别保存。"}</p>
+          {delayedVerification ? (
+            <div className="adaptive-review-outcomes">
+              <button type="button" disabled={Boolean(busy)} onClick={() => finishVerification("retained")}><Check size={17} />{lastIncorrect && confirmMastered ? "确认仍然掌握" : "仍然掌握"}</button>
+              <button type="button" disabled={Boolean(busy)} onClick={() => finishVerification("decayed")}><AlertTriangle size={17} />已经衰退</button>
+            </div>
+          ) : <>
+            <div className="adaptive-review-outcomes">
+              <button type="button" disabled={Boolean(busy)} onClick={() => finish("mastered")}><Check size={17} />{lastIncorrect && confirmMastered ? "确认已掌握" : "已掌握"}</button>
+              <button type="button" disabled={Boolean(busy)} onClick={() => finish("needs-consolidation")}><RotateCcw size={17} />仍需巩固</button>
+              <button type="button" disabled={Boolean(busy) || !notMasteredReason.trim()} onClick={() => finish("not-mastered")}><AlertTriangle size={17} />未掌握</button>
+            </div>
+            <textarea rows={3} value={notMasteredReason} onChange={(event) => setNotMasteredReason(event.target.value)} placeholder="如果仍未掌握，请写下具体卡点，用于重新规划" aria-label="未掌握原因" />
+          </>}
         </section>
       )}
 

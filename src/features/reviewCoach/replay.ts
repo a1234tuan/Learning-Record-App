@@ -166,7 +166,7 @@ export const replayInterventionEffectSummaries = (input: InterventionReplayInput
   for (const blueprint of input.blueprints.filter((item) => item.status === "accepted" && !item.deletedAt)) {
     const interpretation = blueprint.interpretationIds.map((id) => interpretationById.get(id)).find((item) => item?.difficultyType);
     const problemType = interpretation?.difficultyType ?? "other";
-    const key = `${problemType}:${blueprint.initialPracticeType}:${blueprint.policyVersion}`;
+    const key = [problemType, blueprint.initialPracticeType, blueprint.provider, blueprint.model, blueprint.promptVersion, blueprint.policyVersion].join(":");
     const group = groups.get(key) ?? { problemType, practiceType: blueprint.initialPracticeType, blueprints: [], tasks: [] };
     group.blueprints.push(blueprint);
     group.tasks.push(...(tasksByBlueprint.get(blueprint.id) ?? []));
@@ -174,7 +174,9 @@ export const replayInterventionEffectSummaries = (input: InterventionReplayInput
   }
 
   return [...groups.entries()].map(([strategyKey, group]) => {
-    const taskIds = new Set(group.tasks.map((task) => task.id));
+    const verificationTaskIds = new Set(input.verifications.map((item) => item.taskId).filter((id): id is string => Boolean(id)));
+    const interventionTasks = group.tasks.filter((task) => !verificationTaskIds.has(task.id));
+    const taskIds = new Set(interventionTasks.map((task) => task.id));
     const outcomes = input.outcomes.filter((event) => taskIds.has(event.taskId) && !event.deletedAt);
     const outcomeIds = new Set(outcomes.map((event) => event.id));
     const verifications = input.verifications.filter((item) => outcomeIds.has(item.sourceOutcomeEventId) && !item.deletedAt);
@@ -189,8 +191,15 @@ export const replayInterventionEffectSummaries = (input: InterventionReplayInput
     const masteredTaskIds = new Set(outcomes.filter((event) => event.subjectiveOutcome === "mastered").map((event) => event.taskId));
     const turnsToMastery = [...masteredTaskIds].map((taskId) => turns.filter((turn) => turn.taskId === taskId).length);
     const hints = turns.flatMap((turn) => turn.hintsUsed).length;
-    const sampleCount = group.tasks.length;
-    const confidence = Math.min(1, sampleCount / 10);
+    const sampleTasks = interventionTasks.filter((task) => task.startedAt || outcomes.some((event) => event.taskId === task.id));
+    const sampleCount = sampleTasks.length;
+    const recentCutoff = new Date(Date.parse(input.replayedAt) - 30 * 86_400_000).toISOString();
+    const recentSampleCount = sampleTasks.filter((task) => (task.endedAt ?? task.updatedAt) >= recentCutoff).length;
+    const recencyWeight = sampleCount ? recentSampleCount / sampleCount : 0;
+    const confidence = Math.min(1, sampleCount / 10) * (0.5 + recencyWeight * 0.5);
+    const retainedCount = completedVerifications.filter((item) => item.verificationOutcome === "retained").length;
+    const decayedCount = completedVerifications.filter((item) => item.verificationOutcome === "decayed").length;
+    const completedVerificationCount = retainedCount + decayedCount;
     return {
       id: strategyKey,
       createdAt: stamps[0] ?? input.replayedAt,
@@ -201,16 +210,20 @@ export const replayInterventionEffectSummaries = (input: InterventionReplayInput
       sampleFrom: stamps[0] ?? input.replayedAt,
       sampleTo: stamps.at(-1) ?? input.replayedAt,
       sampleCount,
+      recentSampleCount,
+      recencyWeight,
       immediateMasteredCount: mastered,
-      delayedRetainedCount: completedVerifications.filter((item) => item.verificationOutcome === "retained").length,
-      delayedDecayedCount: completedVerifications.filter((item) => item.verificationOutcome === "decayed").length,
+      delayedRetainedCount: retainedCount,
+      delayedDecayedCount: decayedCount,
+      retentionRate: completedVerificationCount ? retainedCount / completedVerificationCount : undefined,
+      decayRate: completedVerificationCount ? decayedCount / completedVerificationCount : undefined,
       averageTurnsToMastery: turnsToMastery.length ? turnsToMastery.reduce((total, value) => total + value, 0) / turnsToMastery.length : undefined,
       averageHintsUsed: turns.length ? hints / turns.length : undefined,
       deferredCount: outcomes.filter((event) => event.disposition === "deferred").length,
       abandonedCount: outcomes.filter((event) => event.disposition === "abandoned").length,
       invalidQuestionCount: outcomes.filter((event) => event.disposition === "question-invalid").length,
-      replanCount: group.tasks.filter((task) => task.status === "not-achieved").length,
-      deletedCount: group.tasks.filter((task) => task.deletedAt || task.status === "deleted").length,
+      replanCount: interventionTasks.filter((task) => task.status === "not-achieved").length,
+      deletedCount: interventionTasks.filter((task) => task.deletedAt || task.status === "deleted").length,
       confidence,
       evidenceStatus: sampleCount >= 3 ? "usable" as const : "insufficient" as const,
       modelVersions: [...new Set(group.blueprints.map((item) => item.model))].sort(),

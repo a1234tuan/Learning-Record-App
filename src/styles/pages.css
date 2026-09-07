@@ -2760,9 +2760,46 @@
 }
 
 .review-coach-analysis,
-.review-coach-task-list {
+.review-coach-task-list,
+.review-coach-verification-list,
+.review-coach-effect-list {
   display: grid;
   gap: 12px;
+}
+
+.review-coach-verification-list h3,
+.review-coach-effect-list h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.review-coach-verification-list > div,
+.review-coach-effect-list > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.review-coach-verification-list > div,
+.review-coach-effect-list > div > span {
+  display: grid;
+  gap: 3px;
+}
+
+.review-coach-verification-list small,
+.review-coach-effect-list small {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.review-coach-effect-list b {
+  flex: 0 0 auto;
+  color: var(--color-primary-strong);
+  font-size: 0.74rem;
 }
 
 .review-coach-analysis-list {
@@ -3008,6 +3045,11 @@
 
   .review-coach-task-actions button {
     flex: 1;
+  }
+
+  .review-coach-effect-list > div {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
@@ -3421,6 +3463,13 @@
 .adaptive-review-turn-meta { color: var(--color-muted); }
 .adaptive-review-objective p,
 .adaptive-review-start p { margin: 0; color: var(--color-muted); }
+.adaptive-review-objective .adaptive-review-verification-note {
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-primary-strong);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
 .adaptive-review-start { text-align: center; padding-block: 36px; }
 .adaptive-review-start h2 { font-size: 1.15rem; }
 .adaptive-review-start .primary-button { margin-top: 18px; }

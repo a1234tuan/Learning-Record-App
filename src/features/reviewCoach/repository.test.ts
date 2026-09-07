@@ -18,6 +18,8 @@ import {
   coachTestQueueItem,
   coachTestStamp,
   coachTestTask,
+  coachTestTurn,
+  coachTestVerification,
   completeCoachTestSnapshot,
 } from "./reviewCoachTestFixtures";
 import { ReviewCoachValidationError } from "./validation";
@@ -466,6 +468,81 @@ describe("DexieReviewCoachRepository", () => {
     expect(completed.status).toBe("completed");
     expect(await database.taskOutcomeEvents.count()).toBe(3);
     expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "improved-pending-verification" });
+  });
+
+  it("commits task completion and its delayed-verification plan atomically", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    snapshot.adaptiveReviewTasks[0] = { ...snapshot.adaptiveReviewTasks[0], status: "in-progress", activeSlotKey: "global-current", openTargetKey: `${coachTestBlock.id}:1`, endedAt: undefined };
+    snapshot.taskOutcomeEvents = [];
+    snapshot.delayedVerifications = [];
+    await database.transaction("rw", reviewCoachRestoreTables(database), () => restoreReviewCoachFormalSnapshot(database, snapshot));
+    const verification = {
+      ...coachTestVerification,
+      status: "scheduled" as const,
+      sourceOutcomeEventId: coachTestMasteredOutcome.id,
+      taskId: undefined,
+      lastVerifiedAt: undefined,
+      verificationOutcome: undefined,
+    };
+
+    await repository.commitTaskOutcome(
+      coachTestTask.id,
+      [coachTestAnswerOutcome, coachTestMasteredOutcome, coachTestCompletedDisposition],
+      "completed",
+      "2026-09-04T10:00:00.000Z",
+      undefined,
+      verification,
+    );
+
+    expect(await database.adaptiveReviewTasks.get(coachTestTask.id)).toMatchObject({ status: "completed" });
+    expect(await database.delayedVerifications.get(verification.id)).toMatchObject({ status: "scheduled", sourceOutcomeEventId: coachTestMasteredOutcome.id });
+    expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "improved-pending-verification", pendingVerificationId: verification.id });
+  });
+
+  it("queues and completes a retained verification with linked projections", async () => {
+    const snapshot = completeCoachTestSnapshot();
+    snapshot.delayedVerifications[0] = {
+      ...coachTestVerification,
+      status: "eligible",
+      taskId: undefined,
+      lastVerifiedAt: undefined,
+      verificationOutcome: undefined,
+    };
+    await database.transaction("rw", reviewCoachRestoreTables(database), () => restoreReviewCoachFormalSnapshot(database, snapshot));
+    const verificationTask: AdaptiveReviewTask = {
+      ...coachTestTask,
+      id: "verification-task-1",
+      status: "waiting",
+      priorityTier: "due-verification",
+      startedAt: undefined,
+      endedAt: undefined,
+      idempotencyKey: "verification-task-1",
+    };
+
+    const queued = await repository.queueVerification(coachTestVerification.id, verificationTask, "2026-09-07T08:00:00.000Z");
+    await repository.transitionTask(queued.task.id, "current", "2026-09-07T08:01:00.000Z");
+    await repository.transitionTask(queued.task.id, "in-progress", "2026-09-07T08:02:00.000Z");
+    await database.adaptiveQuizTurns.put({
+      ...coachTestTurn,
+      id: "verification-turn-1",
+      taskId: verificationTask.id,
+      idempotencyKey: "verification-turn-1",
+      createdAt: "2026-09-07T08:02:00.000Z",
+      updatedAt: "2026-09-07T08:03:00.000Z",
+    });
+    const retainedAt = "2026-09-07T08:04:00.000Z";
+    await repository.completeVerification(verificationTask.id, [
+      { ...coachTestAnswerOutcome, id: "verification-answer-1", taskId: verificationTask.id, turnId: "verification-turn-1", occurredAt: retainedAt, idempotencyKey: "verification-answer-1", createdAt: retainedAt, updatedAt: retainedAt },
+      { ...coachTestMasteredOutcome, id: "verification-self-1", taskId: verificationTask.id, occurredAt: retainedAt, idempotencyKey: "verification-self-1", createdAt: retainedAt, updatedAt: retainedAt },
+      { ...coachTestCompletedDisposition, id: "verification-disposition-1", taskId: verificationTask.id, occurredAt: retainedAt, idempotencyKey: "verification-disposition-1", createdAt: retainedAt, updatedAt: retainedAt },
+    ], "retained", retainedAt);
+
+    expect(await database.adaptiveReviewTasks.get(verificationTask.id)).toMatchObject({ status: "completed", endedAt: retainedAt });
+    expect(await database.delayedVerifications.get(coachTestVerification.id)).toMatchObject({ status: "completed", verificationOutcome: "retained", lastVerifiedAt: retainedAt });
+    expect(await database.decisionBlockStates.get(coachTestBlock.id)).toMatchObject({ status: "retained", pendingVerificationId: undefined });
+    expect(await database.interventionEffectSummaries.toArray()).toEqual([
+      expect.objectContaining({ sampleCount: 1, delayedRetainedCount: 1, delayedDecayedCount: 0, retentionRate: 1, evidenceStatus: "insufficient" }),
+    ]);
   });
 
   it("commits a displayed quiz answer and its assessment event atomically", async () => {

@@ -64,7 +64,7 @@ describe("Stage 6 quiz orchestrator", () => {
     await orchestrator.submitQuizAnswer({ turnId: displayed.id, answerText: "I am unsure", provider: "test", model: "mock", promptVersion: "answer-v1", policyVersion: "policy", operationId: "answer-op" });
     await orchestrator.finishQuizTask({ taskId: task.id, outcome: "not-mastered", reason: "I cannot state the invariant", operationId: "finish-op" });
 
-    expect(commitTaskOutcome).toHaveBeenCalledWith(task.id, expect.any(Array), "not-achieved", stamp);
+    expect(commitTaskOutcome).toHaveBeenCalledWith(task.id, expect.any(Array), "not-achieved", stamp, undefined, undefined);
     expect(addFeedback).toHaveBeenCalledWith(expect.objectContaining({ comment: "I cannot state the invariant", source: "manual" }), expect.anything());
   });
 

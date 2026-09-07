@@ -79,15 +79,21 @@ export interface ReviewCoachRepository {
     status: "deferred" | "completed" | "not-achieved" | "invalid" | "abandoned",
     updatedAt: string,
     notBeforeAt?: string,
+    verification?: DelayedVerification,
   ): Promise<AdaptiveReviewTask>;
   scheduleVerification(verification: DelayedVerification): Promise<DelayedVerification>;
   transitionVerification(id: string, status: DelayedVerificationStatus, updatedAt: string, outcome?: DelayedVerification["verificationOutcome"]): Promise<DelayedVerification>;
+  queueVerification(verificationId: string, task: AdaptiveReviewTask, updatedAt: string): Promise<{ verification: DelayedVerification; task: AdaptiveReviewTask }>;
+  completeVerification(taskId: string, events: TaskOutcomeEvent[], outcome: "retained" | "decayed", updatedAt: string): Promise<AdaptiveReviewTask>;
   saveAiRoleConfig(config: AiRoleConfig): Promise<AiRoleConfig>;
   rebuildProjections(): Promise<{ states: DecisionBlockState[]; effects: InterventionEffectSummary[] }>;
 }
 
 const ACTIVE_QUEUE_STATUSES = new Set<AnalysisQueueStatus>(["eligible", "excluded", "batched"]);
 const ACTIVE_BATCH_STATUSES = new Set<AnalysisBatchStatus>(["draft", "confirmed", "running", "succeeded", "partial"]);
+
+const findVerificationForTask = async (database: StudyJournalDatabase, taskId: string) =>
+  (await database.delayedVerifications.toArray()).find((item) => item.taskId === taskId);
 
 const canonicalize = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -923,6 +929,14 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
         if (error instanceof Dexie.ConstraintError) throw new ReviewCoachValidationError("task-uniqueness", "Only one current task and one open task per block version are allowed.");
         throw error;
       }
+      const verification = await findVerificationForTask(this.database, id);
+      if (verification && status === "in-progress" && verification.status !== "in-progress") {
+        let verificationStatus: DelayedVerificationStatus = verification.status;
+        if (verificationStatus === "missed") verificationStatus = transitionDelayedVerification(verificationStatus, "eligible");
+        if (verificationStatus === "eligible") verificationStatus = transitionDelayedVerification(verificationStatus, "queued");
+        verificationStatus = transitionDelayedVerification(verificationStatus, "in-progress");
+        await this.database.delayedVerifications.put({ ...verification, status: verificationStatus, updatedAt });
+      }
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return next;
@@ -948,6 +962,10 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
           openTargetKey: openTargetKeyFor(current),
           updatedAt,
         });
+        const currentVerification = await findVerificationForTask(this.database, current.id);
+        if (currentVerification?.status === "in-progress") {
+          await this.database.delayedVerifications.put({ ...currentVerification, status: transitionDelayedVerification("in-progress", "eligible"), updatedAt });
+        }
       }
       transitionAdaptiveReviewTask(target.status, "current");
       const next: AdaptiveReviewTask = {
@@ -1050,6 +1068,13 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
       if (!existing) await this.database.taskOutcomeEvents.add(event);
       const next = { ...task, status: "invalid" as const, activeSlotKey: undefined, openTargetKey: undefined, endedAt: updatedAt, terminalReason: event.reason, updatedAt };
       await this.database.adaptiveReviewTasks.put(next);
+      const verification = await findVerificationForTask(this.database, task.id);
+      if (verification && ["queued", "in-progress"].includes(verification.status)) {
+        const eligibleStatus = verification.status === "queued"
+          ? transitionDelayedVerification("queued", "eligible")
+          : transitionDelayedVerification("in-progress", "eligible");
+        await this.database.delayedVerifications.put({ ...verification, taskId: undefined, status: eligibleStatus, updatedAt });
+      }
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return next;
@@ -1080,6 +1105,7 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
     status: "deferred" | "completed" | "not-achieved" | "invalid" | "abandoned",
     updatedAt: string,
     notBeforeAt?: string,
+    verification?: DelayedVerification,
   ): Promise<AdaptiveReviewTask> {
     if (events.length === 0) throw new ReviewCoachValidationError("missing-outcome-events", "A task outcome commit requires formal events.");
     events.forEach(assertTaskOutcomeShape);
@@ -1090,6 +1116,10 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
         for (const event of events) {
           const existing = await ensureIdempotentInsert(this.database.taskOutcomeEvents, event);
           if (!existing) throw new ReviewCoachValidationError("incomplete-outcome-retry", "Task is terminal but an outcome event is missing.");
+        }
+        if (verification) {
+          const existingVerification = await ensureIdempotentInsert(this.database.delayedVerifications, verification);
+          if (!existingVerification) throw new ReviewCoachValidationError("incomplete-verification-retry", "Task is terminal but its delayed verification is missing.");
         }
         return current;
       }
@@ -1115,6 +1145,22 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
         updatedAt,
       };
       await this.database.adaptiveReviewTasks.put(next);
+      if (verification) {
+        const source = await this.database.taskOutcomeEvents.get(verification.sourceOutcomeEventId);
+        if (!source || source.kind !== "self-assessment" || !["mastered", "needs-consolidation"].includes(source.subjectiveOutcome ?? "") || source.decisionBlockId !== verification.decisionBlockId || source.contentVersion !== verification.contentVersion) {
+          throw new ReviewCoachValidationError("invalid-verification-source", "Delayed verification requires a matching completed self-assessment.");
+        }
+        if (verification.status !== "scheduled") throw new ReviewCoachValidationError("invalid-verification-status", "A new delayed verification must be scheduled.");
+        const existingVerification = await ensureIdempotentInsert(this.database.delayedVerifications, verification);
+        if (!existingVerification) await this.database.delayedVerifications.add(verification);
+      }
+      const linkedVerification = await findVerificationForTask(this.database, taskId);
+      if (linkedVerification && (status === "deferred" || status === "abandoned")) {
+        const missedStatus = linkedVerification.status === "in-progress"
+          ? transitionDelayedVerification("in-progress", "missed")
+          : transitionDelayedVerification(linkedVerification.status, "missed");
+        await this.database.delayedVerifications.put({ ...linkedVerification, taskId: undefined, status: missedStatus, updatedAt });
+      }
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return next;
@@ -1126,8 +1172,8 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
       const existing = await ensureIdempotentInsert(this.database.delayedVerifications, verification);
       if (existing) return existing;
       const source = await this.database.taskOutcomeEvents.get(verification.sourceOutcomeEventId);
-      if (!source || source.kind !== "self-assessment" || source.subjectiveOutcome !== "mastered" || source.decisionBlockId !== verification.decisionBlockId || source.contentVersion !== verification.contentVersion) {
-        throw new ReviewCoachValidationError("invalid-verification-source", "Delayed verification requires a matching mastered self-assessment.");
+      if (!source || source.kind !== "self-assessment" || !["mastered", "needs-consolidation"].includes(source.subjectiveOutcome ?? "") || source.decisionBlockId !== verification.decisionBlockId || source.contentVersion !== verification.contentVersion) {
+        throw new ReviewCoachValidationError("invalid-verification-source", "Delayed verification requires a matching completed self-assessment.");
       }
       if (verification.status !== "scheduled") throw new ReviewCoachValidationError("invalid-verification-status", "A new delayed verification must be scheduled.");
       await this.database.delayedVerifications.add(verification);
@@ -1155,6 +1201,80 @@ export class DexieReviewCoachRepository implements ReviewCoachRepository {
       await this.rebuildProjectionsInTransaction();
       await this.bumpMutation();
       return next;
+    });
+  }
+
+  async queueVerification(verificationId: string, task: AdaptiveReviewTask, updatedAt: string): Promise<{ verification: DelayedVerification; task: AdaptiveReviewTask }> {
+    return this.database.transaction("rw", [this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
+      const verification = await this.database.delayedVerifications.get(verificationId);
+      if (!verification) throw new ReviewCoachValidationError("missing-verification", `Verification ${verificationId} does not exist.`);
+      if (verification.taskId) {
+        const existingTask = await this.database.adaptiveReviewTasks.get(verification.taskId);
+        if (!existingTask) throw new ReviewCoachValidationError("dangling-task", "Queued verification task is missing.");
+        return { verification, task: existingTask };
+      }
+      if (!["eligible", "missed"].includes(verification.status) || verification.verificationDueAt > updatedAt) {
+        throw new ReviewCoachValidationError("verification-not-due", "Only a due eligible verification can enter the task queue.");
+      }
+      const source = await this.database.taskOutcomeEvents.get(verification.sourceOutcomeEventId);
+      const sourceTask = source ? await this.database.adaptiveReviewTasks.get(source.taskId) : undefined;
+      if (!sourceTask || task.blueprintId !== sourceTask.blueprintId || task.priorityTier !== "due-verification" || task.status !== "waiting" || task.decisionBlockId !== verification.decisionBlockId || task.recordId !== verification.recordId || task.contentVersion !== verification.contentVersion) {
+        throw new ReviewCoachValidationError("invalid-verification-task", "Verification task does not match its source intervention.");
+      }
+      assertCurrentDecisionBlockRef(await this.database.decisionBlocks.get(task.decisionBlockId), task);
+      const normalized = { ...task, activeSlotKey: undefined, openTargetKey: openTargetKeyFor(task) };
+      try {
+        await this.database.adaptiveReviewTasks.add(normalized);
+      } catch (error) {
+        if (error instanceof Dexie.ConstraintError) throw new ReviewCoachValidationError("task-uniqueness", "Another open task already targets this block version.");
+        throw error;
+      }
+      let nextStatus = verification.status;
+      if (nextStatus === "missed") nextStatus = transitionDelayedVerification(nextStatus, "eligible");
+      nextStatus = transitionDelayedVerification(nextStatus, "queued");
+      const nextVerification = { ...verification, taskId: normalized.id, status: nextStatus, updatedAt };
+      await this.database.delayedVerifications.put(nextVerification);
+      await this.rebuildProjectionsInTransaction();
+      await this.bumpMutation();
+      return { verification: nextVerification, task: normalized };
+    });
+  }
+
+  async completeVerification(taskId: string, events: TaskOutcomeEvent[], outcome: "retained" | "decayed", updatedAt: string): Promise<AdaptiveReviewTask> {
+    if (events.length === 0) throw new ReviewCoachValidationError("missing-outcome-events", "Verification completion requires formal events.");
+    events.forEach(assertTaskOutcomeShape);
+    return this.database.transaction("rw", [this.database.cloudSyncMutation, ...formalTables(this.database)], async () => {
+      const task = await this.database.adaptiveReviewTasks.get(taskId);
+      const verification = await findVerificationForTask(this.database, taskId);
+      if (!task || task.status !== "in-progress" || !verification || verification.status !== "in-progress") {
+        throw new ReviewCoachValidationError("inactive-verification", "Verification task is not in progress.");
+      }
+      const answers = await this.database.adaptiveQuizTurns.where("taskId").equals(taskId).toArray();
+      if (!answers.some((turn) => turn.status === "answered" && turn.answerText !== "[skipped]")) {
+        throw new ReviewCoachValidationError("verification-without-answer", "Verification completion requires answer evidence.");
+      }
+      const selfAssessment = events.find((event) => event.kind === "self-assessment");
+      const disposition = events.find((event) => event.kind === "task-disposition");
+      const expectedSubjectiveOutcome = outcome === "retained" ? "mastered" : "not-mastered";
+      if (selfAssessment?.subjectiveOutcome !== expectedSubjectiveOutcome || disposition?.disposition !== "completed") {
+        throw new ReviewCoachValidationError("invalid-verification-outcome", "Verification events do not match the retained or decayed result.");
+      }
+      const taskStatus = outcome === "retained" ? "completed" as const : "not-achieved" as const;
+      transitionAdaptiveReviewTask(task.status, taskStatus);
+      for (const event of events) {
+        if (event.taskId !== task.id || event.decisionBlockId !== task.decisionBlockId || event.recordId !== task.recordId || event.contentVersion !== task.contentVersion) {
+          throw new ReviewCoachValidationError("dangling-task", "Verification outcome does not match its task.");
+        }
+        const existing = await ensureIdempotentInsert(this.database.taskOutcomeEvents, event);
+        if (!existing) await this.database.taskOutcomeEvents.add(event);
+      }
+      const nextTask = { ...task, status: taskStatus, activeSlotKey: undefined, openTargetKey: undefined, endedAt: updatedAt, updatedAt };
+      await this.database.adaptiveReviewTasks.put(nextTask);
+      transitionDelayedVerification(verification.status, "completed");
+      await this.database.delayedVerifications.put({ ...verification, status: "completed", verificationOutcome: outcome, lastVerifiedAt: updatedAt, updatedAt });
+      await this.rebuildProjectionsInTransaction();
+      await this.bumpMutation();
+      return nextTask;
     });
   }
 

@@ -44,6 +44,7 @@ export const createQuizExecutionGateway = (options: QuizExecutionGatewayOptions)
         "生成下一轮中文自适应练习。题目中不得泄露答案或判据；hints 要由弱到强。",
         "正常结果必须严格为：{\"status\":\"ok\",\"practiceType\":\"concept|calculation|discrimination|cloze|variation|chunk\",\"answerMode\":\"open|objective|unique\",\"question\":\"...\",\"answerCriteria\":[\"...\"],\"sourceEvidence\":[{\"decisionBlockId\":\"...\",\"recordId\":\"...\",\"contentVersion\":1,\"excerptHash\":\"...\",\"purpose\":\"...\"}],\"hints\":[\"...\"]}。",
         "answerCriteria 和 hints 必须是字符串数组；sourceEvidence 必须是对象数组，并且每个对象必须从 input.blueprint.evidence 原样复制，不得改写或用文字摘要代替。不得增加其他字段。",
+        "当 input.verificationMode.requireFreshRetrieval=true 时，必须生成新的提取题或变式题，不得重复 previousTurns 中的问题，也不得在题面或提示中复述历史答案。",
       ].join("\n"),
       input, 1800, signal));
   },

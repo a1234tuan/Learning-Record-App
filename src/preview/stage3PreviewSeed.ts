@@ -4,7 +4,8 @@ import { storage } from "../services/storageAdapter";
 import { addDaysISO, nowISO, todayISO } from "../lib/date";
 import { createBaseEntity } from "../lib/entity";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
-import type { AdaptiveReviewTask, AnalysisBatch, AnalysisInputRef, AnalysisQueueItem, DecisionBlockFeedback, SessionBlueprint, TaskOutcomeEvent } from "../features/reviewCoach/domain";
+import type { AdaptiveQuizTurn, AdaptiveReviewTask, AnalysisBatch, AnalysisInputRef, AnalysisQueueItem, DecisionBlockFeedback, DelayedVerification, SessionBlueprint, TaskOutcomeEvent } from "../features/reviewCoach/domain";
+import { reviewCoachRepository } from "../features/reviewCoach/repository";
 
 const PREVIEW_RECORD_ID = "stage3-preview-record";
 const PREVIEW_DECISION_BLOCK_ID = "stage3-preview-decision-block";
@@ -413,6 +414,155 @@ export const seedStage6Preview = async (): Promise<void> => {
   });
 };
 
+/** Seeds Stage 7 delayed verification and effect projections without contacting an AI provider. */
+export const seedStage7Preview = async (): Promise<void> => {
+  await seedStage6Preview();
+  const stamp = nowISO();
+  const blueprints = await db.sessionBlueprints.where("id").anyOf([
+    "stage5-preview-blueprint-1",
+    "stage5-preview-blueprint-2",
+    "stage5-preview-blueprint-3",
+  ]).toArray();
+  const blueprintById = new Map(blueprints.map((blueprint) => [blueprint.id, blueprint]));
+  const sourceTasks = (await Promise.all([1, 2, 3].map((index) => db.adaptiveReviewTasks.get(`stage5-preview-task-${index}`))))
+    .filter((task): task is AdaptiveReviewTask => Boolean(task));
+  if (sourceTasks.length !== 3) return;
+
+  const sourceCompletedAt = `${addDaysISO(todayISO(), -4)}T09:00:00.000Z`;
+  const verificationCompletedAt = `${addDaysISO(todayISO(), -1)}T09:00:00.000Z`;
+  const turns: AdaptiveQuizTurn[] = [];
+  const outcomes: TaskOutcomeEvent[] = [];
+  const verifications: DelayedVerification[] = [];
+  const verificationTasks: AdaptiveReviewTask[] = [];
+
+  for (const [offset, sourceTask] of sourceTasks.entries()) {
+    const index = offset + 1;
+    const blueprint = blueprintById.get(sourceTask.blueprintId);
+    if (!blueprint) return;
+    const sourceTurnId = `stage7-source-turn-${index}`;
+    const sourceSelfId = `stage7-source-self-${index}`;
+    const verificationTaskId = `stage7-verification-task-${index}`;
+    const verificationTurnId = `stage7-verification-turn-${index}`;
+    const completedVerification = index > 1;
+    const retained = index === 2;
+
+    await db.adaptiveReviewTasks.put({
+      ...sourceTask,
+      status: "completed",
+      activeSlotKey: undefined,
+      openTargetKey: undefined,
+      startedAt: sourceTask.startedAt ?? sourceCompletedAt,
+      endedAt: sourceCompletedAt,
+      updatedAt: sourceCompletedAt,
+    });
+    turns.push({
+      id: sourceTurnId,
+      taskId: sourceTask.id,
+      decisionBlockId: sourceTask.decisionBlockId,
+      recordId: sourceTask.recordId,
+      contentVersion: sourceTask.contentVersion,
+      sequence: 1,
+      status: "answered",
+      practiceType: blueprint.initialPracticeType,
+      answerMode: "open",
+      question: `阶段 7 即时训练题 ${index}`,
+      displayedAt: sourceCompletedAt,
+      sourceEvidence: blueprint.evidence,
+      answerCriteria: blueprint.completionCriteria,
+      hintsUsed: [],
+      answerText: "能够依据来源独立说明。",
+      answeredAt: sourceCompletedAt,
+      assessment: "correct",
+      assessmentRationale: "符合蓝图完成标准。",
+      qualityChecked: false,
+      generationModel: "deterministic-preview",
+      promptVersion: "quiz-turn-v1",
+      policyVersion: "review-coach-policy-v1",
+      idempotencyKey: `stage7-source-turn:${index}`,
+      createdAt: sourceCompletedAt,
+      updatedAt: sourceCompletedAt,
+    });
+    outcomes.push(
+      { id: `stage7-source-answer-${index}`, taskId: sourceTask.id, turnId: sourceTurnId, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "answer-assessment", answerAssessment: "correct", occurredAt: sourceCompletedAt, idempotencyKey: `stage7-source-answer:${index}`, createdAt: sourceCompletedAt, updatedAt: sourceCompletedAt },
+      { id: sourceSelfId, taskId: sourceTask.id, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "self-assessment", subjectiveOutcome: "mastered", occurredAt: sourceCompletedAt, idempotencyKey: `stage7-source-self:${index}`, createdAt: sourceCompletedAt, updatedAt: sourceCompletedAt },
+      { id: `stage7-source-disposition-${index}`, taskId: sourceTask.id, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "task-disposition", disposition: "completed", occurredAt: sourceCompletedAt, idempotencyKey: `stage7-source-disposition:${index}`, createdAt: sourceCompletedAt, updatedAt: sourceCompletedAt },
+    );
+    verificationTasks.push({
+      id: verificationTaskId,
+      blueprintId: sourceTask.blueprintId,
+      decisionBlockId: sourceTask.decisionBlockId,
+      recordId: sourceTask.recordId,
+      contentVersion: sourceTask.contentVersion,
+      status: completedVerification ? (retained ? "completed" : "not-achieved") : "in-progress",
+      priorityTier: "due-verification",
+      queuedAt: `${addDaysISO(todayISO(), -1)}T08:00:00.000Z`,
+      startedAt: `${addDaysISO(todayISO(), -1)}T08:30:00.000Z`,
+      endedAt: completedVerification ? verificationCompletedAt : undefined,
+      activeSlotKey: completedVerification ? undefined : "global-current",
+      openTargetKey: completedVerification ? undefined : `${sourceTask.decisionBlockId}:${sourceTask.contentVersion}`,
+      idempotencyKey: `stage7-verification-task:${index}`,
+      createdAt: sourceCompletedAt,
+      updatedAt: completedVerification ? verificationCompletedAt : stamp,
+    });
+    turns.push({
+      id: verificationTurnId,
+      taskId: verificationTaskId,
+      decisionBlockId: sourceTask.decisionBlockId,
+      recordId: sourceTask.recordId,
+      contentVersion: sourceTask.contentVersion,
+      sequence: 1,
+      status: "answered",
+      practiceType: blueprint.initialPracticeType,
+      answerMode: "open",
+      question: index === 1 ? "若两个前驱同时发现同一节点，如何安排 visited 与入队顺序，为什么？" : `阶段 7 间隔验证题 ${index}`,
+      displayedAt: verificationCompletedAt,
+      sourceEvidence: blueprint.evidence,
+      answerCriteria: blueprint.completionCriteria,
+      hintsUsed: [],
+      answerText: retained || index === 1 ? "仍能独立完成。" : "间隔后无法完整回忆。",
+      answeredAt: verificationCompletedAt,
+      assessment: retained || index === 1 ? "correct" : "incorrect",
+      assessmentRationale: retained || index === 1 ? "保持稳定。" : "关键步骤已经遗忘。",
+      qualityChecked: false,
+      generationModel: "deterministic-preview",
+      promptVersion: "quiz-turn-v1",
+      policyVersion: "review-coach-policy-v1",
+      idempotencyKey: `stage7-verification-turn:${index}`,
+      createdAt: verificationCompletedAt,
+      updatedAt: verificationCompletedAt,
+    });
+    outcomes.push({ id: `stage7-verification-answer-${index}`, taskId: verificationTaskId, turnId: verificationTurnId, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "answer-assessment", answerAssessment: retained || index === 1 ? "correct" : "incorrect", occurredAt: verificationCompletedAt, idempotencyKey: `stage7-verification-answer:${index}`, createdAt: verificationCompletedAt, updatedAt: verificationCompletedAt });
+    if (completedVerification) outcomes.push(
+      { id: `stage7-verification-self-${index}`, taskId: verificationTaskId, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "self-assessment", subjectiveOutcome: retained ? "mastered" : "not-mastered", occurredAt: verificationCompletedAt, idempotencyKey: `stage7-verification-self:${index}`, createdAt: verificationCompletedAt, updatedAt: verificationCompletedAt },
+      { id: `stage7-verification-disposition-${index}`, taskId: verificationTaskId, decisionBlockId: sourceTask.decisionBlockId, recordId: sourceTask.recordId, contentVersion: sourceTask.contentVersion, kind: "task-disposition", disposition: "completed", occurredAt: verificationCompletedAt, idempotencyKey: `stage7-verification-disposition:${index}`, createdAt: verificationCompletedAt, updatedAt: verificationCompletedAt },
+    );
+    verifications.push({
+      id: `stage7-verification-${index}`,
+      sourceOutcomeEventId: sourceSelfId,
+      taskId: verificationTaskId,
+      decisionBlockId: sourceTask.decisionBlockId,
+      recordId: sourceTask.recordId,
+      contentVersion: sourceTask.contentVersion,
+      status: completedVerification ? "completed" : "in-progress",
+      verificationEligibleAt: `${addDaysISO(todayISO(), -2)}T09:00:00.000Z`,
+      verificationDueAt: `${addDaysISO(todayISO(), -1)}T08:00:00.000Z`,
+      lastVerifiedAt: completedVerification ? verificationCompletedAt : undefined,
+      verificationOutcome: completedVerification ? (retained ? "retained" : "decayed") : undefined,
+      strategyVersion: "delayed-verification-v1",
+      idempotencyKey: `stage7-verification:${index}`,
+      createdAt: sourceCompletedAt,
+      updatedAt: completedVerification ? verificationCompletedAt : stamp,
+    });
+  }
+
+  await db.adaptiveQuizTurns.delete("stage6-preview-turn-1");
+  await db.adaptiveQuizTurns.bulkPut(turns);
+  await db.taskOutcomeEvents.bulkPut(outcomes);
+  await db.adaptiveReviewTasks.bulkPut(verificationTasks);
+  await db.delayedVerifications.bulkPut(verifications);
+  await reviewCoachRepository.rebuildProjections();
+};
+
 export const isStage3PreviewRequest = (): boolean => {
   if (typeof window === "undefined") return false;
   if (isNativePlatform() || isDesktopPlatform()) return false;
@@ -443,4 +593,12 @@ export const isStage6PreviewRequest = (): boolean => {
   const host = window.location.hostname;
   return (host === "127.0.0.1" || host === "localhost")
     && new URLSearchParams(window.location.search).get("preview") === "stage6";
+};
+
+export const isStage7PreviewRequest = (): boolean => {
+  if (typeof window === "undefined") return false;
+  if (isNativePlatform() || isDesktopPlatform()) return false;
+  const host = window.location.hostname;
+  return (host === "127.0.0.1" || host === "localhost")
+    && new URLSearchParams(window.location.search).get("preview") === "stage7";
 };

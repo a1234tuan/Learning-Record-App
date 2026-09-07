@@ -11,6 +11,7 @@ import {
 import { StudyJournalDatabase } from "./database";
 import {
   REVIEW_COACH_SCHEMA_17_STORES,
+  REVIEW_COACH_SCHEMA_18_STORES,
   buildSchema17MigrationBackup,
 } from "./reviewCoachSchema";
 
@@ -40,14 +41,14 @@ afterEach(async () => {
   names.clear();
 });
 
-describe("StudyJournalDatabase schema 17 migration", () => {
+describe("StudyJournalDatabase review-coach migrations", () => {
   it("upgrades schema 11 without inventing block-level facts", async () => {
     const name = await createFixtureDatabase(schema11MigrationFixture);
     const database = new StudyJournalDatabase(name);
 
     await database.open();
 
-    expect(database.verno).toBe(17);
+    expect(database.verno).toBe(18);
     expect(await database.blocks.count()).toBe(1);
     expect(await database.recordReviewLogs.count()).toBe(1);
     expect(await database.decisionBlocks.count()).toBe(0);
@@ -66,7 +67,7 @@ describe("StudyJournalDatabase schema 17 migration", () => {
 
     await database.open();
 
-    expect(database.verno).toBe(17);
+    expect(database.verno).toBe(18);
     expect(await database.learningEvidence.count()).toBe(1);
     expect(await database.knowledgePoints.count()).toBe(2);
     expect(await database.recordKnowledgePointLinks.count()).toBe(1);
@@ -105,5 +106,31 @@ describe("StudyJournalDatabase schema 17 migration", () => {
     expect(await legacy.table("knowledgeRelations").count()).toBe(1);
     expect(legacy.tables.map((table) => table.name)).not.toContain("decisionBlocks");
     legacy.close();
+  });
+
+  it("upgrades schema 17 so intervention and verification tasks can reuse one blueprint", async () => {
+    const name = `review-coach-migration-17-${crypto.randomUUID()}`;
+    names.add(name);
+    const legacy = new Dexie(name);
+    legacy.version(17).stores(REVIEW_COACH_SCHEMA_17_STORES);
+    await legacy.open();
+    await legacy.table("adaptiveReviewTasks").put({
+      id: "intervention-task", blueprintId: "blueprint-1", decisionBlockId: "block-1", recordId: "record-1", contentVersion: 1,
+      status: "completed", priorityTier: "first-difficulty", queuedAt: "2026-09-01T08:00:00.000Z", endedAt: "2026-09-01T09:00:00.000Z",
+      idempotencyKey: "intervention-task", createdAt: "2026-09-01T08:00:00.000Z", updatedAt: "2026-09-01T09:00:00.000Z",
+    });
+    legacy.close();
+
+    const database = new StudyJournalDatabase(name);
+    await database.open();
+    await database.adaptiveReviewTasks.put({
+      id: "verification-task", blueprintId: "blueprint-1", decisionBlockId: "block-1", recordId: "record-1", contentVersion: 1,
+      status: "waiting", priorityTier: "due-verification", queuedAt: "2026-09-07T08:00:00.000Z", openTargetKey: "block-1:1",
+      idempotencyKey: "verification-task", createdAt: "2026-09-07T08:00:00.000Z", updatedAt: "2026-09-07T08:00:00.000Z",
+    });
+
+    expect(database.verno).toBe(18);
+    expect(await database.adaptiveReviewTasks.where("blueprintId").equals("blueprint-1").count()).toBe(2);
+    database.close();
   });
 });

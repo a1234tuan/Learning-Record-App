@@ -64,6 +64,11 @@ export const REVIEW_COACH_SCHEMA_17_STORES = {
   coachMigrationBackups: "id, sourceVersion, createdAt",
 } as const;
 
+export const REVIEW_COACH_SCHEMA_18_STORES = {
+  ...REVIEW_COACH_SCHEMA_17_STORES,
+  adaptiveReviewTasks: "id, blueprintId, decisionBlockId, contentVersion, status, &activeSlotKey, &openTargetKey, &idempotencyKey, updatedAt, deletedAt",
+} as const;
+
 const tableRows = async <T>(transaction: Transaction, name: string): Promise<T[]> => {
   if (!transaction.db.tables.some((table) => table.name === name)) return [];
   return transaction.table<T, string>(name).toArray();

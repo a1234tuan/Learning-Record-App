@@ -4,8 +4,8 @@
 
 - Active v2 branch: `feature/review-effect-coach-v2`.
 - Product boundary: `docs/新的方案.md`.
-- Database version: schema 17. Store definitions live in `src/db/reviewCoachSchema.ts`.
-- Stages 0-6 were completed and verified on 2026-09-07. Stage 7 delayed verification and stages 8-9 remain out of scope.
+- Database version: schema 18. Store definitions live in `src/db/reviewCoachSchema.ts`; schema 18 removes the unique `AdaptiveReviewTask.blueprintId` index so an accepted Blueprint can be reused by its delayed-verification task.
+- Stages 0-7 were completed and verified on 2026-09-07. Stages 8-9 remain out of scope.
 
 ## Review Coach Boundaries
 
@@ -16,7 +16,8 @@
 - Stage 3 added block feedback, immutable history, tombstones, queue enrollment, exclusion/restoration, analysis notes, and manual legacy-comment association.
 - Stage 4 calls only the quick feedback interpreter and preserves original feedback.
 - Stage 5 adds the manually confirmed deep-analysis workbench, validated `SessionBlueprint` creation, and deterministic current/waiting/deferred task scheduling.
-- Stage 6 adds the dedicated adaptive review page, Blueprint-constrained turn generation, independent question quality review, answer evaluation, hint/skip/invalid/defer/abandon dispositions, and atomic answer/outcome commits. It must not schedule Stage 7 delayed verification.
+- Stage 6 adds the dedicated adaptive review page, Blueprint-constrained turn generation, independent question quality review, answer evaluation, hint/skip/invalid/defer/abandon dispositions, and atomic answer/outcome commits.
+- Stage 7 schedules delayed verification through deterministic local policy, requires fresh retrieval questions, records retained/decayed outcomes independently from record FSRS, rebuilds block/effect projections from formal facts, and applies aging plus a two-verification streak cap to task selection.
 - Stage 6 quick-model calls use strict JSON and explicitly disable thinking. Controlled real-provider acceptance may use `https://api.deepseek.com` with `deepseek-v4-flash`; never persist API keys in source, tests, docs, logs, screenshots, backup, or sync data.
 
 ## Cross-Cutting Checks
@@ -46,3 +47,5 @@ For Stage 4 UI acceptance, use `http://127.0.0.1:4177/?preview=stage4`. It adds 
 For Stage 5 UI acceptance, use `http://127.0.0.1:4177/?preview=stage5`. It seeds deterministic eligible blocks, an OCR warning, a partial analysis result, and current/waiting/deferred tasks without contacting an AI provider.
 
 For Stage 6 UI acceptance, use `http://127.0.0.1:4177/?preview=stage6`. It seeds a deterministic in-progress task with one displayed, quality-checked turn; hints, answer submission, skip, invalid-question reporting, defer, and abandon controls can be exercised without contacting an AI provider.
+
+For Stage 7 UI acceptance, use `http://127.0.0.1:4177/?preview=stage7`. It seeds one in-progress delayed verification plus retained and decayed history, then rebuilds block and intervention-effect projections without contacting an AI provider.

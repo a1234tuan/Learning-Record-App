@@ -1057,6 +1057,7 @@ export const App = () => {
             onSkipTurn={app.skipAdaptiveQuizTurn}
             onReportInvalid={app.reportAdaptiveQuizInvalid}
             onFinish={app.finishAdaptiveQuizTask}
+            onFinishVerification={app.finishDelayedVerification}
             onDefer={app.deferAdaptiveTask}
             onAbandon={app.abandonAdaptiveQuizTask}
           />

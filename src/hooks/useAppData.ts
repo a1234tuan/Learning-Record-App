@@ -183,6 +183,17 @@ export const useAppData = () => {
         return;
       }
       await recoverKnowledgePodcastJobs();
+      const beforeScheduling = await reviewCoachRepository.getFormalSnapshot();
+      await reviewCoachOrchestrator.selectNextTask();
+      const afterScheduling = await reviewCoachRepository.getFormalSnapshot();
+      const schedulingChanged = JSON.stringify({
+        tasks: beforeScheduling.adaptiveReviewTasks,
+        verifications: beforeScheduling.delayedVerifications,
+      }) !== JSON.stringify({
+        tasks: afterScheduling.adaptiveReviewTasks,
+        verifications: afterScheduling.delayedVerifications,
+      });
+      if (schedulingChanged) await markAutoBackupDirty("review-coach-delayed-verification-refresh");
       await refresh();
       setInitialized(true);
       await storage.purgeExpiredDeletedBlocks(30);
@@ -591,6 +602,13 @@ export const useAppData = () => {
     const result = await reviewCoachOrchestrator.finishQuizTask({ taskId, outcome, reason, confirmedConflict, operationId: newId() });
     await refresh();
     await markAutoBackupDirty("review-coach-quiz-finish");
+    return result;
+  }, [refresh]);
+
+  const finishDelayedVerification = useCallback(async (taskId: string, outcome: "retained" | "decayed", confirmedConflict?: boolean) => {
+    const result = await reviewCoachOrchestrator.completeDelayedVerification({ taskId, outcome, confirmedConflict, operationId: newId() });
+    await refresh();
+    await markAutoBackupDirty("review-coach-delayed-verification");
     return result;
   }, [refresh]);
 
@@ -1028,6 +1046,7 @@ export const useAppData = () => {
     skipAdaptiveQuizTurn,
     reportAdaptiveQuizInvalid,
     finishAdaptiveQuizTask,
+    finishDelayedVerification,
     abandonAdaptiveQuizTask,
     transitionAnalysisQueueItem,
     updateAnalysisQueueItemNote,

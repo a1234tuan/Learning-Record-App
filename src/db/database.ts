@@ -50,6 +50,7 @@ import type {
 import {
   LEGACY_SCHEMA_16_STORES,
   REVIEW_COACH_SCHEMA_17_STORES,
+  REVIEW_COACH_SCHEMA_18_STORES,
   migrateToReviewCoachSchema17,
 } from "./reviewCoachSchema";
 
@@ -319,6 +320,7 @@ export class StudyJournalDatabase extends Dexie {
     this.version(17)
       .stores(REVIEW_COACH_SCHEMA_17_STORES)
       .upgrade(migrateToReviewCoachSchema17);
+    this.version(18).stores(REVIEW_COACH_SCHEMA_18_STORES);
   }
 }
 

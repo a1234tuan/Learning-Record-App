@@ -281,11 +281,20 @@ export const validateReviewCoachFormalSnapshot = (
   const outcomeById = new Map(snapshot.taskOutcomeEvents.map((item) => [item.id, item]));
   for (const verification of snapshot.delayedVerifications) {
     const outcome = outcomeById.get(verification.sourceOutcomeEventId);
-    if (!outcome || outcome.kind !== "self-assessment" || outcome.subjectiveOutcome !== "mastered") {
-      throw new ReviewCoachValidationError("invalid-verification-source", `Verification ${verification.id} requires a mastered self-assessment.`);
+    if (!outcome || outcome.kind !== "self-assessment" || !["mastered", "needs-consolidation"].includes(outcome.subjectiveOutcome ?? "")) {
+      throw new ReviewCoachValidationError("invalid-verification-source", `Verification ${verification.id} requires a completed self-assessment.`);
     }
     if (outcome.decisionBlockId !== verification.decisionBlockId || outcome.contentVersion !== verification.contentVersion) {
       throw new ReviewCoachValidationError("invalid-verification-source", `Verification ${verification.id} targets another block version.`);
+    }
+    if (verification.taskId) {
+      const task = taskById.get(verification.taskId);
+      if (!task || task.priorityTier !== "due-verification" || task.decisionBlockId !== verification.decisionBlockId || task.contentVersion !== verification.contentVersion) {
+        throw new ReviewCoachValidationError("invalid-verification-task", `Verification ${verification.id} has a mismatched task.`);
+      }
+    }
+    if (verification.status === "completed" && (!verification.verificationOutcome || !verification.lastVerifiedAt)) {
+      throw new ReviewCoachValidationError("missing-verification-outcome", `Verification ${verification.id} is completed without an outcome.`);
     }
   }
 };
