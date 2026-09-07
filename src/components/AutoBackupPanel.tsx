@@ -9,6 +9,7 @@ import {
   setAutoBackupEnabled,
 } from "../services/autoBackupService";
 import { isDesktopPlatform } from "../lib/platform";
+import { formatUiError } from "../lib/uiError";
 
 interface AutoBackupPanelProps {
   autoBackupState: AutoBackupSettings;
@@ -66,7 +67,7 @@ export const AutoBackupPanel = ({ autoBackupState, onChanged }: AutoBackupPanelP
       setMessage(result);
       await onChanged();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "自动备份操作失败。");
+      setMessage(formatUiError(error, "generic"));
       await onChanged();
     } finally {
       setBusy(false);

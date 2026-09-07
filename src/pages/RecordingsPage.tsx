@@ -25,6 +25,7 @@ import { PageHeader } from "../components/ui";
 import { usePlayback } from "../components/PlaybackProvider";
 import type { PlaybackMode } from "../services/nativeMediaPlayback";
 import { getRecordBlocks } from "../lib/journalSelectors";
+import { formatUiError } from "../lib/uiError";
 import {
   formatAudioDuration,
   formatPlayerTime,
@@ -510,7 +511,7 @@ const NativeRecordingPlayerPage = ({
       initialAssetId,
     }).catch((error) => {
       if (startedKeyRef.current === queueKey) {
-        setMessage(error instanceof Error ? error.message : "无法准备后台播放。");
+        setMessage(formatUiError(error, "generic"));
       }
     });
   }, [initialAssetId, playback, queue, queueKey]);
@@ -539,7 +540,7 @@ const NativeRecordingPlayerPage = ({
     try {
       if (playing) await playback.pause(); else await playback.play();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "播放控制失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 

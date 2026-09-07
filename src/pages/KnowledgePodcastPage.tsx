@@ -46,6 +46,7 @@ import {
   startKnowledgePodcastScriptJob,
 } from "../services/knowledgePodcastJobService";
 import { normalizeTtsConfig, getCurrentTtsProvider } from "../lib/ttsProviders";
+import { formatUiError } from "../lib/uiError";
 
 interface KnowledgePodcastPageProps {
   settings?: AppSettings;
@@ -333,7 +334,7 @@ const PodcastEditor = ({
         }),
       };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : "无法预览当前播客指令。" };
+      return { error: formatUiError(error, "generic") };
     }
   }, [creativeBrief, podcast.customMode, podcast.focusInstruction, podcast.mode, podcast.scope, podcast.targetMinutes]);
 
@@ -378,7 +379,7 @@ const PodcastEditor = ({
       await startKnowledgePodcastScriptJob(saved.id);
       setMessage("脚本已转入后台生成，可以切换到其他页面。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "无法启动脚本生成。 ");
+      setMessage(formatUiError(error, "ai-request"));
     }
   };
 
@@ -389,7 +390,7 @@ const PodcastEditor = ({
       await startKnowledgePodcastAudioJob(saved.id, onlyUnitId);
       setMessage("音频已转入后台生成，可以切换到其他页面。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "无法启动音频生成。 ");
+      setMessage(formatUiError(error, "ai-request"));
     }
   };
 
@@ -440,7 +441,7 @@ const PodcastEditor = ({
     try {
       await audio.play();
     } catch (error) {
-      setMessage(`无法播放该音频：${error instanceof Error ? error.message : "未知错误"}`);
+      setMessage(formatUiError(error, "generic"));
       return;
     }
     const saved = { ...podcast, playback: { unitId: unit.id, positionSeconds: startAt } };
@@ -483,7 +484,7 @@ const PodcastEditor = ({
         return;
       } catch (error) {
         setNativeFallbackAssetId(asset.id);
-        setMessage(error instanceof Error ? error.message : "无法准备后台播放，已改用普通播放。 ");
+        setMessage(formatUiError(error, "generic"));
       }
     }
     await playInWebView(unit, asset, startAt);

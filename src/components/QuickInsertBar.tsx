@@ -13,6 +13,7 @@ import {
 
 import type { Subject } from "../types";
 import { isNativePlatform } from "../lib/platform";
+import { formatUiError } from "../lib/uiError";
 import { pickNativeCameraImageFile, pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import type { StructureBlockKind } from "../lib/recordStructureBlocks";
 import { StructureInsertMenu } from "./StructureInsertMenu";
@@ -50,8 +51,7 @@ export const QuickInsertBar = ({
         onImage(file);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      window.alert(`图片选择失败：${message}`);
+      window.alert(formatUiError(error, "generic"));
     }
   };
 

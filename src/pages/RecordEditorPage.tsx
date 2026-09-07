@@ -584,8 +584,7 @@ export const RecordEditorPage = ({
         await addAsset(editor, file, "image");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      window.alert(`图片选择失败：${message}`);
+      window.alert(formatUiError(error, "generic"));
     }
   }, [addAsset]);
 
@@ -666,7 +665,7 @@ export const RecordEditorPage = ({
     try {
       setExportMessage(await onExportRecord(record.id));
     } catch (error) {
-      setExportMessage(error instanceof Error ? error.message : "日志导出失败。");
+      setExportMessage(formatUiError(error, "generic"));
     } finally {
       setExporting(false);
       setMoreActionsOpen(false);

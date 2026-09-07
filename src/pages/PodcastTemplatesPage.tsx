@@ -5,6 +5,7 @@ import type { AppSettings, KnowledgePodcastModeTemplate } from "../types";
 import { storage } from "../services/storageAdapter";
 import { PageHeader } from "../components/ui";
 import { createBaseEntity } from "../lib/entity";
+import { formatUiError } from "../lib/uiError";
 import {
   buildPodcastPromptPreview,
   getPodcastCreativeBriefDefaults,
@@ -125,7 +126,7 @@ export const PodcastTemplatesPage = ({ settings, onChanged }: PodcastTemplatesPa
         }),
       };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : "无法预览该模板。" };
+      return { error: formatUiError(error, "generic") };
     }
   };
 

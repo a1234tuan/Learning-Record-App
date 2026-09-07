@@ -50,8 +50,9 @@ describe("AutoBackupPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));
 
     await waitFor(() => {
-      expect(screen.getByText("自动备份写入结果为空。")).toBeInTheDocument();
+      expect(screen.getByText(/操作没有完成，请稍后重试。.*诊断编号/)).toBeInTheDocument();
     });
+    expect(screen.queryByText("自动备份写入结果为空。")).not.toBeInTheDocument();
     expect(screen.queryByText("已立即同步到增量备份仓库。")).not.toBeInTheDocument();
   });
 

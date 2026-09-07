@@ -6,6 +6,7 @@ import { storage } from "../services/storageAdapter";
 import { downloadAsset } from "../services/assetDownloadService";
 import { runOcrForAsset } from "../services/ocrJobService";
 import { describeOcrForAi } from "../services/ocrDiagnostics";
+import { formatUiError } from "../lib/uiError";
 import { usePlayback } from "./PlaybackProvider";
 
 type AssetPreviewProps = {
@@ -121,7 +122,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
     try {
       setMessage(await downloadAsset(asset));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "下载失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 
@@ -142,7 +143,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
         setAsset(updated);
       }
       onAssetChanged?.();
-      setMessage(error instanceof Error ? error.message : "OCR 识别失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 
@@ -162,7 +163,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
           });
         }
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "无法准备后台播放。");
+        setMessage(formatUiError(error, "generic"));
       }
       return;
     }
@@ -177,7 +178,7 @@ export const AssetPreview = (props: AssetPreviewProps) => {
         nextAudio
           .play()
           .then(() => setPlaying(true))
-          .catch((error) => setMessage(error instanceof Error ? error.message : "播放失败。"));
+          .catch((error) => setMessage(formatUiError(error, "generic")));
       }, 0);
       return;
     }

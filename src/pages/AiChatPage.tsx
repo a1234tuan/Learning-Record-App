@@ -370,8 +370,7 @@ export const AiChatPage = ({
         await addImageFile(file);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      setStatus(`图片选择失败：${message}`);
+      setStatus(formatUiError(error, "ai-request"));
     }
   };
 
@@ -425,8 +424,7 @@ export const AiChatPage = ({
       preparedImages = await prepareImagesForSend(imagesToSend);
     } catch (error) {
       setBusy(false);
-      const message = error instanceof Error ? error.message : "图片处理失败。";
-      setStatus(message);
+      setStatus(formatUiError(error, "ai-request"));
       return;
     }
 
@@ -441,7 +439,7 @@ export const AiChatPage = ({
       });
     } catch (error) {
       setBusy(false);
-      setStatus(error instanceof Error ? error.message : "无法为本轮问答分配上下文预算。");
+      setStatus(formatUiError(error, "ai-request"));
       return;
     }
     const titleSession = await updateTitleFromFirstPrompt(effectivePrompt, session, messages.length);

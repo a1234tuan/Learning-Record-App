@@ -5,6 +5,7 @@ import type { AiProviderProfile, RecordBlock } from "../../types";
 import type { AdaptiveReviewTask, AnalysisBatch, ReviewCoachFormalSnapshot } from "./domain";
 import { maxAnalysisInputTokensForProvider, planAnalysisBatches, type AnalysisPlanningBlock } from "./analysisPlanner";
 import { replayInterventionEffectSummaries } from "./replay";
+import { formatUiError } from "../../lib/uiError";
 
 interface ReviewCoachWorkbenchProps {
   planningBlocks: readonly AnalysisPlanningBlock[];
@@ -101,7 +102,7 @@ export const ReviewCoachWorkbench = ({
       setSwitchTargetId(undefined);
       setDeferTargetId(undefined);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "操作失败，请稍后重试。");
+      setMessage(formatUiError(error, "adaptive-review"));
     } finally {
       setBusyAction(undefined);
     }

@@ -7,6 +7,7 @@ import { Capacitor } from "@capacitor/core";
 import type { Asset, RecordAssetRef } from "../types";
 import { downloadAsset } from "../services/assetDownloadService";
 import { storage } from "../services/storageAdapter";
+import { formatUiError } from "../lib/uiError";
 import {
   clampImageScale,
   clampImageTransform,
@@ -433,7 +434,7 @@ export const ImageLightbox = ({ images, initialIndex, onClose, onStatus }: Image
               try {
                 reportStatus(await downloadAsset(asset));
               } catch (error) {
-                reportStatus(error instanceof Error ? error.message : "下载失败。");
+                reportStatus(formatUiError(error, "generic"));
               }
             }}
           >

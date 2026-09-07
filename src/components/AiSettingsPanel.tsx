@@ -13,6 +13,7 @@ import {
 } from "../lib/aiProviders";
 import { normalizeAiChatCompletionsUrl, testAiProviderConnection } from "../services/aiClientService";
 import { storage } from "../services/storageAdapter";
+import { formatUiError } from "../lib/uiError";
 
 interface AiSettingsPanelProps {
   settings: AppSettings;
@@ -173,10 +174,9 @@ export const AiSettingsPanel = ({ settings, onChanged }: AiSettingsPanelProps) =
         [provider.id]: `连接成功。请求地址：${result.requestUrl}。${content}`,
       }));
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "测试失败。";
       setTestResults((current) => ({
         ...current,
-        [provider.id]: `测试失败。请求地址：${requestUrl}。${detail}`,
+        [provider.id]: `测试失败。请求地址：${requestUrl}。${formatUiError(error, "ai-request")}`,
       }));
     } finally {
       setTestingProviderId(null);

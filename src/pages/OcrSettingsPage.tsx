@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { getPaddleOcrToken, savePaddleOcrToken } from "../services/ocrSettings";
 import { PageHeader } from "../components/ui";
+import { formatUiError } from "../lib/uiError";
 
 interface OcrSettingsPageProps {
   onChanged: () => Promise<void> | void;
@@ -40,7 +41,7 @@ export const OcrSettingsPage = ({ onChanged }: OcrSettingsPageProps) => {
       await onChanged();
       setMessage("OCR 设置已保存。Token 只保存在本机，不进入完整备份。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "OCR 设置保存失败。");
+      setMessage(formatUiError(error, "generic"));
     } finally {
       setSaving(false);
     }

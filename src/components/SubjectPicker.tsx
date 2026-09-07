@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 
 import type { Subject, SubjectConfig } from "../types";
+import { formatUiError } from "../lib/uiError";
 
 interface SubjectPickerProps {
   value?: Subject;
@@ -27,7 +28,7 @@ export const SubjectPicker = ({ value, subjects, onChange, onAddSubject, disable
       setDraft("");
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "添加学科失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 
