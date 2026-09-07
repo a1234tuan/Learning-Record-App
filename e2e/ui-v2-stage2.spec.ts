@@ -13,6 +13,16 @@ test("stage 2 formal app keeps both visual themes usable across today and librar
   page.on("pageerror", (error) => errors.push(error.message));
 
   await page.goto("/?preview=stage3");
+  if (testInfo.project.name === "android-narrow") {
+    const navCentering = await page.locator(".bottom-nav").evaluate((nav) => {
+      const create = nav.querySelector<HTMLElement>(".bottom-nav-create");
+      if (!create) return Number.POSITIVE_INFINITY;
+      const navRect = nav.getBoundingClientRect();
+      const createRect = create.getBoundingClientRect();
+      return Math.abs((navRect.top + navRect.bottom - createRect.top - createRect.bottom) / 2);
+    });
+    expect(navCentering).toBeLessThanOrEqual(1.5);
+  }
   await expect(page.locator("html")).toHaveAttribute("data-visual-theme", "reading");
   await expect(page.getByRole("heading", { name: "今天想记下什么？" })).toBeVisible();
   await expect(page.getByRole("button", { name: /新建 .* 记录/ })).toBeVisible();

@@ -31,6 +31,10 @@ for (const theme of ["reading", "modern"] as const) {
     await title.fill("BFS 中 visited 标记时机、重复入队与 predecessor 稳定性的完整推导");
     const editor = page.locator(".rich-editor[contenteditable='true']");
     await expect(editor).toBeVisible();
+    await expect(page.getByLabel("选择学科")).toHaveCount(0);
+    await page.getByRole("button", { name: "更多操作" }).click();
+    await page.getByRole("combobox", { name: "日志学科" }).selectOption({ label: "数学" });
+    await page.getByRole("button", { name: "收起更多操作" }).click();
     const mobileMoreTools = page.getByRole("button", { name: "展开更多编辑工具" });
     const codeLanguage = page.getByRole("combobox", { name: "代码块语言" });
     if (testInfo.project.name === "android-narrow") {
@@ -43,6 +47,26 @@ for (const theme of ["reading", "modern"] as const) {
       await expect(mobileMoreTools).toBeHidden();
       await expect(codeLanguage).toBeVisible();
     }
+    const toolbarAlignment = await page.locator(".editor-toolbar").evaluate((toolbar) => {
+      const controls = Array.from(toolbar.querySelectorAll<HTMLElement>("button, label.editor-file-button, select"))
+        .filter((control) => {
+          const style = window.getComputedStyle(control);
+          return style.display !== "none" && style.visibility !== "hidden" && control.getBoundingClientRect().height > 0;
+        });
+      const iconOffsets = controls.flatMap((control) => {
+        const icon = control.querySelector("svg");
+        if (!icon) return [];
+        const controlRect = control.getBoundingClientRect();
+        const iconRect = icon.getBoundingClientRect();
+        return [Math.abs((controlRect.top + controlRect.bottom - iconRect.top - iconRect.bottom) / 2)];
+      });
+      return {
+        heights: controls.map((control) => control.getBoundingClientRect().height),
+        maximumIconOffset: Math.max(0, ...iconOffsets),
+      };
+    });
+    expect(toolbarAlignment.heights.every((height) => height >= 35.5 && height <= 40.5)).toBe(true);
+    expect(toolbarAlignment.maximumIconOffset).toBeLessThanOrEqual(1.5);
     await assertNoHorizontalOverflow(page);
     await editor.fill("在 BFS 中，一个节点可能同时与多个已经访问到的父节点相邻。\n\n首次发现时必须先标记 visited，再加入队列，并同时记录 predecessor。\n\n这条不变量保证每个节点最多入队一次，也保证首次发现路径不会被后续父节点覆盖。");
     await expect(page.getByText(/本机草稿/)).toBeVisible();

@@ -261,11 +261,11 @@ body {
 .entry-meta-panel input { font-weight: 590; }
 
 .bottom-nav-pair { display: contents; }
-.bottom-nav-create { align-self: center; justify-self: center; width: 48px !important; height: 48px; min-height: 48px !important; transform: translateY(-14px) !important; border: 4px solid var(--color-surface) !important; border-radius: 50% !important; background: var(--color-primary) !important; color: #fff !important; box-shadow: 0 7px 18px color-mix(in srgb, var(--color-primary) 24%, transparent); }
+.bottom-nav-create { align-self: center; justify-self: center; width: 48px !important; height: 48px; min-height: 48px !important; transform: none !important; border: 3px solid var(--color-surface) !important; border-radius: 50% !important; background: var(--color-primary) !important; color: #fff !important; box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent); }
 
 @media (max-width: 920px) {
   .page { padding: 24px 16px calc(110px + env(safe-area-inset-bottom)); }
-  .bottom-nav { left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); grid-template-columns: repeat(5, 1fr); gap: 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 0; padding: 7px 8px env(safe-area-inset-bottom); box-shadow: none; }
+  .bottom-nav { left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); grid-template-columns: repeat(5, 1fr); gap: 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 0; padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); box-shadow: none; }
   .bottom-nav > button,
   .bottom-nav-pair > button:not(.bottom-nav-create) { min-height: 52px; }
   .bottom-nav > button.active,
@@ -578,8 +578,6 @@ body {
 
 :root:not([data-visual-theme="modern"]) .record-editor-head > .record-title-input { font-family: var(--font-reading); font-weight: 560; }
 .record-editor-head > .record-title-input:focus { outline: 0; box-shadow: inset 0 -2px var(--color-primary); }
-.record-editor-head .subject-picker { max-height: 82px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; scrollbar-width: thin; }
-
 .record-editor-page > .editor-shell,
 .record-view-page > .editor-shell {
   border: 0;
@@ -621,15 +619,36 @@ body {
 .record-editor-page .editor-toolbar-secondary,
 .record-editor-page .editor-toolbar-insert { padding-left: 4px; border-left: 1px solid var(--color-border); }
 .record-editor-page .editor-toolbar-group-label { display: none; }
-.record-editor-page .editor-mobile-more-trigger { display: none; }
+.record-editor-page .editor-toolbar .editor-mobile-more-trigger { display: none; }
 
 .record-editor-page .editor-toolbar button,
 .record-editor-page .editor-file-button {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  line-height: 1;
+  vertical-align: middle;
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
+
+.record-editor-page .editor-toolbar select { height: 36px; min-height: 36px; vertical-align: middle; }
+.record-editor-page .editor-toolbar svg { display: block; flex: 0 0 auto; width: 16px; height: 16px; }
+.record-editor-page .editor-toolbar-primary > *,
+.record-editor-page .editor-toolbar-secondary > *,
+.record-editor-page .editor-toolbar-insert > * { align-self: center; }
+.record-editor-page .editor-toolbar .structure-insert-menu,
+.record-editor-page .editor-toolbar .audio-recorder-control { align-items: center; min-height: 36px; }
+.record-editor-page .editor-toolbar .decision-block-restore-control { height: 36px; min-height: 36px; }
+.record-editor-page .editor-toolbar .structure-insert-trigger { height: 36px; min-height: 36px; }
+.record-editor-page .editor-toolbar .audio-recorder-control { flex-wrap: nowrap; }
+.record-editor-page .editor-toolbar .audio-recorder-control .secondary-button { height: 36px; min-height: 36px; }
 
 .record-editor-page .editor-toolbar button:hover,
 .record-editor-page .editor-file-button:hover { background: var(--color-surface-muted); }
@@ -695,7 +714,7 @@ body {
   .record-editor-page .editor-toolbar-primary { width: 100%; flex-wrap: nowrap; justify-content: space-between; }
   .record-editor-page .editor-toolbar-primary > button { min-width: 40px; height: 40px; }
   .record-editor-page .editor-toolbar-primary .editor-heading-select { height: 40px; min-width: 62px; }
-  .record-editor-page .editor-mobile-more-trigger { display: inline-grid; place-items: center; }
+  .record-editor-page .editor-toolbar .editor-mobile-more-trigger { display: inline-grid; place-items: center; }
   .record-editor-page .editor-toolbar-secondary,
   .record-editor-page .editor-toolbar-insert { display: none; }
   .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-secondary,
@@ -719,6 +738,8 @@ body {
   }
   .record-editor-page .editor-toolbar.mobile-tools-expanded button,
   .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-file-button { min-height: 40px; }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded select { height: 40px; min-height: 40px; }
+  .record-editor-page .editor-toolbar.mobile-tools-expanded .decision-block-restore-control { height: 40px; min-height: 40px; }
   .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-secondary > button,
   .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > button,
   .record-editor-page .editor-toolbar.mobile-tools-expanded .editor-toolbar-insert > label,

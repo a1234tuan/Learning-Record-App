@@ -128,6 +128,13 @@ const subjects: SubjectConfig[] = [
     name: "Math",
     order: 0,
   },
+  {
+    id: "subject-systems",
+    createdAt: stamp,
+    updatedAt: stamp,
+    name: "Systems",
+    order: 1,
+  },
 ];
 
 const asset: Asset = {
@@ -584,6 +591,22 @@ describe("RecordEditorPage", () => {
     expect(screen.getAllByRole("button", { name: /轻回看 06-22/ })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "收藏记录" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "删除记录" })).toHaveLength(2);
+  });
+
+  it("moves subject switching into the editing more menu", async () => {
+    const onSave = vi.fn().mockImplementation(async (draft: RecordBlock) => draft);
+    const { onGetDraft, saveButton } = renderEditor({ onSave });
+
+    await waitFor(() => expect(onGetDraft).toHaveBeenCalledWith(record.id));
+    expect(screen.queryByLabelText("选择学科")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "日志学科" }), { target: { value: "Systems" } });
+    expect(screen.getByRole("combobox", { name: "日志学科" })).toHaveValue("Systems");
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0].subject).toBe("Systems");
   });
 
   it("restores pending decision-block removal metadata from an autosaved draft", async () => {

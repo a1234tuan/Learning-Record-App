@@ -5,7 +5,6 @@ import type { Editor } from "@tiptap/react";
 
 import type { Asset, ContentTemplate, RecordBlock, RecordDraft, RecordReviewKind, RecordReviewLog, RecordReviewState, RecordSaveOptions, Subject, SubjectConfig } from "../types";
 import { RichTextEditor, type RestorableDecisionBlock } from "../components/RichTextEditor";
-import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordTagChips, recordTagStyle } from "../components/RecordTagChips";
 import { AudioRecorder, type AudioRecorderHandle } from "../components/AudioRecorder";
 import { StructureInsertMenu } from "../components/StructureInsertMenu";
@@ -861,6 +860,20 @@ export const RecordEditorPage = ({
               </button>
               {moreActionsOpen && (
                 <div className="record-more-menu">
+                  <label className="record-more-subject-control">
+                    <span>学科</span>
+                    <select
+                      aria-label="日志学科"
+                      value={draft.subject}
+                      onChange={(event) => update({ subject: event.target.value })}
+                      disabled={saving || interactionLocked}
+                    >
+                      {subjects
+                        .filter((subject) => !subject.archivedAt || subject.name === draft.subject)
+                        .sort((left, right) => left.order - right.order)
+                        .map((subject) => <option key={subject.id} value={subject.name}>{subject.name}</option>)}
+                    </select>
+                  </label>
                   <button type="button" onClick={() => { setWideContent((value) => !value); closeMoreActions(); }}>
                     <PanelRight size={16} />
                     {wideContent ? "标准正文宽度" : "宽内容模式"}
@@ -1051,7 +1064,6 @@ export const RecordEditorPage = ({
                 </div>
               )}
             </div>
-            <SubjectPicker value={draft.subject} subjects={subjects} onChange={(subject: Subject) => update({ subject })} disabled={interactionLocked} />
           </section>
           <RichTextEditor
             value={draft.contentHtml}

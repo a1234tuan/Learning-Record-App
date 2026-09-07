@@ -51,10 +51,10 @@ if (-not $aapt) {
 $badgingOutput = & $aapt dump badging $targetApk
 $aaptExitCode = $LASTEXITCODE
 $badging = (($badgingOutput | Where-Object { $_ -match "^package:" } | Select-Object -First 1) -join "")
-if ($aaptExitCode -ne 0 -or $badging -notmatch "versionCode='12'" -or $badging -notmatch "versionName='0.2.1'") {
-  throw "Release APK version check failed. Expected versionCode 12 and versionName 0.2.1; got: $badging"
+if ($aaptExitCode -ne 0 -or $badging -notmatch "versionCode='13'" -or $badging -notmatch "versionName='0.2.2'") {
+  throw "Release APK version check failed. Expected versionCode 13 and versionName 0.2.2; got: $badging"
 }
-Write-Host "Verified APK version: versionCode 12, versionName 0.2.1"
+Write-Host "Verified APK version: versionCode 13, versionName 0.2.2"
 
 $sha256 = [System.Security.Cryptography.SHA256]::Create()
 try {
