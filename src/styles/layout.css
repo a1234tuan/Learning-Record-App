@@ -6,6 +6,15 @@
   min-width: 0;
 }
 
+.app-shell.immersive-task-active {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.immersive-task-active .sidebar,
+.app-shell.immersive-task-active .bottom-nav {
+  display: none;
+}
+
 .web-navigation-back-row {
   width: min(1120px, 100%);
   padding: 16px var(--space-page-x) 0;
@@ -239,6 +248,12 @@
   animation: cloud-sync-status-in 160ms ease both;
 }
 
+.cloud-sync-status-progress,
+.cloud-sync-status-success,
+.cloud-sync-status-no-change {
+  pointer-events: none;
+}
+
 .cloud-sync-status-toast svg {
   flex-shrink: 0;
 }
@@ -311,6 +326,11 @@
     right: max(16px, env(safe-area-inset-right));
     bottom: calc(var(--bottom-nav-height, 72px) + max(16px, env(safe-area-inset-bottom)));
     max-width: none;
+  }
+
+  .app-shell.immersive-task-active .cloud-sync-status-toast {
+    top: max(16px, env(safe-area-inset-top));
+    bottom: auto;
   }
 }
 

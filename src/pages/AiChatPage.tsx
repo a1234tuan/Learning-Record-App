@@ -31,6 +31,7 @@ import { copyTextToClipboard } from "../lib/clipboard";
 import { createBaseEntity } from "../lib/entity";
 import { isNativePlatform } from "../lib/platform";
 import { resolveViewportHeight } from "../lib/viewport";
+import { formatUiError } from "../lib/uiError";
 import { storage } from "../services/storageAdapter";
 import { buildSessionMemorySummary, calculateAiRequestBudget, sendChatCompletion } from "../services/aiClientService";
 import {
@@ -522,7 +523,7 @@ export const AiChatPage = ({
       setMessages([...visibleHistory, assistantMessage]);
       await refresh();
     } catch (error) {
-      const errorText = error instanceof Error ? error.message : "AI 请求失败。";
+      const errorText = formatUiError(error, "ai-request");
       const assistantMessage: AiChatMessage = {
         ...createBaseEntity(),
         sessionId: contextSession.id,

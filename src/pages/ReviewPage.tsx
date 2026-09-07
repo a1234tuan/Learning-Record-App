@@ -30,6 +30,7 @@ import { RichTextEditor } from "../components/RichTextEditor";
 import { RecordTagChips } from "../components/RecordTagChips";
 import { PageHeader } from "../components/ui";
 import { normalizeRecordContent } from "../lib/recordContent";
+import { formatUiError } from "../lib/uiError";
 import { newId } from "../lib/entity";
 import { isoDateTimeToLocalDate, todayISO } from "../lib/date";
 import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
@@ -645,7 +646,6 @@ export const ReviewPage = ({
         ]);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
       setRatedRecordIds((current) => {
         const next = new Set(current);
         next.delete(ratedId);
@@ -656,7 +656,7 @@ export const ReviewPage = ({
       setBlockFeedbackDrafts(submittedDrafts);
       onQueueChange(previousQueue);
       onCurrentRecordChange(previousCurrentId);
-      setRatingError(`复习评分失败：${message}`);
+      setRatingError(formatUiError(error, "review-rating"));
     } finally {
       setRatingRecordId(null);
     }
@@ -689,8 +689,7 @@ export const ReviewPage = ({
       onCurrentRecordChange(entry.currentRecordId);
     } catch (error) {
       setPendingUndoRestore(null);
-      const message = error instanceof Error ? error.message : "未知错误";
-      setRatingError(`撤回评分失败：${message}`);
+      setRatingError(formatUiError(error, "review-undo"));
     } finally {
       setUndoing(false);
     }
@@ -729,8 +728,7 @@ export const ReviewPage = ({
     try {
       await action();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "未知错误";
-      setRatingError(`复习评论操作失败：${message}`);
+      setRatingError(formatUiError(error, "review-feedback"));
     } finally {
       setFeedbackActionId(undefined);
     }

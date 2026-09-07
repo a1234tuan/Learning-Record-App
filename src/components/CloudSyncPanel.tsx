@@ -2,6 +2,7 @@ import { Cloud, CloudDownload, HardDrive, History, LogIn, LogOut, RefreshCw, Wre
 import { useEffect, useRef, useState } from "react";
 import type { User } from "firebase/auth";
 
+import { formatUiError } from "../lib/uiError";
 import {
   completeGoogleRedirect,
   cleanupCloudRecoverySnapshotsIfDue,
@@ -28,7 +29,7 @@ interface CloudSyncPanelProps {
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : "云同步操作失败。";
+const errorMessage = (error: unknown) => formatUiError(error, "cloud-sync");
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes < 0) return "--";

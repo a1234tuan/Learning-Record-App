@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowLeft, Check, Clock3, Flag, Lightbulb, LoaderCircle,
 import { useMemo, useState } from "react";
 
 import type { RecordBlock } from "../../types";
+import { formatUiError } from "../../lib/uiError";
 import type { ReviewCoachFormalSnapshot, SubjectiveOutcome } from "./domain";
 
 interface AdaptiveReviewPageProps {
@@ -54,7 +55,7 @@ export const AdaptiveReviewPage = ({ taskId, snapshot, records, onBack, onGenera
       if (success) setMessage(success);
       return true;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "操作失败，请稍后重试。");
+      setMessage(formatUiError(error, "adaptive-review"));
       return false;
     } finally {
       setBusy(undefined);

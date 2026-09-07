@@ -79,6 +79,7 @@ import {
   restoreWebNavigationSnapshot,
 } from "./lib/webNavigationHistory";
 import { reviewCoachRepository } from "./features/reviewCoach/repository";
+import { readVisualTheme, writeVisualTheme, type VisualTheme } from "./lib/visualTheme";
 
 const sameIds = (left: string[], right: string[]) =>
   left.length === right.length && left.every((id, index) => id === right[index]);
@@ -200,6 +201,7 @@ export const App = () => {
   const [backToast, setBackToast] = useState("");
   const [reviewToast, setReviewToast] = useState("");
   const [desktopMigrationOpen, setDesktopMigrationOpen] = useState(false);
+  const [visualTheme, setVisualTheme] = useState<VisualTheme>(() => readVisualTheme());
   const lastBackPressRef = useRef(0);
   const backToastTimerRef = useRef<number | null>(null);
   const navigationStateRef = useRef<NavigationState>({ activeTab, tabMemory, activeAiSessionId });
@@ -405,6 +407,11 @@ export const App = () => {
     document.documentElement.style.setProperty("--reading-line-height", String(app.settings.lineHeight));
     document.documentElement.dataset.theme = app.settings.theme;
   }, [app.settings]);
+
+  useEffect(() => {
+    document.documentElement.dataset.visualTheme = visualTheme;
+    writeVisualTheme(visualTheme);
+  }, [visualTheme]);
 
   useEffect(() => {
     if (!app.initialized || !isDesktopPlatform() || localStorage.getItem(DESKTOP_MIGRATION_SEEN_KEY)) {
@@ -887,6 +894,8 @@ export const App = () => {
           <SettingsPage
             settings={settings}
             onSaveSettings={(nextSettings) => void app.persistSettings(nextSettings)}
+            visualTheme={visualTheme}
+            onVisualThemeChange={setVisualTheme}
           />
         );
       case "favorites":
@@ -1353,6 +1362,11 @@ export const App = () => {
   const podcastScopeActive = activeTab === "more"
     && tabMemory.more.subRoute === "podcasts"
     && tabMemory.more.podcastScreen === "scope";
+  const immersiveTaskActive = Boolean(
+    (currentRecord && currentRecordState.recordEditing)
+    || (activeTab === "review" && tabMemory.review.mode === "queue" && tabMemory.review.currentRecordId)
+    || (activeTab === "today" && tabMemory.today.adaptiveTaskId),
+  );
 
   const shellClassName = [
     "app-shell",
@@ -1360,6 +1374,7 @@ export const App = () => {
     keyboardVisible ? "keyboard-open" : "",
     aiWorkspaceActive ? "ai-chat-active" : "",
     podcastScopeActive ? "ai-scope-active" : "",
+    immersiveTaskActive ? "immersive-task-active" : "",
   ].filter(Boolean).join(" ");
   const showWebNavigationBack = !Capacitor.isNativePlatform()
     && getTabDepth(activeTab, tabMemory) > 0

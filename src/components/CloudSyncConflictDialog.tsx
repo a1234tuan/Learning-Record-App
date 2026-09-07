@@ -1,6 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 
+import { formatUiError } from "../lib/uiError";
 import { getCurrentCloudUser, resolveCloudSyncConflict, synchronizeCloudChanges } from "../services/cloudSyncService";
 import { cloudSyncStore, useCloudSyncStore } from "../services/cloudSyncStore";
 
@@ -9,7 +10,7 @@ interface CloudSyncConflictDialogProps {
   onRestored: () => Promise<void> | void;
 }
 
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : "云同步操作失败。");
+const errorMessage = (error: unknown) => formatUiError(error, "cloud-sync");
 
 /**
  * Global modal for resolving cloud sync conflicts. Mounted once at the app shell root so it can

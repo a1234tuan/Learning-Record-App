@@ -379,6 +379,7 @@
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, #20231f 92%, transparent);
   box-shadow: var(--shadow-floating);
+  pointer-events: none;
 }
 
 .status-message {

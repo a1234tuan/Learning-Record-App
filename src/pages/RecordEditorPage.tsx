@@ -13,6 +13,7 @@ import { TemplateInsertMenu } from "../components/TemplateInsertMenu";
 import { newId } from "../lib/entity";
 import { isoDateTimeToLocalDate, nowISO } from "../lib/date";
 import { isDesktopPlatform, isNativePlatform } from "../lib/platform";
+import { formatUiError } from "../lib/uiError";
 import { pickNativeGalleryImageFile } from "../lib/nativeImagePicker";
 import { normalizeRecordContent, syncRecordRefsFromContent } from "../lib/recordContent";
 import { getSubjectRecordTags, normalizeRecordTag, normalizeRecordTags, recordTagKey } from "../lib/recordTags";
@@ -718,8 +719,7 @@ export const RecordEditorPage = ({
       draftRef.current = fallbackDraft;
       setDraft(fallbackDraft);
       await flushDraft(fallbackDraft, { force: true }).catch(() => undefined);
-      const message = error instanceof Error ? error.message : "未知错误";
-      setSaveError(`保存失败，内容已留在草稿中。${message}`);
+      setSaveError(formatUiError(error, "record-save"));
     } finally {
       committingRef.current = false;
       setSaving(false);

@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 
+import { formatUiError } from "../lib/uiError";
 import { getCurrentCloudUser, synchronizeCloudChanges } from "../services/cloudSyncService";
 import { cloudSyncStore, useCloudSyncStore } from "../services/cloudSyncStore";
 
@@ -11,7 +12,7 @@ interface CloudSyncButtonProps {
   className?: string;
 }
 
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : "云同步操作失败。");
+const errorMessage = (error: unknown) => formatUiError(error, "cloud-sync");
 
 export const CloudSyncButton = ({ onSignedOut, onRestored, className = "" }: CloudSyncButtonProps) => {
   const { busy, conflict, outcome } = useCloudSyncStore();

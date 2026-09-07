@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { PageHeader } from "../components/ui";
 import { isDesktopPlatform } from "../lib/platform";
+import type { VisualTheme } from "../lib/visualTheme";
 
 interface SettingsPageProps {
   settings: AppSettings;
   onSaveSettings: (settings: AppSettings) => void;
+  visualTheme: VisualTheme;
+  onVisualThemeChange: (theme: VisualTheme) => void;
 }
 
-export const SettingsPage = ({ settings, onSaveSettings }: SettingsPageProps) => {
+export const SettingsPage = ({ settings, onSaveSettings, visualTheme, onVisualThemeChange }: SettingsPageProps) => {
   const isDesktop = isDesktopPlatform();
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxyStatus, setProxyStatus] = useState("");
@@ -46,6 +49,20 @@ export const SettingsPage = ({ settings, onSaveSettings }: SettingsPageProps) =>
     <main className="page settings-page">
       <PageHeader eyebrow="Settings" title="设置" density="compact" />
       <section className="settings-panel">
+        <fieldset className="visual-theme-fieldset">
+          <legend>视觉风格</legend>
+          <div className="visual-theme-options">
+            <button type="button" aria-pressed={visualTheme === "reading"} onClick={() => onVisualThemeChange("reading")}>
+              <span className="visual-theme-preview visual-theme-preview-reading" />
+              <span><strong>温润阅读</strong><small>暖白、舒展排版与陶土强调</small></span>
+            </button>
+            <button type="button" aria-pressed={visualTheme === "modern"} onClick={() => onVisualThemeChange("modern")}>
+              <span className="visual-theme-preview visual-theme-preview-modern" />
+              <span><strong>清爽现代</strong><small>中性明亮、紧凑层级与克制绿色</small></span>
+            </button>
+          </div>
+          <small className="settings-hint">仅保存在当前设备，不参与云同步。</small>
+        </fieldset>
         <label>
           目标日期
           <input
@@ -55,7 +72,7 @@ export const SettingsPage = ({ settings, onSaveSettings }: SettingsPageProps) =>
           />
         </label>
         <label>
-          主题
+          明暗模式
           <select
             value={settings.theme}
             onChange={(event) => onSaveSettings({ ...settings, theme: event.target.value as AppSettings["theme"] })}

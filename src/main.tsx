@@ -6,6 +6,7 @@ import { App } from "./App";
 import { cleanupNativeServiceWorker } from "./lib/nativeServiceWorker";
 import { isDesktopPlatform, isNativePlatform } from "./lib/platform";
 import { ReviewCoachPreviewApp } from "./preview/ReviewCoachPreviewApp";
+import { isUiV2PrototypeRequest, UiV2PrototypeApp } from "./preview/UiV2PrototypeApp";
 import { isReviewCoachPreviewRequest, isStage3PreviewRequest, isStage4PreviewRequest, isStage5PreviewRequest, isStage6PreviewRequest, isStage7PreviewRequest, seedStage3Preview, seedStage4Preview, seedStage5Preview, seedStage6Preview, seedStage7Preview } from "./preview/stage3PreviewSeed";
 import "./styles.css";
 import "./styles/theme.css";
@@ -13,8 +14,17 @@ import "./styles/layout.css";
 import "./styles/components.css";
 import "./styles/pages.css";
 import "./styles/motion.css";
+import "./styles/visual-v2.css";
 
 const startApplication = async () => {
+  if (isUiV2PrototypeRequest()) {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <UiV2PrototypeApp />
+      </React.StrictMode>,
+    );
+    return;
+  }
   const reviewCoachPreview = isReviewCoachPreviewRequest();
   if (reviewCoachPreview || isStage3PreviewRequest() || isStage4PreviewRequest() || isStage5PreviewRequest() || isStage6PreviewRequest() || isStage7PreviewRequest()) {
     try {

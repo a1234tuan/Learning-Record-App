@@ -3513,6 +3513,14 @@
   .review-bottom-controls {
     bottom: calc(var(--bottom-nav-height, 78px) + max(8px, env(safe-area-inset-bottom)));
   }
+
+  .app-shell.immersive-task-active .review-session {
+    min-height: min(700px, calc(100dvh - 72px));
+  }
+
+  .app-shell.immersive-task-active .review-bottom-controls {
+    bottom: max(8px, env(safe-area-inset-bottom));
+  }
 }
 
 @media (max-width: 480px) {
