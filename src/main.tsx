@@ -7,7 +7,7 @@ import { cleanupNativeServiceWorker } from "./lib/nativeServiceWorker";
 import { isDesktopPlatform, isNativePlatform } from "./lib/platform";
 import { ReviewCoachPreviewApp } from "./preview/ReviewCoachPreviewApp";
 import { isUiV2PrototypeRequest, UiV2PrototypeApp } from "./preview/UiV2PrototypeApp";
-import { isReviewCoachPreviewRequest, isStage3PreviewRequest, isStage4PreviewRequest, isStage5PreviewRequest, isStage6PreviewRequest, isStage7PreviewRequest, seedStage3Preview, seedStage4Preview, seedStage5Preview, seedStage6Preview, seedStage7Preview } from "./preview/stage3PreviewSeed";
+import { isJournalPerformancePreviewRequest, isReviewCoachPreviewRequest, isStage3PreviewRequest, isStage4PreviewRequest, isStage5PreviewRequest, isStage6PreviewRequest, isStage7PreviewRequest, seedJournalPerformancePreview, seedStage3Preview, seedStage4Preview, seedStage5Preview, seedStage6Preview, seedStage7Preview } from "./preview/stage3PreviewSeed";
 import "./styles.css";
 import "./styles/theme.css";
 import "./styles/layout.css";
@@ -26,9 +26,10 @@ const startApplication = async () => {
     return;
   }
   const reviewCoachPreview = isReviewCoachPreviewRequest();
-  if (reviewCoachPreview || isStage3PreviewRequest() || isStage4PreviewRequest() || isStage5PreviewRequest() || isStage6PreviewRequest() || isStage7PreviewRequest()) {
+  if (reviewCoachPreview || isJournalPerformancePreviewRequest() || isStage3PreviewRequest() || isStage4PreviewRequest() || isStage5PreviewRequest() || isStage6PreviewRequest() || isStage7PreviewRequest()) {
     try {
-      if (reviewCoachPreview || isStage7PreviewRequest()) await seedStage7Preview();
+      if (isJournalPerformancePreviewRequest()) await seedJournalPerformancePreview();
+      else if (reviewCoachPreview || isStage7PreviewRequest()) await seedStage7Preview();
       else if (isStage6PreviewRequest()) await seedStage6Preview();
       else if (isStage5PreviewRequest()) await seedStage5Preview();
       else if (isStage4PreviewRequest()) await seedStage4Preview();

@@ -331,7 +331,7 @@ export const App = () => {
   }, [dismissDesktopMigration, openMoreSubRoute]);
 
   const openRecordInTab = useCallback(
-    (record: RecordBlock, tab: TabKey, assetId?: string, editing = false) => {
+    (record: RecordBlock, tab: TabKey, assetId?: string, editing = false, sourceScrollY?: number) => {
       clearBackHint();
       const current = navigationStateRef.current;
       const nextMemory: TabMemory = {
@@ -343,9 +343,13 @@ export const App = () => {
           recordEditing: editing,
           referenceStack: [],
           restoreScrollY: undefined,
+          ...(tab === "journal" && sourceScrollY !== undefined ? { listScrollY: sourceScrollY } : {}),
         },
       };
-      commitNavigation({ ...current, activeTab: tab, tabMemory: nextMemory });
+      commitNavigation(
+        { ...current, activeTab: tab, tabMemory: nextMemory },
+        { scrollToTop: sourceScrollY !== undefined },
+      );
     },
     [clearBackHint, commitNavigation],
   );
@@ -1149,6 +1153,10 @@ export const App = () => {
             month={tabMemory.journal.month}
             selectedDate={tabMemory.journal.selectedDate}
             selectedSubject={tabMemory.journal.selectedSubject}
+            browseMode={tabMemory.journal.browseMode}
+            subjectFilter={tabMemory.journal.subjectFilter}
+            visibleRecordCount={tabMemory.journal.visibleRecordCount}
+            restoreListScrollY={tabMemory.journal.listScrollY}
             onMonthChange={(month) =>
               updateNavigationState((current) => ({
                 ...current,
@@ -1189,7 +1197,19 @@ export const App = () => {
                 },
               });
             }}
-            onOpenRecord={(record) => openRecordInTab(record, "journal")}
+            onBrowseModeChange={(browseMode) => updateNavigationState((current) => ({
+              ...current,
+              tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, browseMode } },
+            }))}
+            onSubjectFilterChange={(subjectFilter) => updateNavigationState((current) => ({
+              ...current,
+              tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, subjectFilter, visibleRecordCount: 20 } },
+            }))}
+            onVisibleRecordCountChange={(visibleRecordCount) => updateNavigationState((current) => ({
+              ...current,
+              tabMemory: { ...current.tabMemory, journal: { ...current.tabMemory.journal, visibleRecordCount } },
+            }))}
+            onOpenRecord={(record) => openRecordInTab(record, "journal", undefined, false, window.scrollY)}
             onOpenSearch={() => {
               const current = navigationStateRef.current;
               if (!current.tabMemory.journal.searchOpen) {

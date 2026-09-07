@@ -1,4 +1,5 @@
 import { BrainCircuit, FileText, MessageSquare, RefreshCw, Star } from "lucide-react";
+import { useMemo } from "react";
 
 import type { RecordBlock, RecordReviewLog, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
@@ -36,7 +37,7 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
   const reviewActive = reviewState?.status === "active";
   const reviewDue = isReviewDueOn(reviewState, todayISO());
   const hasReviewEvaluation = reviewLogs.some((log) => Boolean(log.evaluationText?.trim()));
-  const excerpt = recordToPlainText(record).replace(/\s+/g, " ").trim();
+  const excerpt = useMemo(() => recordToPlainText(record).replace(/\s+/g, " ").trim(), [record]);
 
   return (
     <article className="record-card">

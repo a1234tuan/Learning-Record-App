@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, CheckSquare, Download, List, Search, Square, X } from "lucide-react";
 
 import type { Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
@@ -14,9 +14,16 @@ interface JournalPageProps {
   month: Date;
   selectedDate?: string;
   selectedSubject?: Subject;
+  browseMode?: "library" | "calendar";
+  subjectFilter?: Subject | "全部";
+  visibleRecordCount?: number;
+  restoreListScrollY?: number;
   onMonthChange: (month: Date) => void;
   onSelectedDateChange: (date: string | undefined) => void;
   onSelectedSubjectChange: (subject: Subject | undefined) => void;
+  onBrowseModeChange?: (mode: "library" | "calendar") => void;
+  onSubjectFilterChange?: (subject: Subject | "全部") => void;
+  onVisibleRecordCountChange?: (count: number) => void;
   onOpenRecord: (record: RecordBlock) => void;
   onOpenSearch: () => void;
   onAskAi: (date: string) => void;
@@ -28,15 +35,24 @@ interface JournalPageProps {
   onExportRecords?: (recordIds: string[]) => Promise<string> | string;
 }
 
+export const JOURNAL_PAGE_SIZE = 20;
+
 export const JournalPage = ({
   blocks,
   subjects,
   month,
   selectedDate,
   selectedSubject,
+  browseMode = "library",
+  subjectFilter = "全部",
+  visibleRecordCount = JOURNAL_PAGE_SIZE,
+  restoreListScrollY,
   onMonthChange,
   onSelectedDateChange,
   onSelectedSubjectChange,
+  onBrowseModeChange = () => undefined,
+  onSubjectFilterChange = () => undefined,
+  onVisibleRecordCountChange = () => undefined,
   onOpenRecord,
   onOpenSearch,
   onAskAi,
@@ -50,13 +66,28 @@ export const JournalPage = ({
   const [selecting, setSelecting] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
   const [batchMessage, setBatchMessage] = useState("");
-  const [browseMode, setBrowseMode] = useState<"library" | "calendar">("library");
-  const [subjectFilter, setSubjectFilter] = useState<Subject | "全部">("全部");
+  const restoredListScrollRef = useRef<number | undefined>(undefined);
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const dates = useMemo(() => getRecordDatesForMonth(records, month), [month, records]);
   const visibleRecords = useMemo(() => records
     .filter((record) => subjectFilter === "全部" || record.subject === subjectFilter)
     .sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt.localeCompare(left.updatedAt)), [records, subjectFilter]);
+  const renderedRecords = visibleRecords.slice(0, Math.max(JOURNAL_PAGE_SIZE, visibleRecordCount));
+  const remainingRecordCount = visibleRecords.length - renderedRecords.length;
+
+  useEffect(() => {
+    if (
+      restoreListScrollY === undefined
+      || restoredListScrollRef.current === restoreListScrollY
+      || selectedDate
+      || selectedSubject
+    ) return;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: restoreListScrollY });
+      restoredListScrollRef.current = restoreListScrollY;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [restoreListScrollY, renderedRecords.length, selectedDate, selectedSubject]);
 
   const subjectRecords = selectedDate && selectedSubject
     ? getRecordsForDateSubject(records, selectedDate, selectedSubject)
@@ -152,18 +183,26 @@ export const JournalPage = ({
       ) : (
         <>
           <div className="journal-view-tabs" role="tablist" aria-label="日志浏览方式">
-            <button type="button" role="tab" aria-selected={browseMode === "library"} className={browseMode === "library" ? "active" : ""} onClick={() => setBrowseMode("library")}><List size={17} />全部日志</button>
-            <button type="button" role="tab" aria-selected={browseMode === "calendar"} className={browseMode === "calendar" ? "active" : ""} onClick={() => setBrowseMode("calendar")}><CalendarDays size={17} />按日期</button>
+            <button type="button" role="tab" aria-selected={browseMode === "library"} className={browseMode === "library" ? "active" : ""} onClick={() => onBrowseModeChange("library")}><List size={17} />全部日志</button>
+            <button type="button" role="tab" aria-selected={browseMode === "calendar"} className={browseMode === "calendar" ? "active" : ""} onClick={() => onBrowseModeChange("calendar")}><CalendarDays size={17} />按日期</button>
           </div>
           {browseMode === "library" ? (
             <>
               <div className="journal-subject-strip" role="tablist" aria-label="按学科筛选">
-                {["全部", ...subjects.filter((item) => !item.archivedAt).map((item) => item.name)].map((item) => <button type="button" role="tab" aria-selected={subjectFilter === item} className={subjectFilter === item ? "active" : ""} key={item} onClick={() => setSubjectFilter(item as Subject | "全部")}>{item}</button>)}
+                {["全部", ...subjects.filter((item) => !item.archivedAt).map((item) => item.name)].map((item) => <button type="button" role="tab" aria-selected={subjectFilter === item} className={subjectFilter === item ? "active" : ""} key={item} onClick={() => onSubjectFilterChange(item as Subject | "全部")}>{item}</button>)}
               </div>
               <div className="journal-result-meta"><span>{visibleRecords.length} 条日志</span><span>最近更新</span></div>
               <section className="record-list journal-library-records">
-                {visibleRecords.length === 0 ? <div className="empty-state"><h2>这个范围还没有日志</h2><p>切换学科，或从今天页新建记录。</p></div> : visibleRecords.map((record) => <RecordCard key={record.id} record={record} onOpen={onOpenRecord} onAskAi={onAskAi} onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)} reviewState={reviewStatesByRecord[record.id]} reviewLogs={reviewLogsByRecord[record.id]} onAddReview={() => onAddToReview(record.id)} />)}
+                {visibleRecords.length === 0 ? <div className="empty-state"><h2>这个范围还没有日志</h2><p>切换学科，或从今天页新建记录。</p></div> : renderedRecords.map((record) => <RecordCard key={record.id} record={record} onOpen={onOpenRecord} onAskAi={onAskAi} onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)} reviewState={reviewStatesByRecord[record.id]} reviewLogs={reviewLogsByRecord[record.id]} onAddReview={() => onAddToReview(record.id)} />)}
               </section>
+              {remainingRecordCount > 0 && (
+                <div className="journal-load-more">
+                  <span>已显示 {renderedRecords.length} / {visibleRecords.length}</span>
+                  <button type="button" className="secondary-button" onClick={() => onVisibleRecordCountChange(renderedRecords.length + JOURNAL_PAGE_SIZE)}>
+                    再显示 {Math.min(JOURNAL_PAGE_SIZE, remainingRecordCount)} 条
+                  </button>
+                </div>
+              )}
             </>
           ) : (
             <>

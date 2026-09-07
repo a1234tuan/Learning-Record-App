@@ -86,6 +86,10 @@ export type TabMemory = {
     selectedSubject?: Subject;
     searchOpen: boolean;
     searchQuery: string;
+    browseMode: "library" | "calendar";
+    subjectFilter: Subject | "全部";
+    visibleRecordCount: number;
+    listScrollY?: number;
   };
   categories: RecordTabState & {
     activeSubject: Subject | null;
@@ -119,6 +123,9 @@ export const createInitialTabMemory = (): TabMemory => ({
     month: new Date(),
     searchOpen: false,
     searchQuery: "",
+    browseMode: "library",
+    subjectFilter: "全部",
+    visibleRecordCount: 20,
   },
   categories: {
     activeSubject: null,

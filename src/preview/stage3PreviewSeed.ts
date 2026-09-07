@@ -136,6 +136,28 @@ export const seedStage3Preview = async (): Promise<void> => {
   }
 };
 
+/** Seeds a realistic large journal without exposing the helper in native builds. */
+export const seedJournalPerformancePreview = async (): Promise<void> => {
+  await seedStage3Preview();
+  const stamp = nowISO();
+  const records: RecordBlock[] = Array.from({ length: 91 }, (_, index) => ({
+    id: `journal-performance-record-${index + 1}`,
+    createdAt: stamp,
+    updatedAt: stamp,
+    type: "record",
+    date: addDaysISO(todayISO(), -(index + 1)),
+    order: index + 1,
+    subject: PREVIEW_SUBJECT,
+    title: `日志性能回归 ${String(index + 2).padStart(2, "0")}`,
+    contentHtml: `<p>${"这是一段用于验证长日志列表性能的真实长度正文。".repeat(80)}</p>`,
+    assets: [],
+    formulas: [],
+    mistakeRefs: [],
+    tags: ["性能回归"],
+  }));
+  await db.blocks.bulkPut(records);
+};
+
 /** Adds a deterministic completed interpretation without contacting an AI provider. */
 export const seedStage4Preview = async (): Promise<void> => {
   await seedStage3Preview();
@@ -571,6 +593,14 @@ export const isStage3PreviewRequest = (): boolean => {
   const host = window.location.hostname;
   return (host === "127.0.0.1" || host === "localhost")
     && new URLSearchParams(window.location.search).get("preview") === "stage3";
+};
+
+export const isJournalPerformancePreviewRequest = (): boolean => {
+  if (typeof window === "undefined") return false;
+  if (isNativePlatform() || isDesktopPlatform()) return false;
+  const host = window.location.hostname;
+  return (host === "127.0.0.1" || host === "localhost")
+    && new URLSearchParams(window.location.search).get("preview") === "journal-performance";
 };
 
 export const isStage4PreviewRequest = (): boolean => {
