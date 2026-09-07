@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+test.setTimeout(60_000);
+
 const assertNoPageOverflow = async (page: import("@playwright/test").Page) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);

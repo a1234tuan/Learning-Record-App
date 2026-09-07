@@ -12,6 +12,7 @@ import {
   Layers,
   Mic2,
   MoreHorizontal,
+  Plus,
   Settings,
 } from "lucide-react";
 
@@ -166,18 +167,14 @@ const useKeyboardVisible = () => {
 const navItems: Array<{ tab: TabKey; subRoute?: Exclude<MoreSubRoute, null>; label: string; icon: typeof Home }> = [
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
-  { tab: "categories", label: "分类", icon: Layers },
   { tab: "review", label: "复习", icon: CalendarCheck },
   { tab: "more", subRoute: "recordings", label: "录音", icon: Mic2 },
-  { tab: "more", subRoute: "ai", label: "AI问答", icon: BrainCircuit },
-  { tab: "more", subRoute: "stats", label: "统计", icon: BarChart3 },
-  { tab: "more", subRoute: "settings", label: "设置", icon: Settings },
+  { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
 
 const bottomNavItems: Array<{ tab: TabKey; label: string; icon: typeof Home }> = [
   { tab: "today", label: "今天", icon: Home },
   { tab: "journal", label: "日志", icon: CalendarDays },
-  { tab: "categories", label: "分类", icon: Layers },
   { tab: "review", label: "复习", icon: CalendarCheck },
   { tab: "more", label: "更多", icon: MoreHorizontal },
 ];
@@ -385,6 +382,17 @@ export const App = () => {
       tabMemory: { ...current.tabMemory, today: { ...current.tabMemory.today, recordId: undefined, adaptiveTaskId: taskId } },
     });
   }, [commitNavigation]);
+
+  const createRecordFromGlobalAction = useCallback(async () => {
+    const subject = app.activeSubjects[0]?.name;
+    if (!subject) {
+      switchTab("today");
+      return;
+    }
+    const created = await app.createRecordBlock(todayISO(), subject);
+    newlyCreatedRecordIdsRef.current.add(created.id);
+    openRecordInTab(created, activeTab, undefined, true);
+  }, [activeTab, app.activeSubjects, app.createRecordBlock, openRecordInTab, switchTab]);
 
   const setCurrentRecordEditing = useCallback((recordEditing: boolean) => {
     updateNavigationState((current) => ({
@@ -1043,6 +1051,7 @@ export const App = () => {
             onOpenTrash={() => openMoreSubRoute("trash")}
             onOpenRecordings={() => openMoreSubRoute("recordings")}
             onOpenTemplates={() => openMoreSubRoute("templates")}
+            onOpenCategories={() => switchTab("categories")}
             onOpenGuide={() => openMoreSubRoute("guide")}
             settings={settings}
             autoBackupState={app.autoBackupState ?? undefined}
@@ -1428,6 +1437,10 @@ export const App = () => {
             favoriteRecords.slice(0, 5).map((record) => <small key={record.id}>{record.title}</small>)
           )}
         </section>
+        <div className="sidebar-utility-nav">
+          <button type="button" onClick={() => switchTab("categories")}><Layers size={18} /><span>分类管理</span></button>
+          <button type="button" onClick={() => openMoreSubRoute("settings")}><Settings size={18} /><span>设置</span></button>
+        </div>
       </aside>
       <div className="content-area">
         {showWebNavigationBack && (
@@ -1466,10 +1479,10 @@ export const App = () => {
       <CloudSyncConflictDialog onRestored={app.refresh} />
       <CloudSyncStatusToast />
       <nav className="bottom-nav">
-        {bottomNavItems.map((item) => {
+        {bottomNavItems.map((item, index) => {
           const Icon = item.icon;
           const active = activeTab === item.tab;
-          return (
+          const itemButton = (
             <button
               key={item.tab}
               type="button"
@@ -1483,6 +1496,12 @@ export const App = () => {
               )}
             </button>
           );
+          return index === 2 ? (
+            <div className="bottom-nav-pair" key={item.tab}>
+              <button type="button" className="bottom-nav-create" onClick={() => void createRecordFromGlobalAction()} aria-label="新建学习日志" title="新建学习日志"><Plus size={25} /></button>
+              {itemButton}
+            </div>
+          ) : itemButton;
         })}
       </nav>
     </div>

@@ -4,6 +4,7 @@ import type { RecordBlock, RecordReviewLog, RecordReviewState } from "../types";
 import { todayISO } from "../lib/date";
 import { isReviewDueOn, reviewKindLabel } from "../lib/reviewScheduler";
 import { RecordTagChips } from "./RecordTagChips";
+import { recordToPlainText } from "../lib/recordContent";
 
 interface RecordCardProps {
   record: RecordBlock;
@@ -35,6 +36,7 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
   const reviewActive = reviewState?.status === "active";
   const reviewDue = isReviewDueOn(reviewState, todayISO());
   const hasReviewEvaluation = reviewLogs.some((log) => Boolean(log.evaluationText?.trim()));
+  const excerpt = recordToPlainText(record).replace(/\s+/g, " ").trim();
 
   return (
     <article className="record-card">
@@ -43,7 +45,9 @@ export const RecordCard = ({ record, onOpen, onAskAi, onToggleFavorite, reviewSt
           <FileText size={18} />
         </span>
         <div className="record-card-copy">
+          <small className="record-card-meta">{record.date} · {record.subject}</small>
           <strong>{record.title}</strong>
+          {excerpt && <p className="record-card-excerpt">{excerpt}</p>}
           <RecordTagChips subject={record.subject} tags={record.tags} />
         </div>
       </button>

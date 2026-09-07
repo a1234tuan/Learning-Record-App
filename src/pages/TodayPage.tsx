@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, Plus, Star } from "lucide-react";
+import { ArrowRight, BrainCircuit, CalendarCheck, CalendarClock, ChevronDown, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
 import type { AiProviderProfile, Block, ContentTemplate, DayEntry, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
@@ -7,7 +7,7 @@ import { SubjectPicker } from "../components/SubjectPicker";
 import { RecordCard } from "../components/RecordCard";
 import { CloudSyncButton } from "../components/CloudSyncButton";
 import { fallbackSubjectName } from "../lib/subjects";
-import { PageHeader, SurfaceCard } from "../components/ui";
+import { PageHeader } from "../components/ui";
 import { getDailyMotto } from "../lib/dailyMotto";
 import { ReviewCoachWorkbench } from "../features/reviewCoach/ReviewCoachWorkbench";
 import type { AnalysisPlanningBlock } from "../features/reviewCoach/analysisPlanner";
@@ -91,7 +91,7 @@ export const TodayPage = ({
     <main className="page today-page">
       <PageHeader
         eyebrow={formatChineseDate(today)}
-        title="今天"
+        title="今天想记下什么？"
         subtitle={getDailyMotto(today)}
         density="compact"
         actions={(
@@ -109,31 +109,23 @@ export const TodayPage = ({
         )}
       />
 
-      <section className="today-workbench">
-        <SurfaceCard className="new-record-panel" variant="raised">
-          <div className="new-record-copy">
-            <p className="eyebrow">New Record</p>
-            <h2>新建学习记录</h2>
+      <section className="today-compose-band" aria-label="新建学习日志">
+        <button
+          type="button"
+          className="today-compose-main"
+          onClick={async () => onOpenRecord(await onCreateRecord(today, subject, selectedTemplate?.contentHtml))}
+        >
+          <Plus size={20} />
+          <span><strong>新建 {subject} 记录</strong><small>{selectedTemplate?.title ?? "空白学习日志"}</small></span>
+          <ArrowRight size={18} />
+        </button>
+        <details className="today-create-options">
+          <summary aria-label="选择学科或模板" title="选择学科或模板"><ChevronDown size={19} /></summary>
+          <div>
+            <label><span>学科</span><SubjectPicker value={subject} subjects={subjects} onChange={setSubject} /></label>
+            <label><span>模板</span><select className="new-record-template-select" aria-label="新记录模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}><option value="">无模板</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
           </div>
-          <SubjectPicker value={subject} subjects={subjects} onChange={setSubject} />
-          <select
-            className="new-record-template-select"
-            aria-label="新记录模板"
-            value={templateId}
-            onChange={(event) => setTemplateId(event.target.value)}
-          >
-            <option value="">无模板</option>
-            {templates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
-          </select>
-          <button
-            type="button"
-            className="primary-button"
-            onClick={async () => onOpenRecord(await onCreateRecord(today, subject, selectedTemplate?.contentHtml))}
-          >
-            <Plus size={18} />
-            新建 {subject} 记录
-          </button>
-        </SurfaceCard>
+        </details>
       </section>
 
       {dueReviewStates.length > 0 && (
@@ -153,7 +145,9 @@ export const TodayPage = ({
       )}
 
       {onRunDeepAnalysis && onResumeDeepAnalysis && onSwitchAdaptiveTask && onDeferAdaptiveTask && (
-        <ReviewCoachWorkbench
+        <details className="today-coach-disclosure">
+          <summary><BrainCircuit size={18} /><span><strong>学习助教</strong><small>{reviewCoachPlanningBlocks.length > 0 ? `${reviewCoachPlanningBlocks.length} 个学习重点待分析` : "训练、验证与学习洞察"}</small></span><ChevronDown size={18} /></summary>
+          <ReviewCoachWorkbench
           planningBlocks={reviewCoachPlanningBlocks}
           snapshot={reviewCoachSnapshot}
           records={reviewCoachRecords}
@@ -163,7 +157,8 @@ export const TodayPage = ({
           onSwitchTask={onSwitchAdaptiveTask}
           onDeferTask={onDeferAdaptiveTask}
           onOpenTask={onOpenAdaptiveTask}
-        />
+          />
+        </details>
       )}
 
       {entry && (
@@ -176,7 +171,9 @@ export const TodayPage = ({
         </section>
       )}
 
-      <section className="record-list">
+      <section className="today-recent-records">
+        <div className="today-section-heading"><h2>最近日志</h2><small>{records.length} 条</small></div>
+        <div className="record-list">
         {records.length === 0 ? (
           <div className="empty-state">
             <h2>今天还很干净。</h2>
@@ -196,6 +193,7 @@ export const TodayPage = ({
             />
           ))
         )}
+        </div>
       </section>
     </main>
   );

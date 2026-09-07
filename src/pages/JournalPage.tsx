@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckSquare, Download, Search, Square, X } from "lucide-react";
+import { CalendarDays, CheckSquare, Download, List, Search, Square, X } from "lucide-react";
 
 import type { Block, RecordBlock, RecordReviewLog, RecordReviewState, Subject, SubjectConfig } from "../types";
 import { MonthlyHeatmap } from "../components/MonthlyHeatmap";
@@ -50,8 +50,13 @@ export const JournalPage = ({
   const [selecting, setSelecting] = useState(false);
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
   const [batchMessage, setBatchMessage] = useState("");
+  const [browseMode, setBrowseMode] = useState<"library" | "calendar">("library");
+  const [subjectFilter, setSubjectFilter] = useState<Subject | "全部">("全部");
   const records = useMemo(() => getRecordBlocks(blocks), [blocks]);
   const dates = useMemo(() => getRecordDatesForMonth(records, month), [month, records]);
+  const visibleRecords = useMemo(() => records
+    .filter((record) => subjectFilter === "全部" || record.subject === subjectFilter)
+    .sort((left, right) => right.date.localeCompare(left.date) || right.updatedAt.localeCompare(left.updatedAt)), [records, subjectFilter]);
 
   const subjectRecords = selectedDate && selectedSubject
     ? getRecordsForDateSubject(records, selectedDate, selectedSubject)
@@ -80,9 +85,9 @@ export const JournalPage = ({
   return (
     <main className="page journal-page">
       <PageHeader
-        eyebrow="Journal"
-        title="日志回看"
-        subtitle="用热力图找节奏，用日期和学科回到具体的学习现场。"
+        eyebrow="学习记录"
+        title="日志资料库"
+        subtitle="浏览、分类和回看所有学习日志。"
         actions={(
           <button type="button" className="secondary-button journal-search-button" onClick={onOpenSearch} title="全局搜索" aria-label="全局搜索">
             <Search size={18} />
@@ -146,50 +151,31 @@ export const JournalPage = ({
         </section>
       ) : (
         <>
-          <section className="journal-day-summary">
-            <div>
-              <p className="eyebrow">Month Logs</p>
-              <h2>本月有记录日期</h2>
-            </div>
-            <p>仅显示当前月份中有日志记录的日期；切换月份可以回看更早的学习现场。</p>
-          </section>
-          <section className="day-log-list">
-            {dates.length === 0 ? (
-              <div className="empty-state">
-                <h2>本月还没有日志记录。</h2>
-                <p>切换月份查看历史，或者从今天页新建一条记录。</p>
+          <div className="journal-view-tabs" role="tablist" aria-label="日志浏览方式">
+            <button type="button" role="tab" aria-selected={browseMode === "library"} className={browseMode === "library" ? "active" : ""} onClick={() => setBrowseMode("library")}><List size={17} />全部日志</button>
+            <button type="button" role="tab" aria-selected={browseMode === "calendar"} className={browseMode === "calendar" ? "active" : ""} onClick={() => setBrowseMode("calendar")}><CalendarDays size={17} />按日期</button>
+          </div>
+          {browseMode === "library" ? (
+            <>
+              <div className="journal-subject-strip" role="tablist" aria-label="按学科筛选">
+                {["全部", ...subjects.filter((item) => !item.archivedAt).map((item) => item.name)].map((item) => <button type="button" role="tab" aria-selected={subjectFilter === item} className={subjectFilter === item ? "active" : ""} key={item} onClick={() => setSubjectFilter(item as Subject | "全部")}>{item}</button>)}
               </div>
-            ) : (
-              dates.map((date) => (
-                <DayLogCard
-                  key={date}
-                  date={date}
-                  records={records.filter((record) => record.date === date)}
-                  subjects={subjects}
-                  onAskAi={onAskAi}
-                  open={selectedDate === date && !selectedSubject}
-                  onOpenChange={(open) => onSelectedDateChange(open ? date : undefined)}
-                  onOpenSubject={(nextDate, subject) => {
-                    onSelectedDateChange(nextDate);
-                    onSelectedSubjectChange(subject);
-                  }}
-                />
-              ))
-            )}
-          </section>
+              <div className="journal-result-meta"><span>{visibleRecords.length} 条日志</span><span>最近更新</span></div>
+              <section className="record-list journal-library-records">
+                {visibleRecords.length === 0 ? <div className="empty-state"><h2>这个范围还没有日志</h2><p>切换学科，或从今天页新建记录。</p></div> : visibleRecords.map((record) => <RecordCard key={record.id} record={record} onOpen={onOpenRecord} onAskAi={onAskAi} onToggleFavorite={(favorite) => onToggleFavorite(record, favorite)} reviewState={reviewStatesByRecord[record.id]} reviewLogs={reviewLogsByRecord[record.id]} onAddReview={() => onAddToReview(record.id)} />)}
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="journal-day-summary"><div><p className="eyebrow">按月浏览</p><h2>本月有记录日期</h2></div><p>仅显示当前月份中有日志记录的日期；切换月份可以回看更早的学习现场。</p></section>
+              <section className="day-log-list">
+                {dates.length === 0 ? <div className="empty-state"><h2>本月还没有日志记录。</h2><p>切换月份查看历史，或者从今天页新建一条记录。</p></div> : dates.map((date) => <DayLogCard key={date} date={date} records={records.filter((record) => record.date === date)} subjects={subjects} onAskAi={onAskAi} open={selectedDate === date && !selectedSubject} onOpenChange={(open) => onSelectedDateChange(open ? date : undefined)} onOpenSubject={(nextDate, subject) => { onSelectedDateChange(nextDate); onSelectedSubjectChange(subject); }} />)}
+              </section>
+              <MonthlyHeatmap month={month} blocks={blocks} selectedDate={selectedDate} onMonthChange={onMonthChange} onSelectDate={(date) => { onSelectedDateChange(date); onSelectedSubjectChange(undefined); }} />
+            </>
+          )}
         </>
       )}
-
-      <MonthlyHeatmap
-        month={month}
-        blocks={blocks}
-        selectedDate={selectedDate}
-        onMonthChange={onMonthChange}
-        onSelectDate={(date) => {
-          onSelectedDateChange(date);
-          onSelectedSubjectChange(undefined);
-        }}
-      />
     </main>
   );
 };

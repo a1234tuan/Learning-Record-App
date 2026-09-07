@@ -85,6 +85,7 @@ describe("JournalPage", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: "按日期" }));
     expect(screen.getByText("本月有记录日期")).toBeInTheDocument();
     expect(screen.getByText("2026-06-01 学习日志")).toBeInTheDocument();
     expect(screen.queryByText("2026-05-31 学习日志")).not.toBeInTheDocument();

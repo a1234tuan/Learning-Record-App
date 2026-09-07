@@ -15,6 +15,7 @@ const renderMorePage = (settings = DEFAULT_SETTINGS) => {
     onOpenSettings: vi.fn(),
     onOpenTrash: vi.fn(),
     onOpenTemplates: vi.fn(),
+    onOpenCategories: vi.fn(),
     onOpenGuide: vi.fn(),
     settings,
   };
