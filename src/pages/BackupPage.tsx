@@ -14,6 +14,7 @@ import { AutoBackupPanel } from "../components/AutoBackupPanel";
 import { CloudSyncPanel } from "../components/CloudSyncPanel";
 import { PageHeader, SurfaceCard } from "../components/ui";
 import { importRecordTransferPackage, parseRecordTransferPackage } from "../services/recordTransferService";
+import { formatUiError } from "../lib/uiError";
 
 interface BackupPageProps {
   settings: AppSettings;
@@ -99,7 +100,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
         setMessage(result);
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "操作失败。");
+      setMessage(formatUiError(error, "generic"));
     } finally {
       setBusy(null);
     }
@@ -170,7 +171,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
           summary,
         });
       } catch (error) {
-        const detail = error instanceof Error ? error.message : "导入失败，无法读取所选文件。";
+        const detail = formatUiError(error, "generic");
         setImportStatus({ state: "error", title: "导入失败", detail });
         throw error;
       }
@@ -223,7 +224,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
           summary,
         });
       } catch (error) {
-        const detail = error instanceof Error ? error.message : "自动备份仓库恢复失败。";
+        const detail = formatUiError(error, "generic");
         setImportStatus({ state: "error", title: "仓库恢复失败", detail });
         throw error;
       }
@@ -244,7 +245,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
         await parseTransfer(file);
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "日志互通包选择失败。");
+      setMessage(formatUiError(error, "generic"));
     } finally {
       setBusy(null);
     }
@@ -267,7 +268,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
     } catch (error) {
       setTransfer(undefined);
       setSelectedTransferRecordIds([]);
-      setMessage(error instanceof Error ? error.message : "日志互通包解析失败。");
+      setMessage(formatUiError(error, "generic"));
     } finally {
       if (transferAbortRef.current === controller) {
         transferAbortRef.current = undefined;
@@ -300,7 +301,7 @@ export const BackupPage = ({ settings, autoBackupState, onRestored }: BackupPage
       setSelectedTransferRecordIds([]);
       setMessage(`已导入 ${summary.records} 条日志、${summary.assets} 个资源；导入日志默认未加入复习计划。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "日志导入失败。");
+      setMessage(formatUiError(error, "generic"));
     } finally {
       if (transferAbortRef.current === controller) {
         transferAbortRef.current = undefined;

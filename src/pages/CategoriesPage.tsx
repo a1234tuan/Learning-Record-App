@@ -9,6 +9,7 @@ import {
   getSubjectCounts,
 } from "../lib/journalSelectors";
 import { normalizeRecordTags, recordTagKey } from "../lib/recordTags";
+import { formatUiError } from "../lib/uiError";
 import { RecordCard } from "../components/RecordCard";
 import { RecordTagChips } from "../components/RecordTagChips";
 
@@ -158,7 +159,7 @@ export const CategoriesPage = ({
       setSubjectRowMessage(null);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "添加学科失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 
@@ -178,7 +179,7 @@ export const CategoriesPage = ({
       setSubjectRowMessage(null);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重命名失败。");
+      setMessage(formatUiError(error, "generic"));
     }
   };
 

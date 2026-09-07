@@ -3,6 +3,7 @@ import type { AppSettings } from "../types";
 import { PageHeader } from "../components/ui";
 import { isDesktopPlatform } from "../lib/platform";
 import type { VisualTheme } from "../lib/visualTheme";
+import { normalizeUiError } from "../lib/uiError";
 
 interface SettingsPageProps {
   settings: AppSettings;
@@ -38,8 +39,8 @@ export const SettingsPage = ({ settings, onSaveSettings, visualTheme, onVisualTh
       const { proxy, status } = await window.studyJournalDesktop!.proxy.testFirebaseStorage();
       setProxyStatus(`Firebase Storage 可连接（HTTP ${status}，${proxy}）。`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setProxyStatus(`Firebase Storage 不可连接：${message}`);
+      const normalized = normalizeUiError(error, "cloud-sync");
+      setProxyStatus(`Firebase Storage 暂时无法连接，请检查代理与网络。（诊断编号 ${normalized.diagnosticId}）`);
     }
     clearTimeout(statusTimer.current);
     statusTimer.current = setTimeout(() => setProxyStatus(""), 10_000);

@@ -5,6 +5,7 @@ import type { ExportKind } from "../types";
 import { exportKnowledge } from "../services/knowledgeExportService";
 import { storage } from "../services/storageAdapter";
 import { PageHeader } from "../components/ui";
+import { formatUiError } from "../lib/uiError";
 
 interface AiExportPageProps {
   onBack: () => void;
@@ -44,7 +45,7 @@ export const AiExportPage = ({ onBack }: AiExportPageProps) => {
       const result = await exportKnowledge(aiKind, await storage.createSnapshot());
       setMessage(`${result} AI 材料仅用于阅读和问答，不用于恢复。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "AI 材料导出失败。");
+      setMessage(formatUiError(error, "ai-request"));
     } finally {
       setBusy(null);
     }
